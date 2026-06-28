@@ -44,23 +44,28 @@ Status
 - **LoRa TX confirmed working** on the nRF5340 DK + Wio-SX1262.
 - **Display, touch, and buttons working**; SD path implemented (validated with a
   card present).
-- **Async telemetry transmit** is wired into the on-device menu: selecting
-  *Send Telemetry* fires an SX1262 transmit on a background thread while the UI
-  stays live and shows radio state.
-- Next: richer payloads, RX/round-trip testing, and migrating the front end onto
-  the shield.
+- **On-device radio evaluation tooling** (console variant): configure the RF
+  parameters (freq / SF / BW / CR / power / preamble / CRC / IQ / network), build
+  the TX payload via an on-screen hex keypad or canned presets, and fire SX1262
+  transmits — all from a touch + DK-button screen UI, with transmits on a
+  background thread so the UI stays live.
+- Next: RX / round-trip testing, RSSI/SNR readout, an ASCII keypad, and migrating
+  the front end onto the shield.
 
 Firmware variants
 -----------------
 
 The project builds two firmware variants from one tree. Exactly one ``main()``
 is linked, chosen by the Kconfig choice in ``Kconfig``
-(``CONFIG_APP_LORA_SEND`` / ``CONFIG_APP_DISPLAY_SHIELD_TEST``):
+(``CONFIG_APP_LORA_SEND`` / ``CONFIG_APP_CONSOLE``):
 
 - **LoRa send** (default) — ``src/main.c``. Minimal one-shot transmit plus a
   radio IRQ / device-error dump over SPI. Useful for radio-only bring-up.
-- **Telemetry console** — ``src/shield_test.c``. The full device app: TFT menu,
-  touch, DK-button navigation, and async SX1262 transmit driven from the menu.
+- **Telemetry console** — ``src/console.c`` (screen router / main loop) with
+  ``src/radio_cfg.c`` (staged modem config), ``src/payload.c`` (TX payload +
+  presets), and ``src/ui_widgets.c`` (display primitives + reusable keypad
+  modal). The full device app: a touch + DK-button screen UI to configure the
+  radio, build payloads, and run SX1262 transmits.
 
 ``prj.conf`` holds the common + LoRa configuration. The front-end (display,
 touch, SD, fonts) Kconfig lives in the companion file
@@ -96,16 +101,18 @@ never overlap.
 Radio parameters
 ----------------
 
-Shared by both variants (LoRa-send sets them in ``src/main.c``; the console sets
-them in ``src/shield_test.c``):
+The LoRa-send variant hard-codes these in ``src/main.c``. The console variant
+uses them as the **power-on defaults** of its staged config (``src/radio_cfg.c``)
+and lets you change them on-device, committing via **APPLY** (see
+`Telemetry console behaviour`_). Console-editable ranges in parentheses:
 
-- Frequency: 915 MHz
-- Bandwidth: 500 kHz
-- Spreading factor: SF5 (SF6 also used for testing — ``LORA_SPREADING_FACTOR``)
-- Coding rate: 4/5
-- Preamble: 12 symbols (the SX1262 minimum for SF5 and SF6)
-- TX power: +4 dBm
-- Payload: 16 bytes
+- Frequency: 915 MHz (902–928 MHz)
+- Bandwidth: 500 kHz (125 / 250 / 500 kHz)
+- Spreading factor: SF5 (SF5–SF12; LoRa-send selects via ``LORA_SPREADING_FACTOR``)
+- Coding rate: 4/5 (4/5–4/8)
+- Preamble: 16 symbols (6–65535; the SX1262 minimum for SF5 and SF6 is 12)
+- TX power: +4 dBm (−9…+22 dBm)
+- Payload: 16 bytes (editable, up to 255)
 
 ================================================================================
 
@@ -203,25 +210,45 @@ map to **B1=UP, B2=DOWN, B3=OK, B4=BACK**.
 Telemetry console behaviour
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-On boot it brings up the display, touch, buttons and radio, then shows a menu
-with a live telemetry block. Selecting **Send Telemetry** + **OK** fires an
-SX1262 transmit on a background thread; the screen shows ``STATE`` cycling
-IDLE → SENDING → SENT/FAILED, a success counter, and the last return code, while
-the UI stays responsive. Everything is also logged to UART.
+On boot it brings up the display, touch, buttons and radio, applies the default
+radio config, and shows a small multi-screen UI. Navigate with the DK buttons
+(**B1=UP B2=DOWN B3=OK B4=BACK**) or by touch; everything is also logged to UART.
 
-On the TFT::
+Screens:
+
+- **HOME** — ``SEND ONCE`` (snapshots the current payload + applied config and
+  fires a transmit, jumping to TX STATUS), ``CONFIG``, ``PAYLOAD``, and
+  ``TOUCH CAL``. The footer shows the live applied-config summary.
+- **CONFIG** — one row per RF parameter (freq, SF, BW, CR, TX power, preamble,
+  CRC, IQ, network). Edits go to an in-RAM *shadow* config; nothing reaches the
+  radio until **APPLY**, which validates then calls ``lora_config()`` once. A
+  ``*`` in the header marks the shadow dirty (differs from what was applied).
+  Enum/bool rows step in place (OK, or tap the left/right half of the row);
+  numeric rows (freq, power, preamble) open the keypad.
+- **PAYLOAD** — shows the bytes as hex with a ``LEN`` counter, plus ``EDIT``
+  (hex keypad), ``CLEAR``, and presets (``0x00..``, ``0xFF..``, ramp, and the
+  ASCII vector ``BLUEFROG``).
+- **KEYPAD** — a reusable modal: HEX mode for payload bytes, DEC mode (with
+  ``.`` and ``+/-``) for numeric config fields. OK commits, CXL / B4 cancels.
+- **TX STATUS** — a spinner while the send is in flight, then the result
+  (SENT/FAILED, return code, payload length, and the config it went out with).
+  Tap / OK returns HOME.
+- **TOUCH CAL** — touchscreen calibration: tap five crosshairs, then a verify
+  step shows where taps land (B3 = accept, B4 = redo). See the touch-calibration
+  note under `Implementation notes / deviations`_.
+
+Transmits run on a dedicated background thread (signalled via a semaphore) so the
+UI never blocks; the 20 ms main loop is the sole owner of all drawing.
+
+On the TFT (HOME)::
 
    TELEMETRY
-   [Send Telemetry]
-    Settings
-    About
+   [ SEND ONCE ]
+   [ CONFIG    ]
+   [ PAYLOAD   ]
+   [ TOUCH CAL ]
 
-   LORA: READY
-   STATE: SENT
-   TX#:3  RC:0
-   Sending...
-
-   B1:UP B2:DN B3:OK B4:BK
+   915.0M SF5 BW500 CR4/5 +4dBm
 
 Implementation notes / deviations
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -239,6 +266,29 @@ Implementation notes / deviations
 - The display uses the **MIPI DBI** subsystem: a ``zephyr,mipi-dbi-spi``
   controller wraps spi4 and owns the D/C and RESET sidebands; the
   ``ilitek,ili9341`` node sits under it.
+- **Config is stage-then-apply.** The menu edits an in-RAM ``lora_modem_config``
+  shadow; ``radio_cfg_apply()`` is the single commit point (one ``lora_config()``
+  call). ``radio_cfg_validate()`` holds the documented limits (902–928 MHz,
+  −9…+22 dBm, preamble ≥ 6, and ≥ 12 for SF5/SF6) and is where any further
+  SX126x SF/BW pairing constraints belong.
+- **Transmit is synchronous on a dedicated thread**, not ``lora_send_async``.
+  The thread already keeps the UI non-blocking, so this avoids ``CONFIG_POLL`` /
+  ``k_poll_signal`` for no behavioural gain; switch to the async API if LBT/CAD
+  result semantics are wanted later.
+- **Drawing stays single-owner.** Input callbacks (touch / buttons) and the TX
+  thread only set atomics or signal a semaphore; the main loop does every
+  ``display_write()``. Touch taps are debounced (one event per press, release
+  required) before the loop consumes them.
+- **Touch is calibrated by an on-device affine fit** (``src/touch_cal.c``). The
+  panel is rotated 90°, so raw XPT2046 coordinates are offset / swapped / inverted
+  relative to the display; a 6-parameter affine
+  (``screen = A·raw + B·raw + C`` per axis) corrects all of it at once. The
+  **TOUCH CAL** screen collects five crosshair taps, least-squares-fits the
+  transform, and offers a verify step. The ISR latches the *raw* sample;
+  ``touch_cal_apply()`` runs in the main loop, so calibration capture sees raw
+  coordinates. The fit is in-RAM (re-run after each reflash; persistence to
+  settings/NVS is a follow-up). The DK buttons drive the entire UI — including
+  reaching TOUCH CAL — so uncalibrated touch is never a lock-out.
 
 ================================================================================
 
