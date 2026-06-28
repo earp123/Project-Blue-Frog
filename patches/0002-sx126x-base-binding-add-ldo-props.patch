@@ -1,0 +1,18 @@
+--- a/dts/bindings/lora/semtech,sx126x-base.yaml
++++ b/dts/bindings/lora/semtech,sx126x-base.yaml
+@@ -65,3 +65,15 @@
+     description: |
+       Enable RX boosted mode, which increases the power consumption of
+       RX mode by ~2mA in exchange for ~3dB sensitivity improvement.
++
++  regulator-ldo:
++    type: boolean
++    description: |
++      Use the LDO regulator instead of the DC-DC converter. The LDO
++      consumes more current but requires fewer external components.
++
++  force-ldro:
++    type: boolean
++    description: |
++      Force Low Data Rate Optimization on, regardless of the spreading
++      factor and bandwidth in use.

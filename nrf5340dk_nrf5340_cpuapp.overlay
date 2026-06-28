@@ -1,0 +1,55 @@
+#include <dt-bindings/lora/sx126x.h>
+
+/ {
+    aliases {
+        lora0 = &lora;
+    };
+
+    zephyr,user {
+        rf-sw-gpios = <&gpio1 0 GPIO_ACTIVE_HIGH>;
+    };
+};
+
+/* P1.01 is uart1 TX (Arduino Serial) on the nRF5340 DK — disable to free it for MISO */
+&uart1 {
+    status = "disabled";
+};
+
+&pinctrl {
+    spi2_default: spi2_default {
+        group1 {
+            psels = <NRF_PSEL(SPIM_SCK,  1, 5)>,
+                    <NRF_PSEL(SPIM_MOSI, 1, 4)>,
+                    <NRF_PSEL(SPIM_MISO, 1, 1)>;
+        };
+    };
+    spi2_sleep: spi2_sleep {
+        group1 {
+            psels = <NRF_PSEL(SPIM_SCK,  1, 5)>,
+                    <NRF_PSEL(SPIM_MOSI, 1, 4)>,
+                    <NRF_PSEL(SPIM_MISO, 1, 1)>;
+            low-power-enable;
+        };
+    };
+};
+
+&spi2 {
+    compatible = "nordic,nrf-spim";
+    status = "okay";
+    pinctrl-0 = <&spi2_default>;
+    pinctrl-1 = <&spi2_sleep>;
+    pinctrl-names = "default", "sleep";
+    cs-gpios = <&gpio1 7 GPIO_ACTIVE_LOW>;
+
+    lora: sx1262@0 {
+        compatible = "semtech,sx1262";
+        reg = <0>;
+        reset-gpios    = <&gpio1 6 GPIO_ACTIVE_LOW>;
+        busy-gpios     = <&gpio1 9 GPIO_ACTIVE_HIGH>;
+        dio1-gpios     = <&gpio1 8 GPIO_ACTIVE_HIGH>;
+        dio2-tx-enable;
+        dio3-tcxo-voltage = <SX126X_DIO3_TCXO_1V8>;
+        tcxo-power-startup-delay-ms = <10>;
+        spi-max-frequency = <500000>;
+    };
+};

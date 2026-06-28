@@ -1,0 +1,29 @@
+# Application configuration for the "send" project.
+#
+# This project carries two independent firmware variants. Exactly one is built
+# at a time, selected here (set the choice in prj.conf / the companion conf).
+# The default is the LoRa-send firmware.
+
+choice
+	prompt "Application variant"
+	# The Hiletgo TFT breakout's companion config
+	# (boards/nrf5340dk_nrf5340_cpuapp_display.conf) selects the console variant.
+	default APP_LORA_SEND
+
+config APP_LORA_SEND
+	bool "LoRa send (Wio-SX1262 shield)"
+	help
+	  One-shot LoRa transmit plus radio-status dump. Uses the spi2 / port-1
+	  Wio-SX1262 shield overlay (nrf5340dk_nrf5340_cpuapp.overlay).
+
+config APP_CONSOLE
+	bool "Telemetry console (Hiletgo TFT breakout + SX1262)"
+	help
+	  Full device app: ILI9341 TFT + XPT2046 touch + microSD on the spi4 /
+	  port-0 Hiletgo TFT breakout overlay
+	  (boards/nrf5340dk_nrf5340_cpuapp_display.overlay), DK-button menu, and
+	  async SX1262 telemetry transmit.
+
+endchoice
+
+source "Kconfig.zephyr"

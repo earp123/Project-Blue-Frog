@@ -1,0 +1,121 @@
+/*
+ * Hiletgo ILI9341 TFT breakout (display + XPT2046 touch + microSD), jumper-wired
+ * to the nRF5340 DK Port 0 headers.
+ *
+ * Separate from the Wio-SX1262 LoRa shield: the LoRa overlay
+ * (nrf5340dk_nrf5340_cpuapp.overlay) uses spi2 on port 1; the breakout uses spi4
+ * (the board's high-speed "arduino_spi" instance) on port 0, so the two never
+ * overlap. This overlay must be passed explicitly via EXTRA_DTC_OVERLAY_FILE (it
+ * is not auto-applied, since its name does not match the board name).
+ *
+ * One SPI bus, three chip selects (indexed by each device's reg property):
+ *   reg 0 -> ILI9341 display (via MIPI DBI), CS P0.16
+ *   reg 1 -> XPT2046 touch,                  CS P0.28
+ *   reg 2 -> SD card,                        CS P0.10
+ *
+ * Shared SPI: SCK P0.13, MOSI P0.14, MISO P0.15.
+ */
+
+#include <zephyr/dt-bindings/display/ili9xxx.h>
+#include <zephyr/dt-bindings/gpio/gpio.h>
+
+/ {
+	chosen {
+		zephyr,display = &ili9341;
+		zephyr,touch = &xpt2046;
+	};
+
+	/* TFT backlight enable, driven as a plain GPIO output by the app. */
+	display_backlight: display-backlight {
+		compatible = "gpio-leds";
+		backlight: backlight {
+			gpios = <&gpio0 31 GPIO_ACTIVE_HIGH>;
+			label = "TFT backlight";
+		};
+	};
+
+	/* MIPI DBI (Mode C, 4-wire SPI) wrapper around spi4 for the ILI9341.
+	 * D/C and RESET are sideband GPIOs owned by this controller node.
+	 */
+	mipi_dbi: mipi-dbi {
+		compatible = "zephyr,mipi-dbi-spi";
+		spi-dev = <&spi4>;
+		dc-gpios = <&gpio0 17 GPIO_ACTIVE_HIGH>;
+		/* ILI9341 RESX is active-low: the MIPI-DBI driver leaves reset
+		 * de-asserted (inactive) after the pulse, so ACTIVE_LOW keeps the
+		 * line physically HIGH = running. ACTIVE_HIGH would hold it in reset.
+		 */
+		reset-gpios = <&gpio0 18 GPIO_ACTIVE_LOW>;
+		write-only;
+		#address-cells = <1>;
+		#size-cells = <0>;
+
+		ili9341: ili9341@0 {
+			compatible = "ilitek,ili9341";
+			reg = <0>;                 /* CS index 0 on spi4 -> P0.16 */
+			mipi-max-frequency = <16000000>;
+			width = <320>;
+			height = <240>;
+			pixel-format = <ILI9XXX_PIXEL_FORMAT_RGB565>;
+			rotation = <90>;
+		};
+	};
+};
+
+&pinctrl {
+	spi4_disp_default: spi4_disp_default {
+		group1 {
+			psels = <NRF_PSEL(SPIM_SCK,  0, 13)>,
+				<NRF_PSEL(SPIM_MOSI, 0, 14)>,
+				<NRF_PSEL(SPIM_MISO, 0, 15)>;
+		};
+	};
+
+	spi4_disp_sleep: spi4_disp_sleep {
+		group1 {
+			psels = <NRF_PSEL(SPIM_SCK,  0, 13)>,
+				<NRF_PSEL(SPIM_MOSI, 0, 14)>,
+				<NRF_PSEL(SPIM_MISO, 0, 15)>;
+			low-power-enable;
+		};
+	};
+};
+
+&spi4 {
+	status = "okay";
+	pinctrl-0 = <&spi4_disp_default>;
+	pinctrl-1 = <&spi4_disp_sleep>;
+	pinctrl-names = "default", "sleep";
+
+	cs-gpios = <&gpio0 16 GPIO_ACTIVE_LOW>,   /* reg 0: ILI9341 */
+		   <&gpio0 28 GPIO_ACTIVE_LOW>,   /* reg 1: XPT2046 */
+		   <&gpio0 10 GPIO_ACTIVE_LOW>;   /* reg 2: SD card  */
+
+	xpt2046: xpt2046@1 {
+		compatible = "xptek,xpt2046";
+		reg = <1>;
+		spi-max-frequency = <2000000>;
+		int-gpios = <&gpio0 29 (GPIO_ACTIVE_LOW | GPIO_PULL_UP)>;
+		touchscreen-size-x = <320>;
+		touchscreen-size-y = <240>;
+		/* Raw ADC extents (typical XPT2046 panel); tune during calibration. */
+		min-x = <200>;
+		min-y = <200>;
+		max-x = <3900>;
+		max-y = <3900>;
+		z-threshold = <400>;
+	};
+
+	sdhc0: sdhc@2 {
+		compatible = "zephyr,sdhc-spi-slot";
+		reg = <2>;
+		status = "okay";
+		spi-max-frequency = <24000000>;
+
+		mmc {
+			compatible = "zephyr,sdmmc-disk";
+			disk-name = "SD";
+			status = "okay";
+		};
+	};
+};
