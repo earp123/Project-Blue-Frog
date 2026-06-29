@@ -6,6 +6,12 @@ not this repository — so they are vendored here and applied with a script.
 
 ## Apply
 
+> [!TIP]
+> **New here?** Run [`scripts/setup_sdk.sh`](../scripts/setup_sdk.sh) instead — it
+> installs the vendored driver *and* runs `apply.sh` for you. Use `apply.sh`
+> directly only to re-apply the patches when the native driver is already present
+> (see [Prerequisite](#prerequisite-the-vendored-lora-driver) below).
+
 ```bash
 # defaults ZEPHYR_BASE to C:/ncs/v3.2.1/zephyr
 ZEPHYR_BASE=/path/to/ncs/zephyr ./patches/apply.sh
@@ -43,4 +49,6 @@ and will refuse to run if the native driver is absent.
 ## Caveat: these revert on SDK changes
 
 Any `west update`, SDK reinstall, or Toolchain Manager repair reverts these
-edits. Re-run `apply.sh` afterward.
+edits **and the vendored driver swap**. Re-run
+[`scripts/setup_sdk.sh`](../scripts/setup_sdk.sh) afterward — running `apply.sh`
+alone is not enough, since it refuses once the native driver is gone.
