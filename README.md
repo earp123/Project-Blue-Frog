@@ -186,7 +186,7 @@ The radio is selected through the `lora0` alias; `RF_SW` is exposed via the
 ---
 
 ## Display / touch / SD front end
-
+[https://a.co/d/047jULLv](url)
 The console front end — ILI9341 TFT, XPT2046 touch, microSD — shares one SPI
 bus (**spi4**, the DK's high-speed `arduino_spi` instance on Port 0), distinct
 from the radio's spi2 on Port 1. Each device has its own chip select. **These
