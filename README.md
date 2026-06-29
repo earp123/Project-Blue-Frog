@@ -214,50 +214,6 @@ CS lines are indexed by each device's `reg` on the spi4 node: reg 0 = display
 Controls: the DK's four buttons (gpio-keys, P0.23/24/08/09 → `INPUT_KEY_0..3`)
 map to **B1=UP, B2=DOWN, B3=OK, B4=BACK**.
 
-### Telemetry console behaviour
-
-On boot it brings up the display, touch, buttons and radio, applies the default
-radio config, and shows a small multi-screen UI. Navigate with the DK buttons
-(**B1=UP B2=DOWN B3=OK B4=BACK**) or by touch; everything is also logged to UART.
-
-Screens:
-
-- **HOME** — `SEND ONCE` (snapshots the current payload + applied config and
-  fires a transmit, jumping to TX STATUS), `CONFIG`, `PAYLOAD`, and
-  `TOUCH CAL`. The footer shows the live applied-config summary.
-- **CONFIG** — one row per RF parameter (freq, SF, BW, CR, TX power, preamble,
-  CRC, IQ, network). Edits go to an in-RAM *shadow* config; nothing reaches the
-  radio until **APPLY**, which validates then calls `lora_config()` once. A
-  `*` in the header marks the shadow dirty (differs from what was applied).
-  Enum/bool rows step in place (OK, or tap the left/right half of the row);
-  numeric rows (freq, power, preamble) open the keypad.
-- **PAYLOAD** — shows the bytes as hex with a `LEN` counter, plus `EDIT`
-  (hex keypad), `CLEAR`, and presets (`0x00..`, `0xFF..`, ramp, and the
-  ASCII vector `BLUEFROG`).
-- **KEYPAD** — a reusable modal: HEX mode for payload bytes, DEC mode (with
-  `.` and `+/-`) for numeric config fields. OK commits, CXL / B4 cancels.
-- **TX STATUS** — a spinner while the send is in flight, then the result
-  (SENT/FAILED, return code, payload length, and the config it went out with).
-  Tap / OK returns HOME.
-- **TOUCH CAL** — touchscreen calibration: tap five crosshairs, then a verify
-  step shows where taps land (B3 = accept, B4 = redo). See the touch-calibration
-  note under [Implementation notes / deviations](#implementation-notes--deviations).
-
-Transmits run on a dedicated background thread (signalled via a semaphore) so the
-UI never blocks; the 20 ms main loop is the sole owner of all drawing.
-
-On the TFT (HOME):
-
-```text
-TELEMETRY
-[ SEND ONCE ]
-[ CONFIG    ]
-[ PAYLOAD   ]
-[ TOUCH CAL ]
-
-915.0M SF5 BW500 CR4/5 +4dBm
-```
-
 ### Implementation notes / deviations
 
 - **Touch binding is** `xptek,xpt2046` (not `ti,tsc2046`) in this Zephyr. It
