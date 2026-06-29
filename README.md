@@ -9,6 +9,10 @@ over the air) and a local telemetry **instrument** (drive tests, observe radio
 state, and log results on-device). Build a pair and you have both ends of a real
 long-range link to characterise in the field.
 
+<img width="390" height="292" alt="20260629_111703" src="https://github.com/user-attachments/assets/d1b14a37-bc8c-4a43-98fc-f3588b628d0b" /> <img width="422" height="316" alt="20260629_111739" src="https://github.com/user-attachments/assets/71130063-f5c5-46f6-81aa-70893a8e3935" />
+
+
+
 For a feature-by-feature breakdown of the current firmware — every HOME-menu
 item, the helper scripts, and the test modes — see
 [CHANGELOG.md](CHANGELOG.md).
