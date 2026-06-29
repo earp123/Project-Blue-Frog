@@ -211,6 +211,26 @@ move onto the shield.
 CS lines are indexed by each device's `reg` on the spi4 node: reg 0 = display
 (P0.16), reg 1 = touch (P0.28), reg 2 = SD (P0.10).
 
+> [!IMPORTANT]
+> **nRF5340 DK board modifications required.** Several of these Port 0 pins are
+> wired to on-board peripherals on the DK and must be freed before the front end
+> works. The relevant solder bridges are marked on the DK silkscreen (and
+> detailed in the nRF5340 DK Hardware User Guide); the exact `SBxx` designators
+> vary by board revision.
+>
+> - **SPI bus — P0.13–P0.18 are shared with the on-board QSPI flash** (MX25R64).
+>   SPI SCK/MOSI/MISO and LCD CS / D-C / RESET land on the flash's
+>   `QSPI_IO0/IO1/IO2/IO3` + `QSPI_SCK`/`QSPI_CSN`, so the flash must be
+>   **disconnected** (cut its solder bridges) — otherwise it loads and contends on
+>   the shared bus.
+> - **P0.28–P0.31 are the four on-board LEDs** (LED1–LED4). The front end uses
+>   P0.28 (touch CS), P0.29 (touch IRQ), and P0.31 (backlight); P0.30 (LED3) is
+>   unused. Isolate these LEDs from the GPIOs (per the silkscreen bridges) so the
+>   on-board LEDs don't interfere with the touch/backlight lines.
+>
+> The four DK buttons (P0.23/24/08/09) are **not** modified — they still drive the
+> menu UI.
+
 Controls: the DK's four buttons (gpio-keys, P0.23/24/08/09 → `INPUT_KEY_0..3`)
 map to **B1=UP, B2=DOWN, B3=OK, B4=BACK**.
 
