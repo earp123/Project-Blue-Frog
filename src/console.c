@@ -38,6 +38,7 @@
 #include "radio_cfg.h"
 #include "payload.h"
 #include "touch_cal.h"
+#include "pingpong.h"
 
 LOG_MODULE_REGISTER(console, LOG_LEVEL_INF);
 
@@ -82,6 +83,8 @@ enum screen_id {
 	SCR_KEYPAD,
 	SCR_TX_STATUS,
 	SCR_CALIBRATE,
+	SCR_PINGPONG,
+	SCR_PINGPONG_STATS,
 };
 static enum screen_id screen = SCR_HOME;
 static enum screen_id keypad_return = SCR_HOME;
@@ -100,9 +103,15 @@ static enum edit_target edit_target = ED_NONE;
 static int home_sel;
 static int cfg_sel;
 static int payload_sel;
+static int pp_sel;
 
 static char home_msg[28] = "";
 static char cfg_msg[40] = "APPLY";
+
+/* PING PONG screen: throttled live redraw + transient "Pong sent" detection. */
+static int64_t pp_last_draw_ms;
+static uint32_t pp_prev_pongs_sent;
+static int64_t pp_pong_sent_at_ms;
 
 /* ---- Telemetry / async transmit state ---- */
 enum tx_state {
@@ -297,7 +306,9 @@ static void draw_footer_summary(void)
 /* ---------------------------------------------------------------------------
  * HOME
  * ------------------------------------------------------------------------- */
-static const char *const home_items[] = { "SEND ONCE", "CONFIG", "PAYLOAD", "TOUCH CAL" };
+static const char *const home_items[] = {
+	"SEND ONCE", "PING PONG", "CONFIG", "PAYLOAD", "TOUCH CAL",
+};
 #define HOME_COUNT ARRAY_SIZE(home_items)
 
 static void home_btn_rect(int i, int *x, int *y, int *w, int *h)
@@ -769,14 +780,22 @@ static void home_activate(int i)
 		start_send();
 		break;
 	case 1:
+		pp_sel = 0;
+		pp_prev_pongs_sent = 0;
+		pp_pong_sent_at_ms = 0;
+		pp_last_draw_ms = k_uptime_get();
+		pingpong_start();
+		screen = SCR_PINGPONG;
+		break;
+	case 2:
 		cfg_msg[0] = '\0';
 		snprintf(cfg_msg, sizeof(cfg_msg), "APPLY");
 		screen = SCR_CONFIG;
 		break;
-	case 2:
+	case 3:
 		screen = SCR_PAYLOAD;
 		break;
-	case 3:
+	case 4:
 		cal_start();
 		break;
 	default:
@@ -833,6 +852,164 @@ static void keypad_finish(enum keypad_result r)
 		screen = keypad_return;
 		edit_target = ED_NONE;
 	}
+}
+
+/* ---------------------------------------------------------------------------
+ * PING PONG
+ * ------------------------------------------------------------------------- */
+static const char *const pp_items[] = { "SEND PING", "STATS", "RESET STATS" };
+#define PP_BTN_COUNT ARRAY_SIZE(pp_items)
+
+static void pp_btn_rect(int i, int *x, int *y, int *w, int *h)
+{
+	int gap = 4;
+	int hh = ui_body_h() + 10;
+
+	*x = MARG;
+	*w = ui_disp_w() - 2 * MARG;
+	*h = hh;
+	*y = body_top() + i * (hh + gap);
+}
+
+static int pp_stats_y(void)
+{
+	int hh = ui_body_h() + 10;
+
+	return body_top() + (int)PP_BTN_COUNT * (hh + 4) + 4;
+}
+
+/* Stats lines + live status footer: the dynamic part, redrawn on a throttle. */
+static void draw_pingpong_dynamic(void)
+{
+	pingpong_stats_t st;
+	int bh = ui_body_h();
+	int y = pp_stats_y();
+	int w = ui_disp_w();
+	char l[48];
+
+	pingpong_get_stats(&st);
+
+	/* Detect a freshly-sent pong for the transient status line. */
+	if (st.pongs_sent != pp_prev_pongs_sent) {
+		pp_prev_pongs_sent = st.pongs_sent;
+		pp_pong_sent_at_ms = k_uptime_get();
+	}
+
+	ui_fill_rect(BORDER_PX, y, w - 2 * BORDER_PX, 3 * (bh + 2), COLOR_BLACK);
+
+	if (st.rtt_count) {
+		snprintf(l, sizeof(l), "Last RTT: %u us", st.last_rtt_us);
+	} else {
+		snprintf(l, sizeof(l), "Last RTT: -");
+	}
+	ui_text(MARG, y, l, COLOR_WHITE, COLOR_BLACK);
+
+	snprintf(l, sizeof(l), "Pings: %u  Pongs: %u", st.pings_sent, st.pongs_received);
+	ui_text(MARG, y + bh + 2, l, COLOR_WHITE, COLOR_BLACK);
+
+	snprintf(l, sizeof(l), "Lost: %u   Recv: %u", st.timeouts, st.pings_received);
+	ui_text(MARG, y + 2 * (bh + 2), l, COLOR_WHITE, COLOR_BLACK);
+
+	if (st.outstanding_valid) {
+		snprintf(l, sizeof(l), "Ping in flight [%u us]",
+			 pingpong_now_us() - st.outstanding_tx_us);
+		draw_footer_text(l);
+	} else if (k_uptime_get() - pp_pong_sent_at_ms < 1000) {
+		draw_footer_text("Pong sent");
+	} else {
+		draw_footer_text("Listening...");
+	}
+}
+
+static void draw_pingpong(void)
+{
+	draw_header("PING PONG");
+
+	for (int i = 0; i < (int)PP_BTN_COUNT; i++) {
+		int x, y, w, h;
+
+		pp_btn_rect(i, &x, &y, &w, &h);
+		ui_button(x, y, w, h, pp_items[i], pp_sel == i);
+	}
+
+	draw_pingpong_dynamic();
+}
+
+static void pp_activate(int i)
+{
+	switch (i) {
+	case 0:
+		pingpong_send_ping();
+		break;
+	case 1:
+		screen = SCR_PINGPONG_STATS;
+		break;
+	case 2:
+		pingpong_reset_stats();
+		break;
+	default:
+		break;
+	}
+	mark_dirty();
+}
+
+static void pp_stats_back_rect(int *x, int *y, int *w, int *h)
+{
+	*h = ui_body_h() + 10;
+	*x = MARG;
+	*w = ui_disp_w() - 2 * MARG;
+	*y = body_bot() - *h;
+}
+
+static void draw_pingpong_stats(void)
+{
+	pingpong_stats_t st;
+	int bh = ui_body_h();
+	int sp = bh + 4;
+	int y = body_top();
+	int w = ui_disp_w();
+	char l[48];
+
+	pingpong_get_stats(&st);
+
+	draw_header("PINGPONG STATS");
+	ui_fill_rect(BORDER_PX, y, w - 2 * BORDER_PX, body_bot() - y, COLOR_BLACK);
+
+	snprintf(l, sizeof(l), "Sent: %u", st.pings_sent);
+	ui_text(MARG, y, l, COLOR_WHITE, COLOR_BLACK);
+	y += sp;
+	snprintf(l, sizeof(l), "Recv pong: %u", st.pongs_received);
+	ui_text(MARG, y, l, COLOR_WHITE, COLOR_BLACK);
+	y += sp;
+
+	uint32_t pct10 = st.pings_sent
+		? (uint32_t)(((uint64_t)st.timeouts * 1000U) / st.pings_sent)
+		: 0;
+	snprintf(l, sizeof(l), "Lost: %u (%u.%u%%)", st.timeouts, pct10 / 10, pct10 % 10);
+	ui_text(MARG, y, l, COLOR_WHITE, COLOR_BLACK);
+	y += sp;
+
+	snprintf(l, sizeof(l), "Ping rx: %u  Pong tx: %u",
+		 st.pings_received, st.pongs_sent);
+	ui_text(MARG, y, l, COLOR_WHITE, COLOR_BLACK);
+	y += sp;
+
+	if (st.rtt_count) {
+		uint32_t avg = (uint32_t)(st.rtt_sum_us / st.rtt_count);
+
+		snprintf(l, sizeof(l), "RTT L:%u Min:%u", st.last_rtt_us, st.min_rtt_us);
+		ui_text(MARG, y, l, COLOR_WHITE, COLOR_BLACK);
+		y += sp;
+		snprintf(l, sizeof(l), "us  Max:%u Avg:%u", st.max_rtt_us, avg);
+		ui_text(MARG, y, l, COLOR_WHITE, COLOR_BLACK);
+	} else {
+		ui_text(MARG, y, "RTT: no samples", COLOR_WHITE, COLOR_BLACK);
+	}
+
+	int bx, by, bw, bbh;
+
+	pp_stats_back_rect(&bx, &by, &bw, &bbh);
+	ui_button(bx, by, bw, bbh, "BACK", true);
 }
 
 /* ---------------------------------------------------------------------------
@@ -909,6 +1086,25 @@ static void handle_nav(enum nav_action a)
 			}
 		} else if (a == NAV_BACK) {
 			screen = SCR_HOME; /* cancel; keep the prior transform */
+		}
+		break;
+
+	case SCR_PINGPONG:
+		if (a == NAV_UP) {
+			pp_sel = (pp_sel + PP_BTN_COUNT - 1) % PP_BTN_COUNT;
+		} else if (a == NAV_DOWN) {
+			pp_sel = (pp_sel + 1) % PP_BTN_COUNT;
+		} else if (a == NAV_OK) {
+			pp_activate(pp_sel);
+		} else if (a == NAV_BACK) {
+			pingpong_stop();
+			screen = SCR_HOME;
+		}
+		break;
+
+	case SCR_PINGPONG_STATS:
+		if (a == NAV_BACK) {
+			screen = SCR_PINGPONG;
 		}
 		break;
 
@@ -1007,6 +1203,29 @@ static void handle_tap(int x, int y, int rx, int ry)
 		}
 		break;
 
+	case SCR_PINGPONG:
+		for (int i = 0; i < (int)PP_BTN_COUNT; i++) {
+			int bx, by, bw, bh;
+
+			pp_btn_rect(i, &bx, &by, &bw, &bh);
+			if (ui_hit(x, y, bx, by, bw, bh)) {
+				pp_sel = i;
+				pp_activate(i);
+				return;
+			}
+		}
+		break;
+
+	case SCR_PINGPONG_STATS: {
+		int bx, by, bw, bh;
+
+		pp_stats_back_rect(&bx, &by, &bw, &bh);
+		if (ui_hit(x, y, bx, by, bw, bh)) {
+			screen = SCR_PINGPONG;
+		}
+		break;
+	}
+
 	default:
 		break;
 	}
@@ -1032,6 +1251,12 @@ static void draw_current(void)
 		break;
 	case SCR_CALIBRATE:
 		draw_calibrate();
+		break;
+	case SCR_PINGPONG:
+		draw_pingpong();
+		break;
+	case SCR_PINGPONG_STATS:
+		draw_pingpong_stats();
 		break;
 	default:
 		break;
@@ -1192,6 +1417,21 @@ int main(void)
 				spin++;
 				last_spin = now;
 				draw_tx_status();
+			}
+		}
+
+		/* Live-refresh the PING PONG screens (counters / RTT / elapsed). */
+		if (screen == SCR_PINGPONG || screen == SCR_PINGPONG_STATS) {
+			int64_t now = k_uptime_get();
+			int period = (screen == SCR_PINGPONG) ? 100 : 250;
+
+			if (now - pp_last_draw_ms >= period) {
+				pp_last_draw_ms = now;
+				if (screen == SCR_PINGPONG) {
+					draw_pingpong_dynamic();
+				} else {
+					draw_pingpong_stats();
+				}
 			}
 		}
 
