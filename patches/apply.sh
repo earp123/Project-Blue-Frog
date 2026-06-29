@@ -7,7 +7,7 @@
 #   ZEPHYR_BASE=/path/to/ncs/zephyr ./patches/apply.sh
 # or, if ZEPHYR_BASE is unset, it defaults to C:/ncs/v3.2.1/zephyr.
 #
-# See ../README.rst ("Required SDK patches") for what these do and why.
+# See ../README.md ("SDK setup") for what these do and why.
 
 set -euo pipefail
 
@@ -25,7 +25,7 @@ fi
 if [ ! -f "$ZB/drivers/lora/native/sx126x/sx126x.c" ]; then
 	echo "error: native SX126x driver not found under $ZB" >&2
 	echo "       expected drivers/lora/native/sx126x/sx126x.c (the non-stock" >&2
-	echo "       driver drop-in). See README.rst." >&2
+	echo "       driver drop-in). See README.md." >&2
 	exit 1
 fi
 
