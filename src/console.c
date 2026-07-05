@@ -28,7 +28,6 @@
 #include <ff.h>
 #include <zephyr/sys/atomic.h>
 #include <zephyr/sys/util.h>
-#include <zephyr/logging/log.h>
 #include <errno.h>
 #include <string.h>
 #include <stdio.h>
@@ -40,14 +39,10 @@
 #include "touch_cal.h"
 #include "pingpong.h"
 
-LOG_MODULE_REGISTER(console, LOG_LEVEL_INF);
-
 /* Set to 1 once an SD card is inserted; 0 skips SD bring-up entirely. */
 #define ENABLE_SD 0
 
 /* ---- Devices (display/touch owned by ui_widgets; radio by radio_cfg) ---- */
-static const struct device *const touch_dev = DEVICE_DT_GET(DT_CHOSEN(zephyr_touch));
-static const struct device *const buttons_dev = DEVICE_DT_GET(DT_PATH(buttons));
 static const struct device *const lora_dev = DEVICE_DT_GET(DT_ALIAS(lora0));
 
 /* ---- Layout ---- */
@@ -178,7 +173,6 @@ static void touch_cb(struct input_event *evt, void *user_data)
 		tap_raw_x = touch_x;
 		tap_raw_y = touch_y;
 		atomic_set(&tap_ready, 1);
-		printk("TAP raw x=%d y=%d\n", touch_x, touch_y);
 	} else if (!touch_down) {
 		touch_latched = false;
 	}
@@ -231,19 +225,15 @@ static void tx_thread_fn(void *a, void *b, void *c)
 		k_sem_take(&tx_sem, K_FOREVER);
 
 		size_t n = tx_buf_len;
-
-		printk("TX: sending %u bytes...\n", (unsigned)n);
 		int rc = lora_send(lora_dev, tx_buf, n);
 
 		tx_last_rc = rc;
 		tx_last_ms = k_uptime_get();
 		if (rc < 0) {
 			tx_state = TX_FAILED;
-			printk("TX: FAILED rc=%d\n", rc);
 		} else {
 			tx_count++;
 			tx_state = TX_SENT;
-			printk("TX: #%d OK (+%lld ms)\n", tx_count, tx_last_ms);
 		}
 		mark_dirty();
 	}
@@ -1281,17 +1271,14 @@ static bool sd_init_and_log(char *readback, size_t rb_size)
 	int rc = fs_mount(&sd_mp);
 
 	if (rc < 0) {
-		LOG_ERR("SD mount failed (%d) - card present/FAT32?", rc);
 		return false;
 	}
-	LOG_INF("SD mounted at %s", sd_mp.mnt_point);
 
 	struct fs_file_t f;
 
 	fs_file_t_init(&f);
 	rc = fs_open(&f, BOOT_LOG_PATH, FS_O_CREATE | FS_O_WRITE | FS_O_APPEND);
 	if (rc < 0) {
-		LOG_ERR("open(append) %s failed: %d", BOOT_LOG_PATH, rc);
 		return false;
 	}
 
@@ -1301,14 +1288,12 @@ static bool sd_init_and_log(char *readback, size_t rb_size)
 	rc = fs_write(&f, msg, n);
 	fs_close(&f);
 	if (rc < 0) {
-		LOG_ERR("write failed: %d", rc);
 		return false;
 	}
 
 	fs_file_t_init(&f);
 	rc = fs_open(&f, BOOT_LOG_PATH, FS_O_READ);
 	if (rc < 0) {
-		LOG_ERR("open(read) failed: %d", rc);
 		return false;
 	}
 
@@ -1316,7 +1301,6 @@ static bool sd_init_and_log(char *readback, size_t rb_size)
 
 	fs_close(&f);
 	if (got < 0) {
-		LOG_ERR("read failed: %d", (int)got);
 		return false;
 	}
 	readback[got] = '\0';
@@ -1329,18 +1313,7 @@ static bool sd_init_and_log(char *readback, size_t rb_size)
  * ------------------------------------------------------------------------- */
 int main(void)
 {
-	printk("\n=== Telemetry console (radio eval) ===\n");
-
 	bool ui_ok = ui_init();
-	bool touch_ok = device_is_ready(touch_dev);
-	bool buttons_ok = device_is_ready(buttons_dev);
-
-	if (!touch_ok) {
-		LOG_ERR("Touch device not ready");
-	}
-	if (!buttons_ok) {
-		LOG_ERR("Buttons device not ready");
-	}
 
 	radio_cfg_init();
 	payload_init();
@@ -1349,25 +1322,16 @@ int main(void)
 	/* Push the default config to the radio so SEND works out of the box. */
 	lora_ready = (radio_cfg_apply() == 0);
 
-	printk("DISPLAY: %s\n", ui_ok ? "OK" : "FAIL");
-	printk("TOUCH:   %s\n", touch_ok ? "OK" : "FAIL");
-	printk("BUTTONS: %s\n", buttons_ok ? "OK" : "FAIL");
-	printk("LORA:    %s\n", lora_ready ? "OK" : "FAIL");
-
 #if ENABLE_SD
 	static char readback[512];
-	bool sd_ok = sd_init_and_log(readback, sizeof(readback));
 
-	printk("SD CARD: %s\n", sd_ok ? "OK" : "FAIL");
-	if (sd_ok) {
-		printk("---- %s ----\n%s----------------------\n", BOOT_LOG_PATH, readback);
-	}
-#else
-	printk("SD CARD: SKIPPED (no card inserted)\n");
+	(void)sd_init_and_log(readback, sizeof(readback));
 #endif
 
+	/* No UART on this build; if the display failed there is nothing to report
+	 * to, so just halt.
+	 */
 	if (!ui_ok) {
-		LOG_ERR("No display/UI; halting (check wiring/reset/backlight)");
 		k_sleep(K_FOREVER);
 	}
 
@@ -1376,8 +1340,6 @@ int main(void)
 	draw_current();
 
 	enum screen_id last = screen;
-
-	printk("Buttons: B1=UP B2=DOWN B3=OK B4=BACK. Touch enabled.\n");
 
 	while (1) {
 		enum nav_action a = atomic_set(&nav_event, NAV_NONE);

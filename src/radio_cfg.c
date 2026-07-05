@@ -11,12 +11,9 @@
 #include <zephyr/device.h>
 #include <zephyr/drivers/gpio.h>
 #include <zephyr/sys/util.h>
-#include <zephyr/logging/log.h>
 #include <errno.h>
 #include <stdio.h>
 #include <string.h>
-
-LOG_MODULE_REGISTER(radio_cfg, LOG_LEVEL_INF);
 
 static const struct device *const lora_dev = DEVICE_DT_GET(DT_ALIAS(lora0));
 static const struct gpio_dt_spec rf_sw =
@@ -78,8 +75,6 @@ void radio_cfg_init(void)
 	/* RF_SW held at GND (inactive) for both TX and RX on this Wio-SX1262. */
 	if (gpio_is_ready_dt(&rf_sw)) {
 		gpio_pin_configure_dt(&rf_sw, GPIO_OUTPUT_INACTIVE);
-	} else {
-		LOG_WRN("RF_SW GPIO not ready");
 	}
 }
 
@@ -298,13 +293,11 @@ int radio_cfg_apply(void)
 	int rc;
 
 	if (!device_is_ready(lora_dev)) {
-		LOG_ERR("LoRa device not ready");
 		return -ENODEV;
 	}
 
 	rc = radio_cfg_validate(err, sizeof(err));
 	if (rc < 0) {
-		LOG_ERR("cfg invalid: %s", err);
 		return rc;
 	}
 
@@ -315,15 +308,10 @@ int radio_cfg_apply(void)
 
 	rc = lora_config(lora_dev, &tmp);
 	if (rc < 0) {
-		LOG_ERR("lora_config failed: %d", rc);
 		return rc;
 	}
 
 	g_applied = g_shadow;
-	LOG_INF("applied: %uHz SF%d BW%d CR4/%d pre%u %+ddBm",
-		(unsigned)g_applied.frequency, (int)g_applied.datarate,
-		(int)g_applied.bandwidth, (int)g_applied.coding_rate + 4,
-		(unsigned)g_applied.preamble_len, (int)g_applied.tx_power);
 	return 0;
 }
 

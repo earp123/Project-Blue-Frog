@@ -13,11 +13,8 @@
 #include <zephyr/drivers/gpio.h>
 #include <zephyr/display/cfb.h>
 #include <zephyr/sys/util.h>
-#include <zephyr/logging/log.h>
 #include <string.h>
 #include <stdio.h>
-
-LOG_MODULE_REGISTER(ui_widgets, LOG_LEVEL_INF);
 
 static const struct device *const display_dev = DEVICE_DT_GET(DT_CHOSEN(zephyr_display));
 static const struct gpio_dt_spec backlight = GPIO_DT_SPEC_GET(DT_NODELABEL(backlight), gpios);
@@ -184,7 +181,6 @@ void ui_clear(uint16_t color)
 bool ui_init(void)
 {
 	if (!device_is_ready(display_dev)) {
-		LOG_ERR("Display device not ready");
 		return false;
 	}
 
@@ -196,8 +192,6 @@ bool ui_init(void)
 
 	if (gpio_is_ready_dt(&backlight)) {
 		gpio_pin_configure_dt(&backlight, GPIO_OUTPUT_ACTIVE);
-	} else {
-		LOG_WRN("Backlight GPIO not ready");
 	}
 
 	display_blanking_off(display_dev);
@@ -208,8 +202,6 @@ bool ui_init(void)
 		title_font = body_font;
 	}
 
-	LOG_INF("Display %ux%u ready, body=%s title=%s", disp_w, disp_h,
-		body_font ? "ok" : "MISSING", title_font ? "ok" : "MISSING");
 	return body_font != NULL;
 }
 

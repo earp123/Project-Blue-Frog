@@ -39,9 +39,8 @@ live applied-config summary.
   **SEND PING** transmits a 44-byte ping and the peer echoes a pong with the same
   sequence number, so the originator can measure round-trip time. A **STATS**
   sub-screen shows sent/received/lost counts and RTT last/min/max/avg;
-  **RESET STATS** clears them. Outstanding pings time out after 1 s. Every event
-  is logged to UART as greppable `PINGPONG,*` CSV (see
-  [Ping/pong UART schema](#pingpong-uart-schema)).
+  **RESET STATS** clears them. Outstanding pings time out after 1 s. All state is
+  shown on the STATS sub-screen (this build has no serial output).
 - **CONFIG** — Stage-then-apply RF configuration. Rows for frequency, spreading
   factor, bandwidth, coding rate, TX power, preamble, CRC, IQ, and network sync
   edit an in-RAM _shadow_ `lora_modem_config`; a `*` in the header marks it dirty.
@@ -81,7 +80,7 @@ and **PING PONG STATS** views.
 - **Ping/pong link test** — [`src/pingpong.c`](src/pingpong.c) /
   [`.h`](src/pingpong.h). A single dedicated RX thread that owns the radio while
   active (polls `lora_recv()` in short slices, sends ping/pong via `lora_send()`),
-  mutex-guarded stats, the 44-byte packet format, and UART CSV logging.
+  mutex-guarded stats, and the 44-byte packet format.
 - **Screen router** — [`src/console.c`](src/console.c). Main loop + screen state
   machine (HOME, CONFIG, PAYLOAD, KEYPAD, TX STATUS, CALIBRATE, PING PONG, PING
   PONG STATS), debounced touch capture, and single-owner drawing (only the main
@@ -100,22 +99,15 @@ and **PING PONG STATS** views.
   a timestamped boot line to `/SD:/BOOT.LOG`, and reads it back to validate the SD
   path end to end.
 
-#### Ping/pong UART schema
+### Removed
 
-All lines are prefixed `PINGPONG,` for easy `grep` filtering:
-
-```text
-PINGPONG,START
-PINGPONG,STOP
-PINGPONG,TX_PING,seq=<n>,tx_us=<t>
-PINGPONG,RX_PONG,seq=<n>,rx_us=<t>,rtt_us=<r>,rssi=<dbm>,snr=<db>
-PINGPONG,RX_PING,seq=<n>,rx_us=<t>,rssi=<dbm>,snr=<db>
-PINGPONG,TX_PONG,seq=<n>,tx_us=<t>
-PINGPONG,TIMEOUT,seq=<n>
-PINGPONG,ABANDONED,seq=<n>        # SEND PING pressed while one was still outstanding
-PINGPONG,UNEXPECTED,type=<x>      # malformed packet, or pong with no matching ping
-PINGPONG,STATS_RESET
-```
+- **UART / serial console and all logging on the console build.** The telemetry
+  console is now display-only — every `printk` / `LOG_*` call was removed from the
+  console sources, and `CONFIG_SERIAL`, `CONFIG_CONSOLE`, `CONFIG_LOG`, and
+  `CONFIG_PRINTK` are disabled for this build (in
+  `boards/nrf5340dk_nrf5340_cpuapp_display.conf`). All state is shown on the TFT.
+  This retired the `PINGPONG,*` CSV trace and the boot/status prints; the
+  LoRa-send variant is unchanged and still reports over UART.
 
 ### Scripts & SDK preparation
 

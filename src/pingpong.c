@@ -78,14 +78,12 @@ int pingpong_start(void)
 	pp_next_seq = 0;
 	atomic_set(&pp_pending_ping, 0);
 	atomic_set(&pp_running, 1);
-	printk("PINGPONG,START\n");
 	return 0;
 }
 
 int pingpong_stop(void)
 {
 	atomic_set(&pp_running, 0);
-	printk("PINGPONG,STOP\n");
 	return 0;
 }
 
@@ -97,7 +95,6 @@ void pingpong_send_ping(void)
 void pingpong_reset_stats(void)
 {
 	reset_stats_locked_clear();
-	printk("PINGPONG,STATS_RESET\n");
 }
 
 void pingpong_get_stats(pingpong_stats_t *out)
@@ -118,31 +115,19 @@ bool pingpong_is_running(void)
 static void do_send_ping(void)
 {
 	uint8_t buf[PP_LEN];
-	bool abandoned = false;
-	uint32_t abandoned_seq = 0;
 
+	/* Abandon any previous outstanding ping. */
 	k_mutex_lock(&pp_mutex, K_FOREVER);
-	if (g_stats.outstanding_valid) {
-		abandoned = true;
-		abandoned_seq = g_stats.outstanding_seq;
-		g_stats.outstanding_valid = false;
-	}
+	g_stats.outstanding_valid = false;
 	k_mutex_unlock(&pp_mutex);
-
-	if (abandoned) {
-		printk("PINGPONG,ABANDONED,seq=%u\n", abandoned_seq);
-	}
 
 	uint32_t seq = ++pp_next_seq;
 	uint32_t tx_us = pingpong_now_us();
 
 	build_pkt(buf, PP_TYPE_PING, seq, tx_us);
 
-	int rc = lora_send(lora_dev, buf, PP_LEN);
-
-	if (rc < 0) {
-		printk("PINGPONG,TX_PING_ERR,seq=%u,rc=%d\n", seq, rc);
-		return; /* not counted / not outstanding: nothing went on air */
+	if (lora_send(lora_dev, buf, PP_LEN) < 0) {
+		return; /* nothing went on air: not counted / not outstanding */
 	}
 
 	k_mutex_lock(&pp_mutex, K_FOREVER);
@@ -151,17 +136,11 @@ static void do_send_ping(void)
 	g_stats.outstanding_tx_us = tx_us;
 	g_stats.pings_sent++;
 	k_mutex_unlock(&pp_mutex);
-
-	printk("PINGPONG,TX_PING,seq=%u,tx_us=%u\n", seq, tx_us);
 }
 
-static void handle_ping(uint32_t seq, uint32_t ts, uint32_t rx_us,
-			int16_t rssi, int8_t snr)
+static void handle_ping(uint32_t seq, uint32_t ts)
 {
 	uint8_t pong[PP_LEN];
-
-	printk("PINGPONG,RX_PING,seq=%u,rx_us=%u,rssi=%d,snr=%d\n",
-	       seq, rx_us, rssi, snr);
 
 	k_mutex_lock(&pp_mutex, K_FOREVER);
 	g_stats.pings_received++;
@@ -172,28 +151,21 @@ static void handle_ping(uint32_t seq, uint32_t ts, uint32_t rx_us,
 	 */
 	build_pkt(pong, PP_TYPE_PONG, seq, ts);
 
-	int rc = lora_send(lora_dev, pong, PP_LEN);
-
-	if (rc < 0) {
-		printk("PINGPONG,TX_PONG_ERR,seq=%u,rc=%d\n", seq, rc);
+	if (lora_send(lora_dev, pong, PP_LEN) < 0) {
 		return; /* do not retry; the originator will time out cleanly */
 	}
 
 	k_mutex_lock(&pp_mutex, K_FOREVER);
 	g_stats.pongs_sent++;
 	k_mutex_unlock(&pp_mutex);
-
-	printk("PINGPONG,TX_PONG,seq=%u,tx_us=%u\n", seq, ts);
 }
 
-static void handle_pong(uint32_t seq, uint32_t rx_us, int16_t rssi, int8_t snr)
+static void handle_pong(uint32_t seq, uint32_t rx_us)
 {
-	bool matched = false;
-	uint32_t rtt = 0;
-
 	k_mutex_lock(&pp_mutex, K_FOREVER);
 	if (g_stats.outstanding_valid && g_stats.outstanding_seq == seq) {
-		rtt = rx_us - g_stats.outstanding_tx_us; /* wrap-safe */
+		uint32_t rtt = rx_us - g_stats.outstanding_tx_us; /* wrap-safe */
+
 		g_stats.outstanding_valid = false;
 		g_stats.pongs_received++;
 		g_stats.last_rtt_us = rtt;
@@ -205,28 +177,17 @@ static void handle_pong(uint32_t seq, uint32_t rx_us, int16_t rssi, int8_t snr)
 		}
 		g_stats.rtt_sum_us += rtt;
 		g_stats.rtt_count++;
-		matched = true;
 	}
+	/* Unmatched pongs (late / abandoned / already timed out) are ignored. */
 	k_mutex_unlock(&pp_mutex);
-
-	if (matched) {
-		printk("PINGPONG,RX_PONG,seq=%u,rx_us=%u,rtt_us=%u,rssi=%d,snr=%d\n",
-		       seq, rx_us, rtt, rssi, snr);
-	} else {
-		/* No matching outstanding ping (e.g. a late pong for an abandoned
-		 * or already-timed-out ping).
-		 */
-		printk("PINGPONG,UNEXPECTED,type=pong,seq=%u\n", seq);
-	}
 }
 
-static void handle_rx(const uint8_t *buf, int n, int16_t rssi, int8_t snr)
+static void handle_rx(const uint8_t *buf, int n)
 {
 	uint32_t rx_us = pingpong_now_us();
 
 	if (n != PP_LEN || buf[0] != PP_MAGIC) {
-		printk("PINGPONG,UNEXPECTED,type=malformed\n");
-		return;
+		return; /* malformed / foreign packet: ignore */
 	}
 
 	uint8_t type = buf[1];
@@ -235,36 +196,26 @@ static void handle_rx(const uint8_t *buf, int n, int16_t rssi, int8_t snr)
 
 	switch (type) {
 	case PP_TYPE_PING:
-		handle_ping(seq, ts, rx_us, rssi, snr);
+		handle_ping(seq, ts);
 		break;
 	case PP_TYPE_PONG:
-		handle_pong(seq, rx_us, rssi, snr);
+		handle_pong(seq, rx_us);
 		break;
 	default:
-		printk("PINGPONG,UNEXPECTED,type=0x%02x\n", type);
-		break;
+		break; /* unknown type: ignore */
 	}
 }
 
 /* Expire an outstanding ping that has waited longer than the timeout. */
 static void check_timeout(void)
 {
-	bool timed_out = false;
-	uint32_t seq = 0;
-
 	k_mutex_lock(&pp_mutex, K_FOREVER);
 	if (g_stats.outstanding_valid &&
 	    (pingpong_now_us() - g_stats.outstanding_tx_us) >= PP_TIMEOUT_US) {
-		timed_out = true;
-		seq = g_stats.outstanding_seq;
 		g_stats.outstanding_valid = false;
 		g_stats.timeouts++;
 	}
 	k_mutex_unlock(&pp_mutex);
-
-	if (timed_out) {
-		printk("PINGPONG,TIMEOUT,seq=%u\n", seq);
-	}
 }
 
 static uint8_t rx_buf[64]; /* > PP_LEN so wrong-length packets are detectable */
@@ -275,35 +226,28 @@ static void pingpong_thread_fn(void *a, void *b, void *c)
 	ARG_UNUSED(b);
 	ARG_UNUSED(c);
 
-	bool was_running = false;
-
 	while (1) {
 		if (!atomic_get(&pp_running)) {
-			/* The driver already sleeps the chip after each op, so
-			 * there is nothing to tear down; just go idle.
+			/* The driver sleeps the chip after each op, so there is
+			 * nothing to tear down; just idle until started again.
 			 */
-			was_running = false;
 			k_sleep(K_MSEC(50));
 			continue;
 		}
-		was_running = true;
 
 		if (atomic_cas(&pp_pending_ping, 1, 0)) {
 			do_send_ping();
 		}
 
-		int16_t rssi = 0;
-		int8_t snr = 0;
 		int n = lora_recv(lora_dev, rx_buf, sizeof(rx_buf),
-				  K_MSEC(PP_RECV_SLICE_MS), &rssi, &snr);
+				  K_MSEC(PP_RECV_SLICE_MS), NULL, NULL);
 
 		if (n >= 0) {
-			handle_rx(rx_buf, n, rssi, snr);
+			handle_rx(rx_buf, n);
 		} else if (n != -EAGAIN) {
 			/* -EAGAIN is the normal slice timeout; anything else is a
-			 * real error - log and back off briefly, don't exit.
+			 * real error - back off briefly and retry, don't exit.
 			 */
-			printk("PINGPONG,RECV_ERR,rc=%d\n", n);
 			k_sleep(K_MSEC(20));
 		}
 

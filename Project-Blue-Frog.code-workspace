@@ -1,0 +1,15 @@
+{
+	"folders": [
+		{
+			"path": "."
+		},
+		{
+			"path": "../../../../ncs/v3.2.1/zephyr/drivers/lora/native"
+		}
+	],
+	"settings": {
+		"nrf-connect.boardRoots": [
+			"C:/ncs/v3.2.0/zephyr/"
+		]
+	}
+}
