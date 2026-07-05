@@ -12,9 +12,11 @@
 #include <zephyr/sys/util.h>
 #include <zephyr/kernel.h>
 
+
 /* This file is the LoRa (Wio-SX1262) firmware variant. The telemetry console
  * lives in console.c. Exactly one is selected via the application Kconfig
  * choice so only one main() is linked.
+ * You can run this with only the sx1262 wired in. 
  */
 #if defined(CONFIG_APP_LORA_SEND)
 
