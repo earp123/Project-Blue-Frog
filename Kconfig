@@ -1,8 +1,8 @@
 # Application configuration for the "send" project.
 #
-# This project carries two independent firmware variants. Exactly one is built
-# at a time, selected here (set the choice in prj.conf / the companion conf).
-# The default is the LoRa-send firmware.
+# This project carries three independent firmware variants. Exactly one is
+# built at a time, selected here (set the choice in prj.conf / the companion
+# conf, or on the west command line). The default is the LoRa-send firmware.
 
 choice
 	prompt "Application variant"
@@ -24,6 +24,59 @@ config APP_CONSOLE
 	  (boards/nrf5340dk_nrf5340_cpuapp_display.overlay), DK-button menu, and
 	  async SX1262 telemetry transmit.
 
+config APP_TDMA_TEST
+	bool "Intercom TDMA L2 test (Wio-SX1262 shield)"
+	select COUNTER
+	select SHELL
+	help
+	  Fixed 4-slot TDMA radio layer (L2) for the sports-officials intercom,
+	  plus an app-owned raw SX1262 command layer (L1). Uses the same spi2 /
+	  port-1 Wio-SX1262 shield overlay as the LoRa-send variant; the
+	  display/touch/SD front end is not used. Role and slot are hard-coded
+	  via TDMA_ROLE_* / TDMA_SLOT_ID for the two-radio bench test. UART
+	  console, logging and the shell stay enabled.
+
 endchoice
+
+if APP_TDMA_TEST
+
+choice
+	prompt "TDMA role"
+	default TDMA_ROLE_MASTER
+
+config TDMA_ROLE_MASTER
+	bool "Master (frame timing beacon, TX slot 0)"
+
+config TDMA_ROLE_SECONDARY
+	bool "Secondary (phase-locks to the master's beacon)"
+
+endchoice
+
+config TDMA_SLOT_ID
+	int "TDMA transmit slot (0-3)"
+	range 0 3
+	default 0 if TDMA_ROLE_MASTER
+	default 1
+	help
+	  Slot this unit transmits in; it receives in the other three. The
+	  master's beacon is expected in slot 0.
+
+config TDMA_AUTOSTART
+	bool "Start the TDMA engine automatically at boot"
+	help
+	  If disabled, start the engine from the shell ("tdma start"). The M0
+	  manual TX/RX shell commands require the engine stopped.
+
+endif # APP_TDMA_TEST
+
+# The TDMA engine keeps the radio awake for its whole life (PLL kept locked
+# in FS between slots; the TCXO warm-up cost is paid once at init). The
+# driver's sleep-when-idle behaviour would also detach/re-attach its DIO1
+# handling at runtime, violating the post-init quiescence L2 relies on
+# (docs/tdma_layering.md). This definition is parsed before the driver's
+# (sourced via Kconfig.zephyr below), so its conditional default wins.
+config LORA_SX126X_NATIVE_SLEEP
+	bool
+	default n if APP_TDMA_TEST
 
 source "Kconfig.zephyr"

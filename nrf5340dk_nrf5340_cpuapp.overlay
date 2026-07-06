@@ -15,6 +15,16 @@
     status = "disabled";
 };
 
+/* TDMA slot timer (CONFIG_APP_TDMA_TEST): free hardware TIMER instance on the
+ * app core, driven via the Zephyr counter API at 1 MHz (16 MHz / 2^4).
+ * Harmless to the other variants — the counter driver is only compiled when
+ * CONFIG_COUNTER is enabled, which only the TDMA variant selects.
+ */
+&timer2 {
+    status = "okay";
+    prescaler = <4>;
+};
+
 &pinctrl {
     spi2_default: spi2_default {
         group1 {

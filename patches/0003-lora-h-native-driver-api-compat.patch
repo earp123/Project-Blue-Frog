@@ -1,0 +1,143 @@
+diff --git a/include/zephyr/drivers/lora.h b/include/zephyr/drivers/lora.h
+index 76abd2340e2..0df73aa2ce2 100644
+--- a/include/zephyr/drivers/lora.h
++++ b/include/zephyr/drivers/lora.h
+@@ -38,7 +38,14 @@ extern "C" {
+  * higher data rates but typically reduce sensitivity and range.
+  */
+ enum lora_signal_bandwidth {
+-	BW_125_KHZ = 0,	/**< 125 kHz */
++	BW_7_KHZ = 0,	/**< 7.8 kHz */
++	BW_10_KHZ,	/**< 10.4 kHz */
++	BW_15_KHZ,	/**< 15.6 kHz */
++	BW_20_KHZ,	/**< 20.8 kHz */
++	BW_31_KHZ,	/**< 31.25 kHz */
++	BW_41_KHZ,	/**< 41.7 kHz */
++	BW_62_KHZ,	/**< 62.5 kHz */
++	BW_125_KHZ,	/**< 125 kHz */
+ 	BW_250_KHZ,	/**< 250 kHz */
+ 	BW_500_KHZ,	/**< 500 kHz */
+ };
+@@ -52,7 +59,8 @@ enum lora_signal_bandwidth {
+  * symbol). Higher values result in lower data rates but increased range and robustness.
+  */
+ enum lora_datarate {
+-	SF_6 = 6, /**< Spreading factor 6 (fastest, shortest range) */
++	SF_5 = 5, /**< Spreading factor 5 (fastest, shortest range) */
++	SF_6,     /**< Spreading factor 6 */
+ 	SF_7,     /**< Spreading factor 7 */
+ 	SF_8,     /**< Spreading factor 8 */
+ 	SF_9,     /**< Spreading factor 9 */
+@@ -122,6 +130,14 @@ struct lora_modem_config {
+ 	 * interacting with a public network.
+ 	 */
+ 	bool public_network;
++
++	/**
++	 * Disable the packet CRC. Normally this should be set to false. LoRa
++	 * packets carry a payload CRC that receivers use to reject corrupted
++	 * packets. Advanced use-cases (e.g. protocols with their own
++	 * end-to-end integrity check) can disable it.
++	 */
++	bool packet_crc_disable;
+ };
+ 
+ /**
+@@ -187,6 +203,27 @@ typedef int (*lora_api_recv)(const struct device *dev, uint8_t *data,
+ typedef int (*lora_api_recv_async)(const struct device *dev, lora_recv_cb cb,
+ 			     void *user_data);
+ 
++/**
++ * @typedef lora_api_recv_duty_cycle_async()
++ * @brief Callback API for receiving data asynchronously over LoRa using
++ * receive duty cycling
++ *
++ * @see lora_recv_duty_cycle_async() for argument descriptions.
++ */
++typedef int (*lora_api_recv_duty_cycle_async)(const struct device *dev,
++					      k_timeout_t rx_period,
++					      k_timeout_t sleep_period,
++					      lora_recv_cb cb, void *user_data);
++
++/**
++ * @typedef lora_api_airtime()
++ * @brief Callback API for querying the time-on-air of a payload
++ *
++ * @see lora_airtime() for argument descriptions.
++ */
++typedef uint32_t (*lora_api_airtime)(const struct device *dev,
++				     uint32_t data_len);
++
+ /**
+  * @typedef lora_api_test_cw()
+  * @brief Callback API for transmitting a continuous wave
+@@ -202,6 +239,8 @@ __subsystem struct lora_driver_api {
+ 	lora_api_send_async send_async;
+ 	lora_api_recv recv;
+ 	lora_api_recv_async recv_async;
++	lora_api_recv_duty_cycle_async recv_duty_cycle_async;
++	lora_api_airtime airtime;
+ 	lora_api_test_cw test_cw;
+ };
+ 
+@@ -315,6 +354,60 @@ static inline int lora_recv_async(const struct device *dev, lora_recv_cb cb,
+ 	return api->recv_async(dev, cb, user_data);
+ }
+ 
++/**
++ * @brief Receive data asynchronously over LoRa using receive duty cycling
++ *
++ * Receive packets continuously under the configuration previously setup by
++ * @ref lora_config, alternating between an active receive window and a low
++ * power sleep period.
++ *
++ * Reception is cancelled by calling this function again with @p cb = NULL.
++ * This can be done within the callback handler.
++ *
++ * @param dev Modem to receive data on.
++ * @param rx_period Duration of the active receive window.
++ * @param sleep_period Duration of the low power sleep period.
++ * @param cb Callback to run on receiving data. If NULL, any pending
++ *	     asynchronous receptions will be cancelled.
++ * @param user_data User data passed to callback
++ * @return 0 when reception successfully setup, negative on error
++ */
++static inline int lora_recv_duty_cycle_async(const struct device *dev,
++					     k_timeout_t rx_period,
++					     k_timeout_t sleep_period,
++					     lora_recv_cb cb, void *user_data)
++{
++	const struct lora_driver_api *api =
++		(const struct lora_driver_api *)dev->api;
++
++	if (api->recv_duty_cycle_async == NULL) {
++		return -ENOSYS;
++	}
++
++	return api->recv_duty_cycle_async(dev, rx_period, sleep_period, cb,
++					  user_data);
++}
++
++/**
++ * @brief Query the expected time-on-air of a payload
++ *
++ * @param dev       LoRa device
++ * @param data_len  Length of the payload in bytes
++ * @return Time-on-air in milliseconds, 0 if unsupported or not configured
++ */
++static inline uint32_t lora_airtime(const struct device *dev,
++				    uint32_t data_len)
++{
++	const struct lora_driver_api *api =
++		(const struct lora_driver_api *)dev->api;
++
++	if (api->airtime == NULL) {
++		return 0;
++	}
++
++	return api->airtime(dev, data_len);
++}
++
+ /**
+  * @brief Transmit an unmodulated continuous wave at a given frequency
+  *

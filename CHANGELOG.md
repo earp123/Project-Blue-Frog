@@ -10,18 +10,60 @@ For hardware wiring, build/flash instructions, and SDK setup, see
 
 ## [Unreleased]
 
-On-device radio-evaluation tooling for the nRF5340 DK + Wio-SX1262 (SX1262).
-_Last updated: 2026-06-29._
+On-device radio-evaluation tooling for the nRF5340 DK + Wio-SX1262 (SX1262),
+plus the first slice of the wireless-intercom firmware (TDMA radio layer).
+_Last updated: 2026-07-05._
 
 ### Firmware variants
 
-Two variants build from one source tree; exactly one `main()` is linked, chosen
-by the Kconfig choice in [`Kconfig`](Kconfig):
+Three variants build from one source tree; exactly one `main()` is linked,
+chosen by the Kconfig choice in [`Kconfig`](Kconfig):
 
 - **LoRa send** (`CONFIG_APP_LORA_SEND`, default) — [`src/main.c`](src/main.c).
   Minimal one-shot transmit plus a raw-SPI radio status dump. Radio-only bring-up.
 - **Telemetry console** (`CONFIG_APP_CONSOLE`) — [`src/console.c`](src/console.c)
   and its modules. The full touch + DK-button device app described below.
+- **Intercom TDMA test** (`CONFIG_APP_TDMA_TEST`) —
+  [`src/tdma_app/main.c`](src/tdma_app/main.c) +
+  [`src/tdma/`](src/tdma). See "Intercom TDMA radio layer" below.
+
+### Intercom TDMA radio layer (M0-M2 implementation)
+
+New product hosted in this tree: the L1/L2 radio layer for the sports-officials
+intercom — a fixed 4-slot TDMA broadcast flood over the same SX1262 PHY
+(915.0 MHz, SF5 / BW 500 kHz / CR 4-5, 44-byte fixed packets, 12-symbol
+preamble, +22 dBm). Slot width 50 ms for bring-up (one constant,
+`TDMA_SLOT_DURATION_US`); frame = 4 slots.
+
+- **L1** [`src/tdma/sx126x_cmd.c`](src/tdma/sx126x_cmd.c) — app-owned raw
+  SX1262 opcode layer (datasheet-cited) with all BUSY gating in one choke
+  point. The native Zephyr driver (L0) is used for init only; its DIO1
+  callback (which did SPI on the system workqueue) is detached after
+  `lora_config()` and replaced with the TDMA port's own
+  (findings: [`docs/tdma_layering.md`](docs/tdma_layering.md)).
+- **L2** [`src/tdma/`](src/tdma) — single radio thread (sole runtime SPI
+  owner) polling slot-tick + DIO1 semaphores; hardware TIMER2 via the counter
+  API at 1 MHz with an accumulating absolute alarm target; TX staging during
+  RX-slot slack; drop-oldest RX msgq; telemetry counters. Secondary units
+  acquire the master's slot-0 beacon (snap, then proportional step clamped to
+  ±500 µs/frame) and go SYNCING → RUNNING after 3 beacons under 1 ms error.
+- **App** — Kconfig role/slot (`TDMA_ROLE_MASTER`/`TDMA_ROLE_SECONDARY`,
+  `TDMA_SLOT_ID`), telemetry print every 5 s over UART, and `tdma` shell
+  commands (`tx`, `rx [s]`, `start`, `stop`, `stats`) for M0 manual bring-up.
+- Build: `west build -b nrf5340dk/nrf5340/cpuapp -p always -- -DCONFIG_APP_TDMA_TEST=y`
+  (+ `-DCONFIG_TDMA_ROLE_SECONDARY=y` for the second unit).
+
+### SDK setup fixes (Windows / NCS v3.2.0)
+
+- New [`patches/0003-lora-h-native-driver-api-compat.patch`](patches/README.md):
+  stock NCS v3.2.x ships an older `include/zephyr/drivers/lora.h` missing
+  `SF_5`, the narrow `BW_*` members, `packet_crc_disable` and the
+  `recv_duty_cycle_async`/`airtime` API — nothing in this repo compiled
+  against it. The patch mirrors the newer upstream header the vendored driver
+  was written against.
+- `patches/apply.sh` now applies with `--ignore-whitespace` (CRLF checkouts on
+  Windows put CRLF driver files into the SDK; the LF patches otherwise refuse
+  to match) and globs all numbered patches.
 
 ### HOME menu
 

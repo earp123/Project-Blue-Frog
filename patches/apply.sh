@@ -31,12 +31,15 @@ fi
 
 echo "ZEPHYR_BASE = $ZB"
 
-for p in "$DIR"/0001-*.patch "$DIR"/0002-*.patch; do
+# --ignore-whitespace: on Windows the repo checkout (and thus the driver tree
+# setup_sdk.sh copies into the SDK) carries CRLF line endings while the
+# patches are stored with LF; without it git refuses to match the context.
+for p in "$DIR"/[0-9][0-9][0-9][0-9]-*.patch; do
 	name="$(basename "$p")"
-	if git -C "$ZB" apply -p1 --reverse --check "$p" 2>/dev/null; then
+	if git -C "$ZB" apply -p1 --ignore-whitespace --reverse --check "$p" 2>/dev/null; then
 		echo "skip  (already applied): $name"
-	elif git -C "$ZB" apply -p1 --check "$p" 2>/dev/null; then
-		git -C "$ZB" apply -p1 "$p"
+	elif git -C "$ZB" apply -p1 --ignore-whitespace --check "$p" 2>/dev/null; then
+		git -C "$ZB" apply -p1 --ignore-whitespace "$p"
 		echo "apply (done):           $name"
 	else
 		echo "ERROR: $name does not apply cleanly to $ZB" >&2

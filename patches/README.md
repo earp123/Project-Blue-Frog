@@ -28,11 +28,20 @@ picked up on a CMake reconfigure.
 
 - `macro "SPI_DT_SPEC_INST_GET" requires 3 arguments, but only 2 given`
 - `'..._P_regulator_ldo' undeclared` / `'..._P_force_ldro' undeclared`
+- `'SF_5' undeclared` / `'BW_7_KHZ' undeclared` /
+  `'struct lora_modem_config' has no member named 'packet_crc_disable'` /
+  `'struct lora_driver_api' has no member named 'recv_duty_cycle_async'`
 
 | File | Patch | Why |
 |------|-------|-----|
-| `0001-native-sx126x-spi-dt-spec-arity.patch` | adds the trailing `delay` arg (`0`) to both `SPI_DT_SPEC_INST_GET` calls in `drivers/lora/native/sx126x/sx126x.c` | the native driver uses the newer 2-arg SPI macro; v3.2.1's `spi.h` requires 3 args |
-| `0002-sx126x-base-binding-add-ldo-props.patch` | adds the `regulator-ldo` and `force-ldro` boolean properties to `dts/bindings/lora/semtech,sx126x-base.yaml` | the native driver reads these DT props, which don't exist in v3.2.1's binding |
+| `0001-native-sx126x-spi-dt-spec-arity.patch` | adds the trailing `delay` arg (`0`) to both `SPI_DT_SPEC_INST_GET` calls in `drivers/lora/native/sx126x/sx126x.c` | the native driver uses the newer 2-arg SPI macro; v3.2.x's `spi.h` requires 3 args |
+| `0002-sx126x-base-binding-add-ldo-props.patch` | adds the `regulator-ldo` and `force-ldro` boolean properties to `dts/bindings/lora/semtech,sx126x-base.yaml` | the native driver reads these DT props, which don't exist in v3.2.x's binding |
+| `0003-lora-h-native-driver-api-compat.patch` | brings `include/zephyr/drivers/lora.h` up to the newer upstream API the vendored driver was written against: `SF_5`, the narrow `BW_*` enum members, `packet_crc_disable`, and the `recv_duty_cycle_async`/`airtime` driver-API slots + inline wrappers | stock v3.2.x ships the older LoRa API header; the vendored driver **and this project's app sources** (`SF_5` etc.) don't compile against it |
+
+Note: `apply.sh` passes `--ignore-whitespace` to `git apply`. On Windows the
+repo checkout is CRLF (`.gitattributes` `text=auto`), so the driver files
+`setup_sdk.sh` copies into the SDK carry CRLF while the patches are LF;
+without the flag none of the patches match their context.
 
 ## Prerequisite: the vendored LoRa driver
 
