@@ -10,6 +10,8 @@
 #include <zephyr/devicetree.h>
 #include <zephyr/drivers/counter.h>
 #include <zephyr/drivers/gpio.h>
+#include <zephyr/drivers/clock_control.h>
+#include <zephyr/drivers/clock_control/nrf_clock_control.h>
 #include <zephyr/sys/atomic.h>
 #include <errno.h>
 
@@ -37,6 +39,7 @@ K_MSGQ_DEFINE(tdma_rx_msgq, sizeof(struct tdma_rx_msg), 8, 4);
 static atomic_t dio1_timestamp;
 static atomic_t last_boundary;
 static atomic_t phase_adj_us;
+static atomic_t dio1_edges;	/* diagnostic: raw DIO1 edge count */
 
 /* Only touched by the alarm callback and (re)start with the alarm disarmed. */
 static uint32_t next_target;
@@ -77,7 +80,13 @@ static void dio1_isr(const struct device *port, struct gpio_callback *cb,
 
 	counter_get_value(slot_timer, &t);
 	atomic_set(&dio1_timestamp, (atomic_val_t)t);
+	atomic_inc(&dio1_edges);
 	k_sem_give(&tdma_dio1_sem);
+}
+
+uint32_t tdma_port_dio1_edges(void)
+{
+	return (uint32_t)atomic_get(&dio1_edges);
 }
 
 static struct counter_alarm_cfg alarm_cfg;
@@ -99,9 +108,55 @@ static void slot_alarm_cb(const struct device *dev, uint8_t chan,
 	k_sem_give(&tdma_slot_tick_sem);
 }
 
+/*
+ * Park HFCLK on the crystal for the life of the engine.
+ *
+ * TIMER2 (the slot clock) derives from HFCLK, and nothing in this build uses
+ * the nRF's own radio, so no other subsystem ever requests HFXO — HFCLK would
+ * otherwise free-run on the internal RC. Measured cost of leaving it there:
+ * roughly -1000 ppm between two units' slot clocks, which the secondary's
+ * proportional sync can absorb at 50 ms slots but not at the 20 ms production
+ * target. The request is never released; the engine owns the clock.
+ */
+static int request_hfxo(void)
+{
+	const struct device *clk = DEVICE_DT_GET_ONE(nordic_nrf_clock);
+	int ret;
+
+	if (!device_is_ready(clk)) {
+		LOG_ERR("nRF clock controller not ready");
+		return -ENODEV;
+	}
+
+	ret = clock_control_on(clk, CLOCK_CONTROL_NRF_SUBSYS_HF);
+	if (ret < 0) {
+		LOG_ERR("HFXO request failed: %d", ret);
+		return ret;
+	}
+
+	/* Bounded wait: HFXO start-up is well under a millisecond. */
+	for (int i = 0; i < 100; i++) {
+		if (clock_control_get_status(clk, CLOCK_CONTROL_NRF_SUBSYS_HF) ==
+		    CLOCK_CONTROL_STATUS_ON) {
+			LOG_INF("slot clock running on HFXO");
+			return 0;
+		}
+		k_busy_wait(100);
+	}
+
+	LOG_ERR("HFXO did not start");
+	return -ETIMEDOUT;
+}
+
 int tdma_port_init(void)
 {
 	uint32_t freq;
+	int ret;
+
+	ret = request_hfxo();
+	if (ret < 0) {
+		return ret;
+	}
 
 	if (!device_is_ready(slot_timer)) {
 		LOG_ERR("slot timer not ready");

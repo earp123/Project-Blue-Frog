@@ -22,6 +22,9 @@ int tdma_radio_init(const struct tdma_config *cfg);
 int tdma_radio_slot_tx_enter(void);
 int tdma_radio_slot_rx_enter(void);
 
+/* Diagnostic: read the chip's current mode nibble (SX126X_MODE_*). */
+int tdma_radio_probe_mode(uint8_t *mode);
+
 /* RX-slot slack work: copy payload / header into the chip's TX region. */
 int tdma_radio_stage_payload(const uint8_t payload[TDMA_PAYLOAD_LEN]);
 int tdma_radio_write_hdr(uint8_t slot_id, uint16_t frame_ctr);

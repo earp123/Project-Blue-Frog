@@ -56,6 +56,14 @@ static void print_telemetry(void)
 	printk("tdma: rx/slot [%u %u %u %u] last: ctr=%u rssi=%d snr=%d\n",
 	       rx_per_slot[0], rx_per_slot[1], rx_per_slot[2], rx_per_slot[3],
 	       last_frame_ctr, last_rssi, last_snr);
+	printk("tdma: diag rx_arm=%u edges=%u empty=%u pre=%u hdrok=%u "
+	       "mode_bad=%u mode=0x%x ppm=%d\n",
+	       t->rx_arm, t->dio1_edges, t->drain_empty, t->preamble_det,
+	       t->header_valid, t->rx_mode_bad, t->last_chip_mode, t->last_ppm);
+	printk("tdma: diag arm/slot [%u %u %u %u] evt/slot [%u %u %u %u] dt=%u us\n",
+	       t->arm_by_slot[0], t->arm_by_slot[1], t->arm_by_slot[2],
+	       t->arm_by_slot[3], t->evt_by_slot[0], t->evt_by_slot[1],
+	       t->evt_by_slot[2], t->evt_by_slot[3], t->last_evt_dt_us);
 }
 
 int main(void)

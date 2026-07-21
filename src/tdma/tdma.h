@@ -75,14 +75,14 @@
 #define TDMA_TX_START_LATENCY_US 100
 
 /*
- * RX guard lead: how far ahead of the master's TX start the secondary must
- * fire its slot boundary to guarantee SetRx completes before the preamble
- * arrives. Budget: thread wake (~100 us) + ClearIRQ SPI (~120 us) + SetRx
- * SPI (~130 us) + FS-to-RX transition (~70 us) + preamble detection margin
- * (4 symbols = 256 us) + safety (~324 us) = 1000 us. Padded to 1500 us so
- * clock jitter and occasional ISR latency don't erode the margin.
+ * There is deliberately no RX guard lead. An earlier revision biased the
+ * secondary's boundary 1.5 ms ahead of the master's TX so a per-slot SetRx
+ * could complete before the preamble arrived. That bias applied to the whole
+ * frame, so the secondary's own TX slot fired 1.5 ms early too and the
+ * master decoded none of it. RX slots now run continuously (see
+ * tdma_radio_slot_rx_enter), so the receiver is already listening when the
+ * boundary arrives and the two units' frames align exactly.
  */
-#define TDMA_RX_GUARD_LEAD_US	1500
 
 /* Secondary phase alignment (deliberately naive, see tdma_core_sync_feed). */
 #define TDMA_SYNC_STEP_CLAMP_US	500	/* max correction per frame */
@@ -129,6 +129,31 @@ struct tdma_telemetry {
 	uint32_t busy_timeouts;		/* fatal: BUSY never deasserted */
 	uint8_t sync_state;		/* enum tdma_sync_state */
 	int32_t last_phase_err_us;	/* last beacon phase error (secondary) */
+
+	/*
+	 * Bench diagnostics (M2 bring-up). The engine's own counters cannot
+	 * distinguish "receiver never armed" from "armed but heard nothing"
+	 * from "heard energy but never completed a packet"; these can. Strip
+	 * once the link is proven.
+	 */
+	uint32_t rx_arm;		/* SetRx issued at an RX slot entry */
+	uint32_t dio1_edges;		/* DIO1 edges counted in the ISR */
+	uint32_t drain_empty;		/* drains that read IrqStatus == 0 */
+	uint32_t preamble_det;		/* windows that latched PreambleDetected */
+	uint32_t header_valid;		/* windows that latched HeaderValid */
+	uint32_t rx_mode_bad;		/* post-SetRx GetStatus not in RX mode */
+	uint8_t last_chip_mode;		/* last GetStatus chip-mode nibble */
+	int32_t last_ppm;		/* secondary: local-vs-master clock error */
+
+	/*
+	 * Per-slot arm/event tallies and the boundary-to-edge delay. Together
+	 * these say whether the RX windows that produce no IRQ are a specific
+	 * slot (implicating the extra SPI done in that slot's slack) or spread
+	 * evenly, and whether a timeout lands at the programmed 45 ms or later.
+	 */
+	uint32_t arm_by_slot[TDMA_SLOT_COUNT];
+	uint32_t evt_by_slot[TDMA_SLOT_COUNT];
+	uint32_t last_evt_dt_us;
 };
 
 int tdma_init(const struct tdma_config *cfg);

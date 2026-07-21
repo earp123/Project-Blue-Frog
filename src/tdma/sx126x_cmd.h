@@ -64,6 +64,19 @@
 #define SX126X_IRQ_RX_TX_TIMEOUT	BIT(9)
 #define SX126X_IRQ_ALL			0x03FF
 
+/*
+ * GetStatus byte layout (DS 13.5.1, Table 13-76): current chip mode in bits
+ * 6:4, status of the last command in bits 3:1.
+ */
+#define SX126X_STATUS_MODE(s)		(((s) >> 4) & 0x07)
+#define SX126X_STATUS_CMD(s)		(((s) >> 1) & 0x07)
+
+#define SX126X_MODE_STBY_RC		0x02
+#define SX126X_MODE_STBY_XOSC		0x03
+#define SX126X_MODE_FS			0x04
+#define SX126X_MODE_RX			0x05
+#define SX126X_MODE_TX			0x06
+
 /* SetStandby modes (DS 13.1.2, Table 13-2) */
 #define SX126X_STANDBY_RC		0x00
 #define SX126X_STANDBY_XOSC		0x01
@@ -100,6 +113,13 @@
  * ticks = us / 15.625 = us * 64 / 1000, exact in integer math.
  */
 #define SX126X_TIMEOUT_TICKS_FROM_US(us)	((uint32_t)(((uint64_t)(us) * 64U) / 1000U))
+
+/*
+ * SetRx timeout special values (DS 13.1.5, Table 13-3):
+ *   0x000000 - single mode, no timeout: stays in RX until a packet lands;
+ *   0xFFFFFF - continuous mode: stays in RX and keeps receiving past RxDone.
+ */
+#define SX126X_RX_CONTINUOUS			0xFFFFFFUL
 
 /* Bounded BUSY spin budget. Plain commands deassert BUSY in < 1 ms;
  * calibration can hold it for a few ms. Timing out here is fatal to the

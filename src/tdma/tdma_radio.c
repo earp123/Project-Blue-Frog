@@ -52,9 +52,18 @@ static const struct gpio_dt_spec rf_sw =
 /* IRQ sources routed to DIO1. Header CRC errors (HEADER_ERR) are included so
  * corrupted headers are counted instead of silently absorbed by the slot.
  */
-#define TDMA_IRQ_MASK (SX126X_IRQ_TX_DONE | SX126X_IRQ_RX_DONE | \
-		       SX126X_IRQ_RX_TX_TIMEOUT | SX126X_IRQ_CRC_ERR | \
-		       SX126X_IRQ_HEADER_ERR)
+#define TDMA_DIO1_MASK (SX126X_IRQ_TX_DONE | SX126X_IRQ_RX_DONE | \
+			SX126X_IRQ_RX_TX_TIMEOUT | SX126X_IRQ_CRC_ERR | \
+			SX126X_IRQ_HEADER_ERR)
+
+/*
+ * Latched in IrqStatus but deliberately NOT routed to DIO1 (SetDioIrqParams
+ * takes the enable mask and the pin routing separately, DS 13.3.1): the
+ * engine's timing is unchanged, but a window that ends in a bare timeout can
+ * now be told apart from one where the receiver actually saw energy.
+ */
+#define TDMA_IRQ_MASK (TDMA_DIO1_MASK | SX126X_IRQ_PREAMBLE_DETECTED | \
+		       SX126X_IRQ_HEADER_VALID)
 
 BUILD_ASSERT(TDMA_PREAMBLE_SYMS >= 12,
 	     "SX1262 requires >= 12 preamble symbols at SF5/SF6");
@@ -174,7 +183,7 @@ int tdma_radio_init(const struct tdma_config *cfg)
 		return ret;
 	}
 
-	ret = sx126x_cmd_set_dio_irq_params(TDMA_IRQ_MASK, TDMA_IRQ_MASK, 0, 0);
+	ret = sx126x_cmd_set_dio_irq_params(TDMA_IRQ_MASK, TDMA_DIO1_MASK, 0, 0);
 	if (ret < 0) {
 		return ret;
 	}
@@ -228,6 +237,17 @@ int tdma_radio_slot_tx_enter(void)
 		return ret;
 	}
 
+	/*
+	 * RX slots now run continuously, so the chip no longer drops to the FS
+	 * fallback on its own before a TX slot. Step through FS explicitly:
+	 * SetTx then starts from a locked PLL, which is the precondition
+	 * TDMA_TX_START_LATENCY_US describes.
+	 */
+	ret = sx126x_cmd_set_fs();
+	if (ret < 0) {
+		return ret;
+	}
+
 	return sx126x_cmd_set_tx(SLOT_TIMEOUT_TICKS);
 }
 
@@ -240,7 +260,28 @@ int tdma_radio_slot_rx_enter(void)
 		return ret;
 	}
 
-	return sx126x_cmd_set_rx(SLOT_TIMEOUT_TICKS);
+	/*
+	 * Continuous RX instead of a per-slot timeout. The slot boundary is
+	 * already the end of the window, so the chip's timeout was redundant —
+	 * and it was measured leaving every other window dead: armed, reported
+	 * in RX by GetStatus, but never raising a DIO1 edge (see the arm/slot
+	 * vs evt/slot tallies). Consequence: RX slots no longer raise
+	 * RX_TX_TIMEOUT, so slot_timeouts only counts TX-side timeouts now.
+	 */
+	return sx126x_cmd_set_rx(SX126X_RX_CONTINUOUS);
+}
+
+int tdma_radio_probe_mode(uint8_t *mode)
+{
+	uint8_t status = 0;
+	int ret = sx126x_cmd_get_status(&status);
+
+	if (ret < 0) {
+		return ret;
+	}
+
+	*mode = SX126X_STATUS_MODE(status);
+	return 0;
 }
 
 int tdma_radio_stage_payload(const uint8_t payload[TDMA_PAYLOAD_LEN])

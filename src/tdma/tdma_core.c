@@ -47,6 +47,11 @@ static struct {
 	bool beacon_seen;
 	uint8_t lock_streak;
 
+	/* Diagnostic: previous beacon, for the local-vs-master rate estimate. */
+	uint32_t sync_prev_ts;
+	uint16_t sync_prev_ctr;
+	bool sync_have_prev;
+
 	struct tdma_telemetry telem;
 
 	/* Manual M0 ops: one frame counter for hand-fired packets. */
@@ -102,10 +107,30 @@ void tdma_core_sync_feed(uint32_t rx_timestamp_us, uint16_t frame_ctr)
 
 	eng.frame_ctr = frame_ctr;
 
+	/*
+	 * Diagnostic: relative clock rate, free of the +/-frame/2 wrap that
+	 * makes last_phase_err_us ambiguous. The master's frame counter rides
+	 * in the header, so elapsed master time is exact; compare it with
+	 * elapsed local slot-clock time between two beacons.
+	 */
+	if (eng.sync_have_prev) {
+		uint32_t d_local = rx_timestamp_us - eng.sync_prev_ts;
+		uint16_t d_frames = frame_ctr - eng.sync_prev_ctr;
+		uint64_t d_master = (uint64_t)d_frames * TDMA_FRAME_DURATION_US;
+
+		if (d_frames != 0U) {
+			eng.telem.last_ppm = (int32_t)
+				((((int64_t)d_local - (int64_t)d_master) *
+				  1000000) / (int64_t)d_master);
+		}
+	}
+	eng.sync_prev_ts = rx_timestamp_us;
+	eng.sync_prev_ctr = frame_ctr;
+	eng.sync_have_prev = true;
+
 	local_slot0 = tdma_port_last_boundary() -
 		      (uint32_t)eng.cur_slot * eng.cfg.slot_duration_us;
-	master_slot0 = rx_timestamp_us - TDMA_TOA_US - TDMA_TX_START_LATENCY_US
-		       - TDMA_RX_GUARD_LEAD_US;
+	master_slot0 = rx_timestamp_us - TDMA_TOA_US - TDMA_TX_START_LATENCY_US;
 
 	/* Wrap-safe difference, reduced to [-frame/2, frame/2). */
 	err = (int32_t)(master_slot0 - local_slot0);
@@ -207,6 +232,21 @@ void tdma_core_on_slot_tick(void)
 		(void)l1_check(tdma_radio_slot_tx_enter());
 	} else {
 		if (l1_check(tdma_radio_slot_rx_enter()) == 0) {
+			uint8_t mode = 0;
+
+			/* Diagnostic: did the chip actually enter RX? BUSY is
+			 * already low by the time this transaction starts, so
+			 * SetRx has been processed, not merely accepted.
+			 */
+			eng.telem.rx_arm++;
+			eng.telem.arm_by_slot[eng.cur_slot]++;
+			if (tdma_radio_probe_mode(&mode) == 0) {
+				eng.telem.last_chip_mode = mode;
+				if (mode != SX126X_MODE_RX) {
+					eng.telem.rx_mode_bad++;
+				}
+			}
+
 			rx_slot_slack_work();
 		}
 	}
@@ -228,6 +268,27 @@ void tdma_core_on_dio1(void)
 	ret = l1_check(tdma_radio_drain_dio1(&ev));
 	if (ret < 0) {
 		return;
+	}
+
+	/*
+	 * Diagnostic. An empty drain means the edge that woke us referred to
+	 * IRQ bits somebody else already cleared — the slot-entry
+	 * clear_irq_status(ALL) is the only other writer, so a nonzero count
+	 * here is direct evidence of events being destroyed before they are
+	 * read. Preamble/HeaderValid are latched but not routed to DIO1, so
+	 * they show whether the receiver heard energy during the window.
+	 */
+	eng.telem.dio1_edges = tdma_port_dio1_edges();
+	eng.telem.last_evt_dt_us = ts - tdma_port_last_boundary();
+	eng.telem.evt_by_slot[eng.cur_slot]++;
+	if (ev.irq == 0U) {
+		eng.telem.drain_empty++;
+	}
+	if (ev.irq & SX126X_IRQ_PREAMBLE_DETECTED) {
+		eng.telem.preamble_det++;
+	}
+	if (ev.irq & SX126X_IRQ_HEADER_VALID) {
+		eng.telem.header_valid++;
 	}
 
 	if (ev.irq & SX126X_IRQ_TX_DONE) {
@@ -396,6 +457,7 @@ int tdma_start(void)
 	eng.hdr_written = false;
 	eng.beacon_seen = false;
 	eng.lock_streak = 0;
+	eng.sync_have_prev = false;
 
 	eng.state = (eng.cfg.role == TDMA_ROLE_MASTER) ? TDMA_SYNC_RUNNING
 						       : TDMA_SYNC_SYNCING;

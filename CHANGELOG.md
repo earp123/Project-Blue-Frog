@@ -12,7 +12,7 @@ For hardware wiring, build/flash instructions, and SDK setup, see
 
 On-device radio-evaluation tooling for the nRF5340 DK + Wio-SX1262 (SX1262),
 plus the first slice of the wireless-intercom firmware (TDMA radio layer).
-_Last updated: 2026-07-05._
+_Last updated: 2026-07-21._
 
 ### Firmware variants
 
@@ -42,34 +42,92 @@ preamble, +22 dBm). Slot width 50 ms for bring-up (one constant,
   `lora_config()` and replaced with the TDMA port's own
   (findings: [`docs/tdma_layering.md`](docs/tdma_layering.md)).
 - **L2** [`src/tdma/`](src/tdma) — single radio thread (sole runtime SPI
-  owner) polling slot-tick + DIO1 semaphores; hardware TIMER2 via the counter
-  API at 1 MHz with an accumulating absolute alarm target; TX staging during
-  RX-slot slack; drop-oldest RX msgq; telemetry counters. Secondary units
-  acquire the master's slot-0 beacon (snap, then proportional step clamped to
-  ±500 µs/frame) and go SYNCING → RUNNING after 3 beacons under 1 ms error.
+  owner) polling slot-tick + DIO1 semaphores; hardware TIMER2 on HFXO
+  (explicit `clock_control_on()` request, see hardware test findings below)
+  via the counter API at 1 MHz with an accumulating absolute alarm target;
+  RX slots run the chip in continuous RX, the slot boundary itself is the
+  window's end; TX staging during RX-slot slack; drop-oldest RX msgq;
+  telemetry counters. Secondary units acquire the master's slot-0 beacon
+  (snap, then proportional step clamped to ±500 µs/frame) and go SYNCING →
+  RUNNING after 3 beacons under 1 ms error.
 - **App** — Kconfig role/slot (`TDMA_ROLE_MASTER`/`TDMA_ROLE_SECONDARY`,
   `TDMA_SLOT_ID`), telemetry print every 5 s over UART, and `tdma` shell
   commands (`tx`, `rx [s]`, `start`, `stop`, `stats`) for M0 manual bring-up.
 - Build: `west build -b nrf5340dk/nrf5340/cpuapp -p always -- -DCONFIG_APP_TDMA_TEST=y`
   (+ `-DCONFIG_TDMA_ROLE_SECONDARY=y` for the second unit).
 
-### Hardware test findings (2026-07-21)
+### Hardware test findings (2026-07-21) — link closed full-duplex
 
-- **Master runs clean**: `tx_done` increments at 5/s (one per 200 ms frame),
-  `busy_to=0`, `stale=0`, zero CRC/header errors. The RX timeout:TX ratio is
-  2:1 instead of the theoretical 3:1 — a benign timing edge where one slot's
-  timeout DIO1 is consumed by the next slot-entry IRQ clear; no packet loss.
-- **Secondary beacon reception bug (fixed)**: after the initial phase snap the
-  secondary's slot boundary was aligned to the master's SetTx instant, but the
-  ~400–700 µs of processing latency (thread wake + ClearIRQ SPI + SetRx SPI +
-  FS→RX transition) meant the receiver wasn't listening until 6–10 of 12
-  preamble symbols had already passed. Detection was marginal, giving only
-  ~1 beacon/min; the sync loop couldn't converge and phase error grew at
-  ~150 µs/frame. Fix: added `TDMA_RX_GUARD_LEAD_US = 1500` to the sync
-  computation so the secondary fires its boundary 1.5 ms before the master's
-  TX start, guaranteeing full-preamble reception.
-- **Status**: master TX verified; secondary sync convergence still under test
-  after the guard-lead fix.
+Supersedes the same-day entry below on two points (the "benign" timeout ratio
+and the guard-lead fix): both were wrong, found by adding per-slot bench
+diagnostics (next section) and reading the chip's actual state instead of
+inferring it from DIO1 activity alone.
+
+- **Root cause 1 — dead alternating RX windows.** The per-slot `SetRx`
+  timeout left every other RX window non-functional: armed and confirmed in
+  RX mode by `GetStatus`, but never raising a DIO1 edge. `arm/slot` vs
+  `evt/slot` tallies made this unambiguous (e.g. `[119 119 119 118]` armed
+  against `[21 118 1 117]` events), and the raw DIO1 edge counter matched the
+  accounted events exactly, ruling out lost interrupts. This — not a "benign
+  2:1 ratio" — was the earlier master-side timeout:TX anomaly and the root
+  cause of the secondary's marginal (~1/min) beacon reception. Fix: RX slots
+  now run the chip in continuous RX (`SX126X_RX_CONTINUOUS`); the slot
+  boundary is already the window's end, so the chip's own timeout was
+  redundant. `slot_timeouts` no longer fires for RX slots as a result.
+- **Root cause 2 — HFCLK on the uncalibrated internal RC oscillator.**
+  Nothing in this build requests HFXO (no BLE/802.15.4 stack does it
+  implicitly), so TIMER2 — the slot clock — free-ran on the internal RC.
+  Measured ~1000 ppm relative drift between the two units from consecutive
+  beacon timestamps, ~25–40x a crystal's tolerance and enough on its own to
+  keep the sync loop from converging. Fix: `tdma_port_init()` now issues an
+  explicit `clock_control_on(clk, CLOCK_CONTROL_NRF_SUBSYS_HF)`, held for the
+  engine's life. Dropped the secondary's steady-state `phase_err` from
+  ~400 µs to single-digit µs and `ppm` to ~0.
+- **Root cause 3 — the previous guard-lead fix was itself a bug.**
+  `TDMA_RX_GUARD_LEAD_US` biased the *entire* frame 1.5 ms early, not just
+  the secondary's RX window, so its own TX slot fired 1.5 ms before the
+  master was listening and the master decoded none of it. This was masked
+  until root cause 2 was fixed — the old, sloppy ~400 µs phase error
+  happened to leave just enough of the 1040 µs preamble inside the master's
+  window to pass by luck. Removed outright: continuous RX (root cause 1)
+  makes a guard lead unnecessary.
+- **Result**: full duplex on hardware, ~5 packets/s each direction, zero
+  CRC/header errors either side, sync lock in ~6 s, `phase_err` settling to
+  single-digit µs, RSSI −36…−40 dBm / SNR +7…+9 dB throughout.
+- **Open items before tightening to 20 ms slots**: TX-start latency differs
+  between master and secondary by ~1.1 ms and `TDMA_TX_START_LATENCY_US` only
+  reflects the master's value (feeds the sync math, currently absorbed by the
+  50 ms guard band); `tdma_port_add_phase_adj()` overwrites rather than
+  accumulates a pending correction (latent — only one correction is issued
+  per beacon today).
+
+### Bench diagnostics (2026-07-21)
+
+Added to `tdma_get_telemetry()` / printed by `tdma stats` and the 5 s
+periodic print, to tell apart "receiver never armed" from "armed but heard
+nothing" from "heard energy but never completed a packet" — the ambiguity
+that made root causes 1–3 above hard to see from the pre-existing counters
+alone:
+
+- `rx_arm` / `arm_by_slot[]` — `SetRx` issuances, per slot.
+- `dio1_edges` — raw DIO1 ISR edge count, to catch events dropped between the
+  pin and the drain (none were; see root cause 1).
+- `drain_empty` — drains that read `IrqStatus == 0`.
+- `preamble_det` / `header_valid` — `PreambleDetected` / `HeaderValid`
+  latched in `IrqStatus` but deliberately *not* routed to DIO1
+  (`SetDioIrqParams` takes the enable mask and the pin routing separately),
+  so a live receiver hearing energy can be told apart from a dead one even
+  when no full packet ever completes.
+- `rx_mode_bad` / `last_chip_mode` — post-`SetRx` `GetStatus` mode check.
+- `last_ppm` — relative clock-rate estimate between local and master slot
+  clocks from two consecutive beacon timestamps and the frame counter delta
+  in the header, free of the ±frame/2 wrap that makes `last_phase_err_us`
+  ambiguous over long gaps between beacons.
+- `evt_by_slot[]` / `last_evt_dt_us` — per-slot event counts and
+  boundary-to-event delay, isolating which slot a symptom is in.
+
+Bring-up scaffolding, not part of the M2 design — strip once the link is
+proven at the 20 ms production slot width.
 
 ### SDK setup fixes (Windows / NCS v3.2.0)
 

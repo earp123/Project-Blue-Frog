@@ -46,6 +46,7 @@ void tdma_port_schedule_stop(void);
 uint32_t tdma_port_now(void);		 /* current slot-clock time, us */
 uint32_t tdma_port_dio1_timestamp(void); /* slot-clock time of last DIO1 edge */
 uint32_t tdma_port_last_boundary(void);	 /* slot-clock time of last slot tick */
+uint32_t tdma_port_dio1_edges(void);	 /* diagnostic: raw DIO1 edge count */
 
 /*
  * One-shot phase adjustment (us, signed) folded into the next alarm target
