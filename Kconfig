@@ -36,6 +36,20 @@ config APP_TDMA_TEST
 	  via TDMA_ROLE_* / TDMA_SLOT_ID for the two-radio bench test. UART
 	  console, logging and the shell stay enabled.
 
+config APP_TDMA_CONSOLE
+	bool "Intercom TDMA field console (TFT + touch + Wio-SX1262)"
+	select COUNTER
+	help
+	  Field-test container UI for the TDMA radio layer: soak tests of the
+	  continuous TX/RX frame exchange with live link telemetry on the TFT.
+	  Same spi2 / port-1 radio as the TDMA test variant plus the spi4 /
+	  port-0 display/touch front end (apply
+	  boards/nrf5340dk_nrf5340_cpuapp_display.overlay and
+	  boards/nrf5340dk_nrf5340_cpuapp_tdma_console.conf). Role is picked at
+	  boot from the HOME menu (one image for every unit); all PHY parameters
+	  are compile-time constants in tdma.h except TX power. Display-only:
+	  no UART, logging, or shell.
+
 endchoice
 
 if APP_TDMA_TEST
@@ -77,6 +91,6 @@ endif # APP_TDMA_TEST
 # (sourced via Kconfig.zephyr below), so its conditional default wins.
 config LORA_SX126X_NATIVE_SLEEP
 	bool
-	default n if APP_TDMA_TEST
+	default n if APP_TDMA_TEST || APP_TDMA_CONSOLE
 
 source "Kconfig.zephyr"

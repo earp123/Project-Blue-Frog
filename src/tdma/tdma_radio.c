@@ -16,6 +16,7 @@
 #include <zephyr/devicetree.h>
 #include <zephyr/drivers/lora.h>
 #include <zephyr/drivers/gpio.h>
+#include <zephyr/sys/atomic.h>
 #include <errno.h>
 #include <string.h>
 
@@ -67,6 +68,31 @@ static const struct gpio_dt_spec rf_sw =
 
 BUILD_ASSERT(TDMA_PREAMBLE_SYMS >= 12,
 	     "SX1262 requires >= 12 preamble symbols at SF5/SF6");
+
+/*
+ * Runtime TX power: any thread latches a request; the radio thread applies
+ * it immediately before the next SetTx (chip in FS/STDBY, the datasheet-
+ * legal window for SetTxParams). Sentinel = no change pending.
+ */
+#define TX_POWER_NONE INT32_MIN
+static atomic_t pending_tx_power = ATOMIC_INIT(TX_POWER_NONE);
+
+void tdma_radio_request_tx_power(int8_t dbm)
+{
+	atomic_set(&pending_tx_power, (atomic_val_t)dbm);
+}
+
+/* Radio thread only. Takes the pending request, if any, and applies it. */
+static int apply_pending_tx_power(void)
+{
+	atomic_val_t p = atomic_set(&pending_tx_power, TX_POWER_NONE);
+
+	if (p == TX_POWER_NONE) {
+		return 0;
+	}
+
+	return sx126x_cmd_set_tx_params((int8_t)p, SX126X_RAMP_40_US);
+}
 
 /*
  * Detach the native driver's DIO1 callback. After this the driver is
@@ -248,6 +274,11 @@ int tdma_radio_slot_tx_enter(void)
 		return ret;
 	}
 
+	ret = apply_pending_tx_power();
+	if (ret < 0) {
+		return ret;
+	}
+
 	return sx126x_cmd_set_tx(SLOT_TIMEOUT_TICKS);
 }
 
@@ -380,6 +411,11 @@ int tdma_radio_manual_tx(uint8_t slot_id, uint16_t frame_ctr,
 	k_sem_reset(&tdma_dio1_sem);
 
 	ret = sx126x_cmd_clear_irq_status(SX126X_IRQ_ALL);
+	if (ret < 0) {
+		return ret;
+	}
+
+	ret = apply_pending_tx_power();
 	if (ret < 0) {
 		return ret;
 	}

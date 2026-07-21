@@ -22,6 +22,11 @@ int tdma_radio_init(const struct tdma_config *cfg);
 int tdma_radio_slot_tx_enter(void);
 int tdma_radio_slot_rx_enter(void);
 
+/* Latch a TX power change (any thread); applied on the radio thread right
+ * before the next SetTx. Range is validated by tdma_set_tx_power().
+ */
+void tdma_radio_request_tx_power(int8_t dbm);
+
 /* Diagnostic: read the chip's current mode nibble (SX126X_MODE_*). */
 int tdma_radio_probe_mode(uint8_t *mode);
 

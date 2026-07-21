@@ -494,6 +494,19 @@ int tdma_tx_submit(const uint8_t payload[TDMA_PAYLOAD_LEN])
 	return tdma_buf_stage(payload);
 }
 
+int tdma_set_tx_power(int8_t dbm)
+{
+	if (dbm < TDMA_TX_POWER_MIN_DBM || dbm > TDMA_TX_POWER_MAX_DBM) {
+		return -EINVAL;
+	}
+
+	/* Deliberately no initialized check: pre-init requests are latched
+	 * and picked up by the first transmit.
+	 */
+	tdma_radio_request_tx_power(dbm);
+	return 0;
+}
+
 int tdma_manual_tx(const uint8_t payload[TDMA_PAYLOAD_LEN])
 {
 	struct tdma_manual_req req = {

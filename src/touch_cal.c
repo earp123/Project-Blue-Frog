@@ -9,7 +9,7 @@
 
 #include <zephyr/kernel.h>
 
-#if defined(CONFIG_APP_CONSOLE)
+#if defined(CONFIG_APP_CONSOLE) || defined(CONFIG_APP_TDMA_CONSOLE)
 
 #include "touch_cal.h"
 
@@ -99,4 +99,4 @@ bool touch_cal_solve(const int *raw_x, const int *raw_y,
 	return true;
 }
 
-#endif /* CONFIG_APP_CONSOLE */
+#endif /* CONFIG_APP_CONSOLE || CONFIG_APP_TDMA_CONSOLE */

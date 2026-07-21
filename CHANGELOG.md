@@ -16,16 +16,20 @@ _Last updated: 2026-07-21._
 
 ### Firmware variants
 
-Three variants build from one source tree; exactly one `main()` is linked,
+Four variants build from one source tree; exactly one `main()` is linked,
 chosen by the Kconfig choice in [`Kconfig`](Kconfig):
 
 - **LoRa send** (`CONFIG_APP_LORA_SEND`, default) — [`src/main.c`](src/main.c).
   Minimal one-shot transmit plus a raw-SPI radio status dump. Radio-only bring-up.
 - **Telemetry console** (`CONFIG_APP_CONSOLE`) — [`src/console.c`](src/console.c)
-  and its modules. The full touch + DK-button device app described below.
+  and its modules. The full touch + DK-button device app described below
+  (native-driver radio path; kept as-is).
 - **Intercom TDMA test** (`CONFIG_APP_TDMA_TEST`) —
   [`src/tdma_app/main.c`](src/tdma_app/main.c) +
   [`src/tdma/`](src/tdma). See "Intercom TDMA radio layer" below.
+- **Intercom TDMA field console** (`CONFIG_APP_TDMA_CONSOLE`) —
+  [`src/tdma_console/main.c`](src/tdma_console/main.c) + the same
+  [`src/tdma/`](src/tdma) engine. See "TDMA field console" below.
 
 ### Intercom TDMA radio layer (M0-M2 implementation)
 
@@ -55,6 +59,48 @@ preamble, +22 dBm). Slot width 50 ms for bring-up (one constant,
   commands (`tx`, `rx [s]`, `start`, `stop`, `stats`) for M0 manual bring-up.
 - Build: `west build -b nrf5340dk/nrf5340/cpuapp -p always -- -DCONFIG_APP_TDMA_TEST=y`
   (+ `-DCONFIG_TDMA_ROLE_SECONDARY=y` for the second unit).
+
+### TDMA field console (2026-07-21)
+
+First "test container": the bench diagnostics sequence above, packaged as an
+on-device TFT applet for field soak testing —
+[`src/tdma_console/main.c`](src/tdma_console/main.c). Reuses the telemetry
+console's display toolkit ([`src/ui_widgets.c`](src/ui_widgets.c)) and touch
+calibration ([`src/touch_cal.c`](src/touch_cal.c)); the radio path is
+exclusively the TDMA L1/L2 shim (the old console's native-driver modules —
+`radio_cfg`/`payload`/`pingpong` — are not used). Display-only: no UART,
+logging, or shell.
+
+- **One image for both units**: role (MASTER/SECONDARY) is picked on the HOME
+  screen and locks at the first soak start (`tdma_init()` is once-only);
+  reboot to change. Defaults to SECONDARY — two unconfigured units just
+  listen instead of both beaconing into slot 0.
+- **SOAK TEST** — pick 5 min / 30 min / 2 h / continuous; the engine runs the
+  full TX/RX frame exchange while the screen shows live per-soak deltas:
+  tx/stale, rx/crc/bad-hdr, phase error and ppm, RSSI/SNR, BUSY faults, and
+  elapsed/limit. STOP (or the elapsed limit) parks the engine and freezes the
+  stats until BACK; BACK alone never kills a running soak.
+- **Frame-continuity loss stats**: the peer's `frame_ctr` advances once per
+  frame, so per-slot counter gaps are missed frames and repeats are stale
+  retransmits (`miss` / `dup` on the soak screen) — content-level loss the
+  CRC counters cannot see, and the number that matters when evaluating
+  tighter slot widths in the field.
+- **TX power adjustable** (−9…+22 dBm, keypad entry): the one PHY parameter
+  exposed in the UI. New engine API `tdma_set_tx_power()` latches the value
+  from any thread; the radio thread issues `SetTxParams` right before the
+  next `SetTx` (chip in FS — the datasheet-legal window), so it applies from
+  the next packet without disturbing slot timing. Everything else stays a
+  compile-time constant in [`src/tdma/tdma.h`](src/tdma/tdma.h).
+- **TOUCH CAL** — the console's 5-point calibrate/verify flow, unchanged.
+- The soak screen is laid out for a future slot-width selector (the engine
+  still pins `TDMA_SLOT_DURATION_US` at compile time; making it runtime is
+  the planned next engine change for width evaluation).
+- Build:
+  `west build -b nrf5340dk/nrf5340/cpuapp -p always -d build-tdma-console --`
+  `-DEXTRA_DTC_OVERLAY_FILE=boards/nrf5340dk_nrf5340_cpuapp_display.overlay`
+  `-DEXTRA_CONF_FILE=boards/nrf5340dk_nrf5340_cpuapp_tdma_console.conf`
+  (same display/touch wiring as the telemetry console; the SD stack is left
+  out of this build).
 
 ### Hardware test findings (2026-07-21) — link closed full-duplex
 

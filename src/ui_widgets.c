@@ -4,7 +4,7 @@
 
 #include <zephyr/kernel.h>
 
-#if defined(CONFIG_APP_CONSOLE)
+#if defined(CONFIG_APP_CONSOLE) || defined(CONFIG_APP_TDMA_CONSOLE)
 
 #include "ui_widgets.h"
 
@@ -557,4 +557,4 @@ const char *keypad_text(void)
 	return kp_buf;
 }
 
-#endif /* CONFIG_APP_CONSOLE */
+#endif /* CONFIG_APP_CONSOLE || CONFIG_APP_TDMA_CONSOLE */

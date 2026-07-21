@@ -21,7 +21,14 @@
 
 /* PHY: SF5 / 500 kHz / CR 4-5, locked by the time-on-air math. */
 #define TDMA_RF_FREQ_HZ		915000000UL	/* 902-928 MHz band, single channel */
+
+/* TX power: boot default and the runtime-adjustable range (the one PHY
+ * parameter that is not locked — see tdma_set_tx_power()). SX1262 SetTxParams
+ * accepts -9..+22 dBm (DS 13.4.4).
+ */
 #define TDMA_TX_POWER_DBM	22		/* SX1262 high-power PA max */
+#define TDMA_TX_POWER_MIN_DBM	(-9)
+#define TDMA_TX_POWER_MAX_DBM	22
 
 /*
  * SX1262 datasheet minimum preamble for SF5/SF6 is 12 symbols
@@ -161,6 +168,15 @@ int tdma_start(void);
 void tdma_stop(void);
 int tdma_tx_submit(const uint8_t payload[TDMA_PAYLOAD_LEN]); /* -EAGAIN if pending */
 const struct tdma_telemetry *tdma_get_telemetry(void);
+
+/*
+ * Request a TX power change (-9..+22 dBm; -EINVAL outside that). Callable
+ * from any thread at any time, including before tdma_init(): the value is
+ * latched and SetTxParams is issued on the radio thread immediately before
+ * the next transmit (chip in FS, the datasheet-legal window), so it takes
+ * effect on that packet.
+ */
+int tdma_set_tx_power(int8_t dbm);
 
 /* Received-packet stream, drop-oldest on overflow. */
 extern struct k_msgq tdma_rx_msgq;
