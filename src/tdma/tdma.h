@@ -74,6 +74,16 @@
  */
 #define TDMA_TX_START_LATENCY_US 100
 
+/*
+ * RX guard lead: how far ahead of the master's TX start the secondary must
+ * fire its slot boundary to guarantee SetRx completes before the preamble
+ * arrives. Budget: thread wake (~100 us) + ClearIRQ SPI (~120 us) + SetRx
+ * SPI (~130 us) + FS-to-RX transition (~70 us) + preamble detection margin
+ * (4 symbols = 256 us) + safety (~324 us) = 1000 us. Padded to 1500 us so
+ * clock jitter and occasional ISR latency don't erode the margin.
+ */
+#define TDMA_RX_GUARD_LEAD_US	1500
+
 /* Secondary phase alignment (deliberately naive, see tdma_core_sync_feed). */
 #define TDMA_SYNC_STEP_CLAMP_US	500	/* max correction per frame */
 #define TDMA_SYNC_LOCK_ERR_US	1000	/* |error| below this counts toward lock */

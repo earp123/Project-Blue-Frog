@@ -104,7 +104,8 @@ void tdma_core_sync_feed(uint32_t rx_timestamp_us, uint16_t frame_ctr)
 
 	local_slot0 = tdma_port_last_boundary() -
 		      (uint32_t)eng.cur_slot * eng.cfg.slot_duration_us;
-	master_slot0 = rx_timestamp_us - TDMA_TOA_US - TDMA_TX_START_LATENCY_US;
+	master_slot0 = rx_timestamp_us - TDMA_TOA_US - TDMA_TX_START_LATENCY_US
+		       - TDMA_RX_GUARD_LEAD_US;
 
 	/* Wrap-safe difference, reduced to [-frame/2, frame/2). */
 	err = (int32_t)(master_slot0 - local_slot0);
