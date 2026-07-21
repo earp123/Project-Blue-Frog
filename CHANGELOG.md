@@ -53,6 +53,24 @@ preamble, +22 dBm). Slot width 50 ms for bring-up (one constant,
 - Build: `west build -b nrf5340dk/nrf5340/cpuapp -p always -- -DCONFIG_APP_TDMA_TEST=y`
   (+ `-DCONFIG_TDMA_ROLE_SECONDARY=y` for the second unit).
 
+### Hardware test findings (2026-07-21)
+
+- **Master runs clean**: `tx_done` increments at 5/s (one per 200 ms frame),
+  `busy_to=0`, `stale=0`, zero CRC/header errors. The RX timeout:TX ratio is
+  2:1 instead of the theoretical 3:1 — a benign timing edge where one slot's
+  timeout DIO1 is consumed by the next slot-entry IRQ clear; no packet loss.
+- **Secondary beacon reception bug (fixed)**: after the initial phase snap the
+  secondary's slot boundary was aligned to the master's SetTx instant, but the
+  ~400–700 µs of processing latency (thread wake + ClearIRQ SPI + SetRx SPI +
+  FS→RX transition) meant the receiver wasn't listening until 6–10 of 12
+  preamble symbols had already passed. Detection was marginal, giving only
+  ~1 beacon/min; the sync loop couldn't converge and phase error grew at
+  ~150 µs/frame. Fix: added `TDMA_RX_GUARD_LEAD_US = 1500` to the sync
+  computation so the secondary fires its boundary 1.5 ms before the master's
+  TX start, guaranteeing full-preamble reception.
+- **Status**: master TX verified; secondary sync convergence still under test
+  after the guard-lead fix.
+
 ### SDK setup fixes (Windows / NCS v3.2.0)
 
 - New [`patches/0003-lora-h-native-driver-api-compat.patch`](patches/README.md):
