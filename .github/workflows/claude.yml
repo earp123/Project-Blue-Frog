@@ -14,12 +14,14 @@ on:
 
 jobs:
   claude:
-    # Only run when @claude is actually mentioned (avoids waking on every event).
+    # Only run when @claude is mentioned AND the author is the repo owner.
+    # `author_association == 'OWNER'` is set by GitHub for events created by the
+    # user/account that owns the repository.
     if: |
-      (github.event_name == 'issues' && (contains(github.event.issue.body, '@claude') || contains(github.event.issue.title, '@claude'))) ||
-      (github.event_name == 'issue_comment' && contains(github.event.comment.body, '@claude')) ||
-      (github.event_name == 'pull_request_review_comment' && contains(github.event.comment.body, '@claude')) ||
-      (github.event_name == 'pull_request_review' && contains(github.event.review.body, '@claude'))
+      (github.event_name == 'issues' && github.event.issue.author_association == 'OWNER' && (contains(github.event.issue.body, '@claude') || contains(github.event.issue.title, '@claude'))) ||
+      (github.event_name == 'issue_comment' && github.event.comment.author_association == 'OWNER' && contains(github.event.comment.body, '@claude')) ||
+      (github.event_name == 'pull_request_review_comment' && github.event.comment.author_association == 'OWNER' && contains(github.event.comment.body, '@claude')) ||
+      (github.event_name == 'pull_request_review' && github.event.review.author_association == 'OWNER' && contains(github.event.review.body, '@claude'))
 
     # Windows self-hosted x64 runner. Adjust labels to match your runner's
     # registered labels if they differ.
