@@ -2,9 +2,6 @@
 	"folders": [
 		{
 			"path": "."
-		},
-		{
-			"path": "../../../../ncs/v3.2.1/zephyr/drivers/lora/native"
 		}
 	],
 	"settings": {

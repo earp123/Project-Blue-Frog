@@ -10,7 +10,7 @@ target_sources(app PRIVATE ${app_sources})
 
 # Intercom TDMA variants: the L1/L2 radio layer is shared; each variant
 # links its own main() (UART-shell bench test vs. TFT field console).
-if(CONFIG_APP_TDMA_TEST OR CONFIG_APP_TDMA_CONSOLE)
+if(CONFIG_APP_TDMA_TEST OR CONFIG_APP_TDMA_CONSOLE OR CONFIG_APP_SOAK)
   FILE(GLOB tdma_sources src/tdma/*.c)
   target_sources(app PRIVATE ${tdma_sources})
   target_include_directories(app PRIVATE src/tdma)
@@ -31,4 +31,14 @@ if(CONFIG_APP_TDMA_CONSOLE)
   target_sources(app PRIVATE ${tdma_console_sources})
   # For the shared display toolkit / touch cal headers (src/ui_widgets.h ...).
   target_include_directories(app PRIVATE src)
+endif()
+
+# Soak harness: the shared runner (soak_run/soak_role) plus every per-test
+# main() under src/soak. Each test's body is guarded by its CONFIG_SOAK_TEST_*
+# symbol, so only the selected one links a main(). GLOB_RECURSE reaches the
+# per-test subdirectories.
+if(CONFIG_APP_SOAK)
+  FILE(GLOB_RECURSE soak_sources src/soak/*.c)
+  target_sources(app PRIVATE ${soak_sources})
+  target_include_directories(app PRIVATE src/soak)
 endif()

@@ -1,0 +1,24 @@
+/*
+ * Bench role-select jumper for the soak firmware (CONFIG_APP_SOAK, src/soak).
+ *
+ * Apply on top of the board's default radio overlay
+ * (nrf5340dk_nrf5340_cpuapp.overlay, auto-picked at the repo root) via:
+ *   -DEXTRA_DTC_OVERLAY_FILE=src/soak/role_select.overlay
+ *
+ * P1.10 is free: the Wio-SX1262 shield only uses P1.00-P1.09, and P1.10 is
+ * broken out on the DK's port-1 GPIO header, clear of the Arduino shield, so
+ * it is easy to reach with a jumper (3V3/GND are on the same header block).
+ *
+ * Internal pull-down + active-high:
+ *   jumper P1.10 -> 3V3 => reads 1 => MASTER   (TX slot 0, timing beacon)
+ *   open (no jumper)    => reads 0 => SECONDARY (TX slot 1, phase-locks)
+ * One image flashes to both units; the jumper alone decides the role.
+ */
+
+#include <dt-bindings/gpio/gpio.h>
+
+/ {
+	zephyr,user {
+		role-select-gpios = <&gpio1 10 (GPIO_ACTIVE_HIGH | GPIO_PULL_DOWN)>;
+	};
+};

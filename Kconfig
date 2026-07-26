@@ -36,6 +36,18 @@ config APP_TDMA_TEST
 	  via TDMA_ROLE_* / TDMA_SLOT_ID for the two-radio bench test. UART
 	  console, logging and the shell stay enabled.
 
+config APP_SOAK
+	bool "Intercom TDMA soak test (Wio-SX1262 shield, UART CSV)"
+	select COUNTER
+	help
+	  Bench-top radio soak harness (src/soak). Reuses the same TDMA L1/L2
+	  radio layer as the TDMA test variant on the spi2 / port-1 Wio-SX1262
+	  shield, but takes its master/secondary role from a jumper (P1.10 ->
+	  3V3 = master) instead of a compile-time Kconfig choice, so one image
+	  flashes to both units. Runs a fixed-length continuous exchange and
+	  streams machine-ingestible "SOAK,..." CSV lines over UART for
+	  automated logging. Pick the individual test below. No display/shell.
+
 config APP_TDMA_CONSOLE
 	bool "Intercom TDMA field console (TFT + touch + Wio-SX1262)"
 	select COUNTER
@@ -83,6 +95,23 @@ config TDMA_AUTOSTART
 
 endif # APP_TDMA_TEST
 
+if APP_SOAK
+
+choice
+	prompt "Soak test"
+	default SOAK_TEST_BASELINE
+	help
+	  Which individual soak test in src/soak is linked. Each test owns its
+	  own main() (guarded by its CONFIG_SOAK_TEST_* symbol) and drives the
+	  shared runner in src/soak/soak_run.c with its own parameters.
+
+config SOAK_TEST_BASELINE
+	bool "s01 baseline: both radios -9 dBm, 5 min (src/soak/s01_baseline_m9dbm_5min)"
+
+endchoice
+
+endif # APP_SOAK
+
 # The TDMA engine keeps the radio awake for its whole life (PLL kept locked
 # in FS between slots; the TCXO warm-up cost is paid once at init). The
 # driver's sleep-when-idle behaviour would also detach/re-attach its DIO1
@@ -91,6 +120,6 @@ endif # APP_TDMA_TEST
 # (sourced via Kconfig.zephyr below), so its conditional default wins.
 config LORA_SX126X_NATIVE_SLEEP
 	bool
-	default n if APP_TDMA_TEST || APP_TDMA_CONSOLE
+	default n if APP_TDMA_TEST || APP_TDMA_CONSOLE || APP_SOAK
 
 source "Kconfig.zephyr"
