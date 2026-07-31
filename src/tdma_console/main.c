@@ -14,10 +14,16 @@
  * parameter is a compile-time constant in tdma.h except TX power, which is
  * adjustable from HOME (applied by the engine before the next transmit).
  *
- * Screens: HOME -> {SOAK PICK -> SOAK, TX PWR keypad, TOUCH CAL}. The soak
- * screen shows per-soak deltas of the engine telemetry plus frame-counter
+ * Boot opens on TOUCH CAL and stays there until a fit is accepted: the
+ * transform is RAM-only (touch_cal), so it is a required power-on step and
+ * lasts the session — reboot re-runs it.
+ *
+ * Screens: HOME -> {SOAK PICK -> SOAK, TX PWR keypad, TOUCH CAL, SD TEST}. The
+ * soak screen shows per-soak deltas of the engine telemetry plus frame-counter
  * continuity stats (received / missed / duplicate peer frames), which catch
- * losses the CRC counters cannot.
+ * losses the CRC counters cannot. SD TEST validates the microSD log path
+ * (src/tdma_console/sd_log.c) by writing a mock soak log and reporting
+ * throughput and worst-case write/sync stalls.
  *
  * SPDX-License-Identifier: Apache-2.0
  */
@@ -33,6 +39,7 @@
 #include "ui_widgets.h"
 #include "touch_cal.h"
 #include "tdma.h"
+#include "sd_test.h"
 
 /* ---- Layout (mirrors console.c) ---- */
 #define BORDER_PX 3
@@ -62,8 +69,18 @@ enum screen_id {
 	SCR_SOAK,
 	SCR_KEYPAD,	/* TX power entry */
 	SCR_CALIBRATE,
+	SCR_SDTEST,	/* mock SD log write validation */
 };
 static enum screen_id screen = SCR_HOME;
+
+/*
+ * Touch calibration is a mandatory power-on step: the transform lives in RAM
+ * only (touch_cal), so every boot starts from the identity mapping and taps
+ * would land nowhere useful until it is run. main() forces the CAL screen
+ * before anything else and this flag blocks cancelling out of it; it clears
+ * once a fit is accepted. Session-only by design — no flash persistence.
+ */
+static bool cal_required = true;
 
 static int home_sel;
 static int pick_sel;
@@ -262,6 +279,7 @@ enum home_row {
 	HR_ROLE,
 	HR_POWER,
 	HR_CAL,
+	HR_SDTEST,
 	HR_COUNT,
 };
 
@@ -306,6 +324,9 @@ static void draw_home(void)
 			break;
 		case HR_CAL:
 			ui_button(x, y, w, h, "TOUCH CAL", home_sel == i);
+			break;
+		case HR_SDTEST:
+			ui_button(x, y, w, h, "SD TEST", home_sel == i);
 			break;
 		default:
 			break;
@@ -659,10 +680,13 @@ static void draw_calibrate(void)
 
 		cal_target(cal_idx, &tx, &ty);
 		draw_cross(tx, ty, COLOR_WHITE);
-		ui_text(MARG, MARG, "TOUCH CAL", COLOR_WHITE, COLOR_BLACK);
+		ui_text(MARG, MARG, cal_required ? "TOUCH CAL (required)" : "TOUCH CAL",
+			COLOR_WHITE, COLOR_BLACK);
 		snprintf(l, sizeof(l), "Tap the + (%d/%d)", cal_idx + 1, CAL_POINTS);
 		ui_text(MARG, MARG + bh + 2, l, COLOR_WHITE, COLOR_BLACK);
-		ui_text(MARG, h - MARG - bh, "B4 = cancel", COLOR_WHITE, COLOR_BLACK);
+		ui_text(MARG, h - MARG - bh,
+			cal_required ? "required at power-on" : "B4 = cancel",
+			COLOR_WHITE, COLOR_BLACK);
 	} else if (cal_phase == CAL_VERIFY) {
 		int tx, ty;
 
@@ -680,9 +704,103 @@ static void draw_calibrate(void)
 		ui_text(MARG, MARG, "TOUCH CAL", COLOR_WHITE, COLOR_BLACK);
 		ui_text(MARG, MARG + bh + 2, "Failed - tap evenly",
 			COLOR_WHITE, COLOR_BLACK);
-		ui_text(MARG, h - MARG - bh, "B3=retry B4=cancel",
+		ui_text(MARG, h - MARG - bh,
+			cal_required ? "B3 = retry" : "B3=retry B4=cancel",
 			COLOR_WHITE, COLOR_BLACK);
 	}
+}
+
+/* ---------------------------------------------------------------------------
+ * SD TEST (mock soak-log write validation)
+ * ------------------------------------------------------------------------- */
+static int64_t sdtest_last_draw_ms;
+
+static void sdtest_btn_rect(int *x, int *y, int *w, int *h)
+{
+	*h = ui_body_h() + 10;
+	*x = MARG;
+	*w = ui_disp_w() - 2 * MARG;
+	*y = body_bot() - *h;
+}
+
+static void draw_sdtest_dynamic(void)
+{
+	const struct sd_log_stats *s = sd_test_stats();
+	enum sd_test_state st = sd_test_get_state();
+	int bh = ui_body_h();
+	int sp = bh + 2;
+	int y = body_top();
+	int w = ui_disp_w();
+	char l[40];
+	int bx, by, bw, bbh;
+
+	sdtest_btn_rect(&bx, &by, &bw, &bbh);
+	ui_fill_rect(BORDER_PX, y, w - 2 * BORDER_PX, by - y, COLOR_BLACK);
+
+	if (st == SD_TEST_ERROR) {
+		snprintf(l, sizeof(l), "FAILED: %s", sd_test_error());
+		ui_text(MARG, y, l, COLOR_WHITE, COLOR_BLACK);
+		y += sp;
+		ui_text(MARG, y, "check card is inserted", COLOR_WHITE, COLOR_BLACK);
+		ui_button(bx, by, bw, bbh, "BACK", true);
+		return;
+	}
+
+	snprintf(l, sizeof(l), "%s  %u%%",
+		 st == SD_TEST_RUNNING ? "WRITING" :
+		 st == SD_TEST_DONE ? "DONE" : "IDLE",
+		 sd_test_progress_pct());
+	ui_text(MARG, y, l, COLOR_WHITE, COLOR_BLACK);
+	y += sp;
+
+	ui_text(MARG, y, sd_test_path(), COLOR_WHITE, COLOR_BLACK);
+	y += sp;
+
+	snprintf(l, sizeof(l), "rows %u/%u", sd_test_rows(),
+		 (uint32_t)SD_TEST_ROWS);
+	ui_text(MARG, y, l, COLOR_WHITE, COLOR_BLACK);
+	y += sp;
+
+	snprintf(l, sizeof(l), "%u KB in %u.%us", s->bytes / 1024u,
+		 s->elapsed_ms / 1000u, (s->elapsed_ms % 1000u) / 100u);
+	ui_text(MARG, y, l, COLOR_WHITE, COLOR_BLACK);
+	y += sp;
+
+	snprintf(l, sizeof(l), "%u KB/s", sd_test_bytes_per_sec() / 1024u);
+	ui_text(MARG, y, l, COLOR_WHITE, COLOR_BLACK);
+	y += sp;
+
+	/* The efficiency claim: writes should be ~bytes/512, not ~rows. */
+	snprintf(l, sizeof(l), "wr %u  sync %u", s->writes, s->syncs);
+	ui_text(MARG, y, l, COLOR_WHITE, COLOR_BLACK);
+	y += sp;
+
+	/* Worst-case stall — what a soak's timing budget actually has to absorb. */
+	snprintf(l, sizeof(l), "max wr %ums sy %ums",
+		 s->max_write_us / 1000u, s->max_sync_us / 1000u);
+	ui_text(MARG, y, l, COLOR_WHITE, COLOR_BLACK);
+	y += sp;
+
+	if (s->dropped) {
+		snprintf(l, sizeof(l), "** DROPPED %u **", s->dropped);
+		ui_text(MARG, y, l, COLOR_WHITE, COLOR_BLACK);
+	}
+
+	ui_button(bx, by, bw, bbh,
+		  st == SD_TEST_RUNNING ? "ABORT" : "BACK", true);
+}
+
+static void draw_sdtest(void)
+{
+	draw_header("SD LOG TEST");
+	draw_sdtest_dynamic();
+}
+
+static void sdtest_open(void)
+{
+	screen = SCR_SDTEST;
+	sdtest_last_draw_ms = 0;
+	sd_test_start();
 }
 
 /* ---------------------------------------------------------------------------
@@ -711,6 +829,9 @@ static void home_activate(int i)
 		break;
 	case HR_CAL:
 		cal_start();
+		break;
+	case HR_SDTEST:
+		sdtest_open();
 		break;
 	default:
 		break;
@@ -784,9 +905,14 @@ static void handle_nav(enum nav_action a)
 		break;
 
 	case SCR_CALIBRATE:
+		/* While cal_required (the power-on pass), every exit path that
+		 * would leave the transform at identity is refused: the only
+		 * way out is accepting a fit.
+		 */
 		if (cal_phase == CAL_VERIFY) {
 			if (a == NAV_OK) {
-				screen = SCR_HOME; /* accept the fit */
+				cal_required = false; /* accept the fit */
+				screen = SCR_HOME;
 			} else if (a == NAV_BACK) {
 				cal_phase = CAL_COLLECT; /* redo from point 1 */
 				cal_idx = 0;
@@ -796,11 +922,21 @@ static void handle_nav(enum nav_action a)
 			if (a == NAV_OK) {
 				cal_phase = CAL_COLLECT;
 				cal_idx = 0;
-			} else if (a == NAV_BACK) {
+			} else if (a == NAV_BACK && !cal_required) {
 				screen = SCR_HOME;
 			}
-		} else if (a == NAV_BACK) {
+		} else if (a == NAV_BACK && !cal_required) {
 			screen = SCR_HOME; /* cancel; keep the prior transform */
+		}
+		break;
+
+	case SCR_SDTEST:
+		if (a == NAV_OK || a == NAV_BACK) {
+			if (sd_test_get_state() == SD_TEST_RUNNING) {
+				sd_test_abort();
+			} else {
+				screen = SCR_HOME;
+			}
 		}
 		break;
 
@@ -857,6 +993,20 @@ static void handle_tap(int x, int y, int rx, int ry)
 		keypad_finish(keypad_handle_touch(x, y));
 		break;
 
+	case SCR_SDTEST: {
+		int bx, by, bw, bh;
+
+		sdtest_btn_rect(&bx, &by, &bw, &bh);
+		if (ui_hit(x, y, bx, by, bw, bh)) {
+			if (sd_test_get_state() == SD_TEST_RUNNING) {
+				sd_test_abort();
+			} else {
+				screen = SCR_HOME;
+			}
+		}
+		break;
+	}
+
 	case SCR_CALIBRATE:
 		if (cal_phase == CAL_COLLECT) {
 			cal_rx[cal_idx] = rx; /* capture the RAW sample */
@@ -902,6 +1052,9 @@ static void draw_current(void)
 	case SCR_CALIBRATE:
 		draw_calibrate();
 		break;
+	case SCR_SDTEST:
+		draw_sdtest();
+		break;
 	default:
 		break;
 	}
@@ -926,6 +1079,13 @@ int main(void)
 	if (!ui_ok) {
 		k_sleep(K_FOREVER);
 	}
+
+	/* Mandatory power-on calibration: the transform is RAM-only, so the
+	 * console opens on the CAL screen and cal_required keeps it there until
+	 * a fit is accepted. Collection uses the RAW samples, so it works
+	 * correctly from the identity mapping.
+	 */
+	cal_start();
 
 	ui_clear(COLOR_BLACK);
 	draw_border();
@@ -954,6 +1114,13 @@ int main(void)
 		/* Feed the engine / collect stats every pass, soak or not. */
 		soak_poll();
 
+		/* Write one chunk of the mock log per pass while the SD test
+		 * is up, so the card work interleaves with real UI redraws.
+		 */
+		if (screen == SCR_SDTEST) {
+			sd_test_step();
+		}
+
 		bool dirty = atomic_cas(&screen_dirty, 1, 0);
 		bool changed = (screen != last);
 
@@ -973,6 +1140,16 @@ int main(void)
 			if (now - soak_last_draw_ms >= 250) {
 				soak_last_draw_ms = now;
 				draw_soak_dynamic();
+			}
+		}
+
+		/* Same for the SD test progress/throughput readout. */
+		if (screen == SCR_SDTEST) {
+			int64_t now = k_uptime_get();
+
+			if (now - sdtest_last_draw_ms >= 250) {
+				sdtest_last_draw_ms = now;
+				draw_sdtest_dynamic();
 			}
 		}
 
