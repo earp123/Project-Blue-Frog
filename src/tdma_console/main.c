@@ -18,12 +18,16 @@
  * transform is RAM-only (touch_cal), so it is a required power-on step and
  * lasts the session — reboot re-runs it.
  *
- * Screens: HOME -> {SOAK PICK -> SOAK, TX PWR keypad, TOUCH CAL, SD TEST}. The
- * soak screen shows per-soak deltas of the engine telemetry plus frame-counter
+ * Screens: HOME -> {SOAK PICK -> SOAK, TX PWR keypad, TOUCH CAL}. The soak
+ * screen shows per-soak deltas of the engine telemetry plus frame-counter
  * continuity stats (received / missed / duplicate peer frames), which catch
- * losses the CRC counters cannot. SD TEST validates the microSD log path
- * (src/tdma_console/sd_log.c) by writing a mock soak log and reporting
- * throughput and worst-case write/sync stalls.
+ * losses the CRC counters cannot.
+ *
+ * Every soak also writes a binary record log to the microSD card (soak_log ->
+ * sd_log): one 64-byte record per received packet — payload included — plus
+ * TX and periodic counter records. Logging is best-effort and never aborts a
+ * run; the soak screen carries the file name, record count and drop count.
+ * Decode with tools/decode_soak_log.py.
  *
  * SPDX-License-Identifier: Apache-2.0
  */
@@ -39,7 +43,7 @@
 #include "ui_widgets.h"
 #include "touch_cal.h"
 #include "tdma.h"
-#include "sd_test.h"
+#include "soak_log.h"
 
 /* ---- Layout (mirrors console.c) ---- */
 #define BORDER_PX 3
@@ -69,7 +73,6 @@ enum screen_id {
 	SCR_SOAK,
 	SCR_KEYPAD,	/* TX power entry */
 	SCR_CALIBRATE,
-	SCR_SDTEST,	/* mock SD log write validation */
 };
 static enum screen_id screen = SCR_HOME;
 
@@ -128,6 +131,12 @@ static struct {
 } soak;
 
 static int64_t soak_last_draw_ms;
+
+/* Counter-snapshot cadence: one STATS record per second is negligible against
+ * the packet stream but bounds how stale the counters are if a run is cut off.
+ */
+#define SOAK_STATS_PERIOD_MS 1000
+static int64_t soak_last_stats_ms;
 
 /* Set by any thread to ask main to redraw. */
 static atomic_t screen_dirty = ATOMIC_INIT(0);
@@ -279,7 +288,6 @@ enum home_row {
 	HR_ROLE,
 	HR_POWER,
 	HR_CAL,
-	HR_SDTEST,
 	HR_COUNT,
 };
 
@@ -324,9 +332,6 @@ static void draw_home(void)
 			break;
 		case HR_CAL:
 			ui_button(x, y, w, h, "TOUCH CAL", home_sel == i);
-			break;
-		case HR_SDTEST:
-			ui_button(x, y, w, h, "SD TEST", home_sel == i);
 			break;
 		default:
 			break;
@@ -469,6 +474,24 @@ static void draw_soak_dynamic(void)
 		snprintf(l, sizeof(l), "busy 0");
 	}
 	ui_text(MARG, y, l, COLOR_WHITE, COLOR_BLACK);
+	y += sp;
+
+	/* Log line: file, records on disk, and any loss. "drop" non-zero means
+	 * the card could not keep up and the run's record is incomplete.
+	 */
+	struct soak_log_status ls;
+
+	soak_log_get_status(&ls);
+	if (ls.err) {
+		snprintf(l, sizeof(l), "LOG FAIL %d (no card?)", ls.err);
+	} else if (ls.path[0]) {
+		snprintf(l, sizeof(l), "%s %uk drop %u",
+			 ls.path + 4, /* skip the "/SD:" mount prefix */
+			 ls.written / 1000u, ls.dropped);
+	} else {
+		snprintf(l, sizeof(l), "log off");
+	}
+	ui_text(MARG, y, l, COLOR_WHITE, COLOR_BLACK);
 
 	ui_button(bx, by, bw, bbh, soak.done ? "BACK" : "STOP", true);
 }
@@ -518,9 +541,16 @@ static void soak_start(int64_t duration_ms)
 	memset(&soak, 0, sizeof(soak));
 	soak.snap = *tdma_get_telemetry();
 
+	/* Logging is best-effort: a missing or failed card must never stop a
+	 * radio test. The failure is surfaced on the soak screen instead.
+	 */
+	(void)soak_log_start(role, (role == TDMA_ROLE_MASTER) ? 0 : 1,
+			     (int8_t)tx_power_dbm);
+
 	rc = tdma_start();
 	if (rc < 0) {
 		snprintf(home_msg, sizeof(home_msg), "start err %d", rc);
+		soak_log_stop();
 		screen = SCR_HOME;
 		return;
 	}
@@ -536,6 +566,11 @@ static void soak_start(int64_t duration_ms)
 static void soak_finish(void)
 {
 	tdma_stop();
+
+	/* One last counter snapshot, then drain and close the log. */
+	soak_log_stats(tdma_get_telemetry(), soak.rx_ok, soak.missed, soak.dup);
+	soak_log_stop();
+
 	soak.active = false;
 	soak.done = true;
 	soak_last_draw_ms = k_uptime_get();
@@ -553,6 +588,11 @@ static void soak_poll(void)
 		if (!soak.active) {
 			continue; /* discard outside a soak */
 		}
+
+		/* Log every received packet verbatim — payload included — before
+		 * any derived accounting, so the file holds the raw evidence.
+		 */
+		soak_log_rx(&msg, tdma_get_telemetry()->sync_state);
 
 		if (soak.have_ctr[s]) {
 			uint16_t delta = msg.frame_ctr - soak.last_ctr[s];
@@ -584,7 +624,18 @@ static void soak_poll(void)
 
 	fill_pattern(payload, soak.seq);
 	if (tdma_tx_submit(payload) == 0) {
+		soak_log_tx(payload, (role == TDMA_ROLE_MASTER) ? 0 : 1,
+			    tdma_get_telemetry()->sync_state);
 		soak.seq++;
+	}
+
+	/* Periodic engine-counter snapshot: cheap, and it lets the decoder
+	 * reconstruct rates without re-deriving them from the packet stream.
+	 */
+	if (k_uptime_get() - soak_last_stats_ms >= SOAK_STATS_PERIOD_MS) {
+		soak_last_stats_ms = k_uptime_get();
+		soak_log_stats(tdma_get_telemetry(), soak.rx_ok, soak.missed,
+			       soak.dup);
 	}
 
 	if (soak.duration_ms &&
@@ -711,99 +762,6 @@ static void draw_calibrate(void)
 }
 
 /* ---------------------------------------------------------------------------
- * SD TEST (mock soak-log write validation)
- * ------------------------------------------------------------------------- */
-static int64_t sdtest_last_draw_ms;
-
-static void sdtest_btn_rect(int *x, int *y, int *w, int *h)
-{
-	*h = ui_body_h() + 10;
-	*x = MARG;
-	*w = ui_disp_w() - 2 * MARG;
-	*y = body_bot() - *h;
-}
-
-static void draw_sdtest_dynamic(void)
-{
-	const struct sd_log_stats *s = sd_test_stats();
-	enum sd_test_state st = sd_test_get_state();
-	int bh = ui_body_h();
-	int sp = bh + 2;
-	int y = body_top();
-	int w = ui_disp_w();
-	char l[40];
-	int bx, by, bw, bbh;
-
-	sdtest_btn_rect(&bx, &by, &bw, &bbh);
-	ui_fill_rect(BORDER_PX, y, w - 2 * BORDER_PX, by - y, COLOR_BLACK);
-
-	if (st == SD_TEST_ERROR) {
-		snprintf(l, sizeof(l), "FAILED: %s", sd_test_error());
-		ui_text(MARG, y, l, COLOR_WHITE, COLOR_BLACK);
-		y += sp;
-		ui_text(MARG, y, "check card is inserted", COLOR_WHITE, COLOR_BLACK);
-		ui_button(bx, by, bw, bbh, "BACK", true);
-		return;
-	}
-
-	snprintf(l, sizeof(l), "%s  %u%%",
-		 st == SD_TEST_RUNNING ? "WRITING" :
-		 st == SD_TEST_DONE ? "DONE" : "IDLE",
-		 sd_test_progress_pct());
-	ui_text(MARG, y, l, COLOR_WHITE, COLOR_BLACK);
-	y += sp;
-
-	ui_text(MARG, y, sd_test_path(), COLOR_WHITE, COLOR_BLACK);
-	y += sp;
-
-	snprintf(l, sizeof(l), "rows %u/%u", sd_test_rows(),
-		 (uint32_t)SD_TEST_ROWS);
-	ui_text(MARG, y, l, COLOR_WHITE, COLOR_BLACK);
-	y += sp;
-
-	snprintf(l, sizeof(l), "%u KB in %u.%us", s->bytes / 1024u,
-		 s->elapsed_ms / 1000u, (s->elapsed_ms % 1000u) / 100u);
-	ui_text(MARG, y, l, COLOR_WHITE, COLOR_BLACK);
-	y += sp;
-
-	snprintf(l, sizeof(l), "%u KB/s", sd_test_bytes_per_sec() / 1024u);
-	ui_text(MARG, y, l, COLOR_WHITE, COLOR_BLACK);
-	y += sp;
-
-	/* The efficiency claim: writes should be ~bytes/512, not ~rows. */
-	snprintf(l, sizeof(l), "wr %u  sync %u", s->writes, s->syncs);
-	ui_text(MARG, y, l, COLOR_WHITE, COLOR_BLACK);
-	y += sp;
-
-	/* Worst-case stall — what a soak's timing budget actually has to absorb. */
-	snprintf(l, sizeof(l), "max wr %ums sy %ums",
-		 s->max_write_us / 1000u, s->max_sync_us / 1000u);
-	ui_text(MARG, y, l, COLOR_WHITE, COLOR_BLACK);
-	y += sp;
-
-	if (s->dropped) {
-		snprintf(l, sizeof(l), "** DROPPED %u **", s->dropped);
-		ui_text(MARG, y, l, COLOR_WHITE, COLOR_BLACK);
-	}
-
-	ui_button(bx, by, bw, bbh,
-		  st == SD_TEST_RUNNING ? "ABORT" : "BACK", true);
-}
-
-static void draw_sdtest(void)
-{
-	draw_header("SD LOG TEST");
-	draw_sdtest_dynamic();
-}
-
-static void sdtest_open(void)
-{
-	screen = SCR_SDTEST;
-	sdtest_last_draw_ms = 0;
-	sd_test_start();
-}
-
-/* ---------------------------------------------------------------------------
  * Event routing
  * ------------------------------------------------------------------------- */
 static void home_activate(int i)
@@ -829,9 +787,6 @@ static void home_activate(int i)
 		break;
 	case HR_CAL:
 		cal_start();
-		break;
-	case HR_SDTEST:
-		sdtest_open();
 		break;
 	default:
 		break;
@@ -930,16 +885,6 @@ static void handle_nav(enum nav_action a)
 		}
 		break;
 
-	case SCR_SDTEST:
-		if (a == NAV_OK || a == NAV_BACK) {
-			if (sd_test_get_state() == SD_TEST_RUNNING) {
-				sd_test_abort();
-			} else {
-				screen = SCR_HOME;
-			}
-		}
-		break;
-
 	default:
 		break;
 	}
@@ -993,20 +938,6 @@ static void handle_tap(int x, int y, int rx, int ry)
 		keypad_finish(keypad_handle_touch(x, y));
 		break;
 
-	case SCR_SDTEST: {
-		int bx, by, bw, bh;
-
-		sdtest_btn_rect(&bx, &by, &bw, &bh);
-		if (ui_hit(x, y, bx, by, bw, bh)) {
-			if (sd_test_get_state() == SD_TEST_RUNNING) {
-				sd_test_abort();
-			} else {
-				screen = SCR_HOME;
-			}
-		}
-		break;
-	}
-
 	case SCR_CALIBRATE:
 		if (cal_phase == CAL_COLLECT) {
 			cal_rx[cal_idx] = rx; /* capture the RAW sample */
@@ -1051,9 +982,6 @@ static void draw_current(void)
 		break;
 	case SCR_CALIBRATE:
 		draw_calibrate();
-		break;
-	case SCR_SDTEST:
-		draw_sdtest();
 		break;
 	default:
 		break;
@@ -1114,13 +1042,6 @@ int main(void)
 		/* Feed the engine / collect stats every pass, soak or not. */
 		soak_poll();
 
-		/* Write one chunk of the mock log per pass while the SD test
-		 * is up, so the card work interleaves with real UI redraws.
-		 */
-		if (screen == SCR_SDTEST) {
-			sd_test_step();
-		}
-
 		bool dirty = atomic_cas(&screen_dirty, 1, 0);
 		bool changed = (screen != last);
 
@@ -1140,16 +1061,6 @@ int main(void)
 			if (now - soak_last_draw_ms >= 250) {
 				soak_last_draw_ms = now;
 				draw_soak_dynamic();
-			}
-		}
-
-		/* Same for the SD test progress/throughput readout. */
-		if (screen == SCR_SDTEST) {
-			int64_t now = k_uptime_get();
-
-			if (now - sdtest_last_draw_ms >= 250) {
-				sdtest_last_draw_ms = now;
-				draw_sdtest_dynamic();
 			}
 		}
 

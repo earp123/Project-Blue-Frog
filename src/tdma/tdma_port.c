@@ -34,7 +34,7 @@ K_SEM_DEFINE(tdma_slot_tick_sem, 0, K_SEM_MAX_LIMIT);
 K_SEM_DEFINE(tdma_dio1_sem, 0, K_SEM_MAX_LIMIT);
 K_SEM_DEFINE(tdma_spi_bus_sem, 0, 1);
 
-K_MSGQ_DEFINE(tdma_rx_msgq, sizeof(struct tdma_rx_msg), 8, 4);
+K_MSGQ_DEFINE(tdma_rx_msgq, sizeof(struct tdma_rx_msg), TDMA_RX_MSGQ_DEPTH, 4);
 
 static atomic_t dio1_timestamp;
 static atomic_t last_boundary;

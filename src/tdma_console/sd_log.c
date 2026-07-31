@@ -12,6 +12,7 @@
 
 #include <zephyr/fs/fs.h>
 #include <zephyr/storage/disk_access.h>
+#include <zephyr/sys/util.h>
 #include <ff.h>
 #include <errno.h>
 #include <stdarg.h>
@@ -245,6 +246,48 @@ int sd_log_printf(const char *fmt, ...)
 		}
 	}
 
+	return 0;
+}
+
+int sd_log_write(const void *data, size_t len)
+{
+	const uint8_t *p = data;
+
+	if (!file_open) {
+		return -ENOENT;
+	}
+
+	while (len > 0) {
+		size_t room = SD_LOG_BUF_SIZE - buf_len;
+		size_t n;
+
+		if (room == 0) {
+			int rc = flush_blocks(false);
+
+			if (rc < 0) {
+				stats.dropped++;
+				return rc;
+			}
+			room = SD_LOG_BUF_SIZE - buf_len;
+		}
+
+		n = MIN(room, len);
+		memcpy(buf + buf_len, p, n);
+		buf_len += n;
+		p += n;
+		len -= n;
+		stats.bytes += (uint32_t)n;
+
+		if (buf_len >= SD_LOG_BLOCK) {
+			int rc = flush_blocks(false);
+
+			if (rc < 0) {
+				return rc;
+			}
+		}
+	}
+
+	stats.rows++;
 	return 0;
 }
 

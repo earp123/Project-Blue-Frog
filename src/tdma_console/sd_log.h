@@ -72,6 +72,14 @@ int sd_log_open(const char *prefix, char *path_out, size_t path_len);
  */
 int sd_log_printf(const char *fmt, ...);
 
+/*
+ * Append raw bytes, with the same sector-aligned buffering as sd_log_printf.
+ * This is the path the soak logger uses: fixed-size binary records cost a
+ * memcpy instead of a format, and a 64 B record divides 512 exactly, so eight
+ * records fill a sector with nothing wasted and no partial-sector rewrite.
+ */
+int sd_log_write(const void *data, size_t len);
+
 /* Push the partial block and fs_sync(). Call at natural checkpoints. */
 int sd_log_flush(void);
 

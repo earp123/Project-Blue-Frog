@@ -178,7 +178,18 @@ const struct tdma_telemetry *tdma_get_telemetry(void);
  */
 int tdma_set_tx_power(int8_t dbm);
 
-/* Received-packet stream, drop-oldest on overflow. */
+/*
+ * Received-packet stream, drop-oldest on overflow.
+ *
+ * Depth is sized for the consumer's worst stall, not the average rate. At the
+ * 20 ms production slot (80 ms frame) a 4-unit frame delivers 3 packets, and
+ * the console's consumer is the main loop, which can be held off by an SD
+ * flush. 32 entries covers roughly a second of that worst case; at depth 8 a
+ * couple of hundred milliseconds of consumer stall silently drops packets
+ * before any logger can see them.
+ */
+#define TDMA_RX_MSGQ_DEPTH	32
+
 extern struct k_msgq tdma_rx_msgq;
 
 /*
