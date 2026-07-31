@@ -29,9 +29,27 @@ K_MSGQ_DEFINE(rec_msgq, SOAK_REC_SIZE, SOAK_LOG_RING_DEPTH, 4);
 
 static K_SEM_DEFINE(writer_idle, 0, 1);
 
+/*
+ * Commands from the UI thread to the writer. Mount / open / close are all
+ * card I/O and can block for as long as the card feels like — an unreadable
+ * or unexpected volume is exactly the case that used to hang the UI — so the
+ * UI thread only ever raises a flag here and the writer does the work.
+ */
+#define CMD_OPEN	BIT(0)
+#define CMD_CLOSE	BIT(1)
+static atomic_t cmd_flags;
+
+/* Open parameters; written by the UI thread before it raises CMD_OPEN. */
+static struct {
+	enum tdma_role role;
+	uint8_t slot_id;
+	int8_t tx_power_dbm;
+} open_req;
+
 static atomic_t log_active;	/* producers gate on this */
 static bool file_open;		/* writer-thread side */
 static char log_path[32];
+static const char *err_stage = "";	/* which step failed, for the UI */
 
 static uint32_t seq_next;
 static atomic_t stat_queued;
@@ -62,10 +80,9 @@ int soak_log_start(enum tdma_role role, uint8_t slot_id, int8_t tx_power_dbm)
 {
 	struct soak_rec r = { 0 };
 	struct soak_meta m = { 0 };
-	int rc;
 
-	if (atomic_get(&log_active)) {
-		return -EBUSY;
+	if (atomic_get(&log_active) || file_open) {
+		return -EBUSY;	/* previous run still closing */
 	}
 
 	k_msgq_purge(&rec_msgq);
@@ -78,21 +95,12 @@ int soak_log_start(enum tdma_role role, uint8_t slot_id, int8_t tx_power_dbm)
 	atomic_set(&stat_written, 0);
 	atomic_set(&stat_dropped, 0);
 	atomic_set(&stat_err, 0);
+	atomic_set(&cmd_flags, 0);
 	log_path[0] = '\0';
 
-	rc = sd_log_mount();
-	if (rc < 0) {
-		atomic_set(&stat_err, rc);
-		return rc;
-	}
-
-	rc = sd_log_open("SOAK", log_path, sizeof(log_path));
-	if (rc < 0) {
-		atomic_set(&stat_err, rc);
-		return rc;
-	}
-
-	file_open = true;
+	open_req.role = role;
+	open_req.slot_id = slot_id;
+	open_req.tx_power_dbm = tx_power_dbm;
 
 	/* Record 0 describes the run, so a decoded file is self-contained. */
 	m.magic = SOAK_LOG_MAGIC;
@@ -116,8 +124,16 @@ int soak_log_start(enum tdma_role role, uint8_t slot_id, int8_t tx_power_dbm)
 	r.slot_id = slot_id;
 	memcpy(r.payload, &m, sizeof(m));
 
+	/*
+	 * Open on the writer, not here. Producers are enabled immediately and
+	 * META goes in as record 0, so it lands first once the file exists; if
+	 * the open fails the writer disables logging and purges the ring. This
+	 * call does no card I/O at all and always returns at once — the UI can
+	 * never be held up by the card, whatever state it is in.
+	 */
 	atomic_set(&log_active, 1);
 	submit(&r);
+	atomic_or(&cmd_flags, CMD_OPEN);
 
 	return 0;
 }
@@ -190,24 +206,23 @@ void soak_log_stats(const struct tdma_telemetry *t, uint32_t rx_ok,
 
 int soak_log_stop(void)
 {
-	int rc;
-
-	if (!atomic_get(&log_active)) {
-		return 0;
+	if (!atomic_get(&log_active) && !file_open) {
+		return 0;	/* never opened, or the open failed */
 	}
 
-	/* Stop accepting new records, then let the writer drain what is left. */
+	/* Stop accepting new records, then let the writer drain and close. */
 	atomic_set(&log_active, 0);
+	atomic_or(&cmd_flags, CMD_CLOSE);
 
-	/* The writer signals once it finds the ring empty with logging off. */
+	/*
+	 * Wait for the close so a following run cannot race this file. The
+	 * drain is at most the ring (8 KB, ~16 sector writes) and normally
+	 * finishes in milliseconds; the timeout only elapses on a card that is
+	 * already failing, and bounds that case instead of hanging.
+	 */
 	(void)k_sem_take(&writer_idle, K_SECONDS(5));
 
-	rc = sd_log_close();
-	file_open = false;
-	if (rc < 0) {
-		atomic_set(&stat_err, rc);
-	}
-	return rc;
+	return (int)atomic_get(&stat_err);
 }
 
 void soak_log_get_status(struct soak_log_status *out)
@@ -220,7 +235,47 @@ void soak_log_get_status(struct soak_log_status *out)
 	out->dropped = (uint32_t)atomic_get(&stat_dropped);
 	out->bytes = s->bytes;
 	out->err = (int)atomic_get(&stat_err);
+	out->err_stage = err_stage;
 	out->path = log_path;
+}
+
+/* Card I/O, writer thread only. Blocking here costs nothing but log latency. */
+static void do_open(void)
+{
+	int rc = sd_log_mount();
+
+	if (rc == 0) {
+		rc = sd_log_open("SOAK", log_path, sizeof(log_path));
+	}
+
+	if (rc < 0) {
+		/* Unusable card: report it, stop the producers, and drop what
+		 * was queued rather than churn a full ring for the whole run.
+		 */
+		err_stage = sd_log_mount_stage();
+		if (err_stage[0] == '\0') {
+			err_stage = "open";	/* mount was fine, open was not */
+		}
+		atomic_set(&stat_err, rc);
+		atomic_set(&log_active, 0);
+		k_msgq_purge(&rec_msgq);
+		file_open = false;
+		return;
+	}
+
+	file_open = true;
+}
+
+static void do_close(void)
+{
+	if (file_open) {
+		int rc = sd_log_close();
+
+		if (rc < 0) {
+			atomic_set(&stat_err, rc);
+		}
+		file_open = false;
+	}
 }
 
 static void writer_thread_fn(void *p1, void *p2, void *p3)
@@ -232,10 +287,14 @@ static void writer_thread_fn(void *p1, void *p2, void *p3)
 	ARG_UNUSED(p3);
 
 	for (;;) {
-		/* Wake on a record, or periodically so the drain-complete
-		 * handshake in soak_log_stop() cannot be missed.
+		if (atomic_and(&cmd_flags, ~CMD_OPEN) & CMD_OPEN) {
+			do_open();
+		}
+
+		/* Wake on a record, or periodically so the close handshake
+		 * cannot be missed.
 		 */
-		if (k_msgq_get(&rec_msgq, &r, K_MSEC(100)) == 0) {
+		if (k_msgq_get(&rec_msgq, &r, K_MSEC(50)) == 0) {
 			if (file_open) {
 				int rc = sd_log_write(&r, sizeof(r));
 
@@ -248,10 +307,11 @@ static void writer_thread_fn(void *p1, void *p2, void *p3)
 			continue;
 		}
 
-		/* Ring empty. If logging has been stopped, the file is fully
-		 * drained: hand the close back to soak_log_stop().
+		/* Ring empty: everything queued is on the card, so a pending
+		 * close can now complete.
 		 */
-		if (!atomic_get(&log_active) && file_open) {
+		if (atomic_and(&cmd_flags, ~CMD_CLOSE) & CMD_CLOSE) {
+			do_close();
 			k_sem_give(&writer_idle);
 		}
 	}

@@ -110,7 +110,23 @@
 		compatible = "zephyr,sdhc-spi-slot";
 		reg = <2>;
 		status = "okay";
-		spi-max-frequency = <24000000>;
+		/*
+		 * 4 MHz, not the bus maximum. The soak logger's worst case is
+		 * ~3.2 KB/s (50 records/s of 64 B at the 20 ms slot), so 4 MHz
+		 * still leaves two orders of magnitude of headroom, and the
+		 * slower edges are far kinder to a card hanging off jumper
+		 * wires on a bus shared with the display. Card init runs at
+		 * 400 kHz regardless; this is the post-init transfer clock.
+		 */
+		spi-max-frequency = <4000000>;
+		/*
+		 * The binding's 1 ms default is not enough for a large SDXC
+		 * card to come up: init then fails intermittently, reporting
+		 * ENOTSUP or ETIMEDOUT depending on how the garbled response
+		 * is read. The SD spec allows a card up to 250 ms after power
+		 * before it must answer.
+		 */
+		power-delay-ms = <250>;
 
 		mmc {
 			compatible = "zephyr,sdmmc-disk";

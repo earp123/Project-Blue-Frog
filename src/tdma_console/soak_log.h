@@ -115,6 +115,7 @@ struct soak_log_status {
 	uint32_t dropped;	/* ring-full drops (producer side) */
 	uint32_t bytes;
 	int err;		/* last writer error, 0 if healthy */
+	const char *err_stage;	/* "disk" / "mount" / "open" when err is set */
 	const char *path;
 };
 

@@ -14,11 +14,14 @@
  * parameter is a compile-time constant in tdma.h except TX power, which is
  * adjustable from HOME (applied by the engine before the next transmit).
  *
- * Boot opens on TOUCH CAL and stays there until a fit is accepted: the
- * transform is RAM-only (touch_cal), so it is a required power-on step and
- * lasts the session — reboot re-runs it.
+ * Power-on sequence, both steps mandatory and session-only: TOUCH CAL (the
+ * transform is RAM-only in touch_cal, so every boot re-runs it) then SELECT
+ * ROLE. Calibration comes first so the role can be chosen by touch. HOME is
+ * unreachable until both are done, so no soak can run uncalibrated or on an
+ * unset role. Neither is reachable from HOME afterwards — reboot to redo
+ * either; the selected role is shown in the HOME header.
  *
- * Screens: HOME -> {SOAK PICK -> SOAK, TX PWR keypad, TOUCH CAL}. The soak
+ * Screens: HOME -> {SOAK PICK -> SOAK, TX PWR keypad}. The soak
  * screen shows per-soak deltas of the engine telemetry plus frame-counter
  * continuity stats (received / missed / duplicate peer frames), which catch
  * losses the CRC counters cannot.
@@ -73,6 +76,7 @@ enum screen_id {
 	SCR_SOAK,
 	SCR_KEYPAD,	/* TX power entry */
 	SCR_CALIBRATE,
+	SCR_ROLE_PICK,	/* power-on role selection */
 };
 static enum screen_id screen = SCR_HOME;
 
@@ -84,6 +88,16 @@ static enum screen_id screen = SCR_HOME;
  * once a fit is accepted. Session-only by design — no flash persistence.
  */
 static bool cal_required = true;
+
+/*
+ * Role selection is the second half of the power-on sequence, run once
+ * calibration is accepted: with a working transform the choice can be made by
+ * touch. Like the calibration pass there is no way out but choosing — HOME is
+ * unreachable until this clears, so no soak can start on an unset role. The
+ * HOME row still re-toggles the role afterwards, up until the engine locks it.
+ */
+static bool role_required = true;
+static int role_sel;
 
 static int home_sel;
 static int pick_sel;
@@ -283,11 +297,15 @@ static void fmt_dur(char *out, size_t n, int64_t ms)
 /* ---------------------------------------------------------------------------
  * HOME
  * ------------------------------------------------------------------------- */
+/*
+ * HOME is deliberately minimal. Touch calibration and role selection are
+ * power-on steps only (see the sequence at the top of this file) — reboot to
+ * redo either. TX power stays because it is the one PHY parameter meant to be
+ * swept from the bench, and is where further run parameters will land.
+ */
 enum home_row {
 	HR_SOAK = 0,
-	HR_ROLE,
 	HR_POWER,
-	HR_CAL,
 	HR_COUNT,
 };
 
@@ -307,8 +325,14 @@ static void home_row_rect(int i, int *x, int *y, int *w, int *h)
 static void draw_home(void)
 {
 	char val[16];
+	char hdr[28];
 
-	draw_header("TDMA FIELD TEST");
+	/* Role moved out of the menu, so carry it in the header: with two
+	 * identical units on the bench it is the one thing you cannot infer by
+	 * looking at them.
+	 */
+	snprintf(hdr, sizeof(hdr), "FIELD TEST: %s", role_str());
+	draw_header(hdr);
 
 	for (int i = 0; i < HR_COUNT; i++) {
 		int x, y, w, h;
@@ -319,19 +343,10 @@ static void draw_home(void)
 		case HR_SOAK:
 			ui_button(x, y, w, h, "SOAK TEST", home_sel == i);
 			break;
-		case HR_ROLE:
-			/* Greyed once locked: reboot to change. */
-			ui_value_row(x, y, w, h, "Role", role_str(),
-				     !engine_inited, home_sel == i,
-				     engine_inited);
-			break;
 		case HR_POWER:
 			snprintf(val, sizeof(val), "%+d dBm", tx_power_dbm);
 			ui_value_row(x, y, w, h, "TX pwr", val, false,
 				     home_sel == i, false);
-			break;
-		case HR_CAL:
-			ui_button(x, y, w, h, "TOUCH CAL", home_sel == i);
 			break;
 		default:
 			break;
@@ -483,11 +498,19 @@ static void draw_soak_dynamic(void)
 
 	soak_log_get_status(&ls);
 	if (ls.err) {
-		snprintf(l, sizeof(l), "LOG FAIL %d (no card?)", ls.err);
+		/* Stage says where: disk = card never came up, mount = volume
+		 * rejected (format), open = volume fine but file creation failed.
+		 */
+		snprintf(l, sizeof(l), "LOG FAIL %s %d", ls.err_stage, ls.err);
 	} else if (ls.path[0]) {
 		snprintf(l, sizeof(l), "%s %uk drop %u",
 			 ls.path + 4, /* skip the "/SD:" mount prefix */
 			 ls.written / 1000u, ls.dropped);
+	} else if (ls.active) {
+		/* Mount/open runs on the writer thread, so the file name only
+		 * appears once the card has answered.
+		 */
+		snprintf(l, sizeof(l), "log opening...");
 	} else {
 		snprintf(l, sizeof(l), "log off");
 	}
@@ -678,6 +701,11 @@ static void keypad_finish(enum keypad_result r)
  * ------------------------------------------------------------------------- */
 #define CAL_POINTS 5
 
+/* Crosshair arm length. Shared with the text layout below so the instruction
+ * line can be placed clear of the targets instead of guessing.
+ */
+#define CAL_CROSS_R 12
+
 enum cal_phase { CAL_COLLECT = 0, CAL_VERIFY, CAL_FAIL };
 static int cal_phase;
 static int cal_idx;
@@ -701,10 +729,43 @@ static void cal_target(int i, int *tx, int *ty)
 
 static void draw_cross(int x, int y, uint16_t color)
 {
-	int s = 12;
+	int s = CAL_CROSS_R;
 
 	ui_fill_rect(x - s, y - 1, 2 * s + 1, 3, color);
 	ui_fill_rect(x - 1, y - s, 3, 2 * s + 1, color);
+}
+
+/*
+ * Instruction-line baseline: just under the two top crosshairs. At the old
+ * MARG+body+2 the line ran straight through the first (top-left) target,
+ * which is the one target you are looking at when you read it. Derived from
+ * the same 15 % inset cal_target() uses, so it stays correct if the panel
+ * geometry changes.
+ */
+static int cal_instr_y(void)
+{
+	return ui_disp_h() * 15 / 100 + CAL_CROSS_R + 4;
+}
+
+/*
+ * Verify-phase touch buttons. These exist only in CAL_VERIFY, and that is
+ * deliberate: it is the one phase where a freshly solved transform is already
+ * active, so a tap lands where it looks. In CAL_COLLECT the transform is still
+ * the identity (taps are raw ADC counts) and in CAL_FAIL the solve was
+ * rejected, so an on-screen button would be unpressable in both — the DK
+ * buttons stay the only control there, and remain a working fallback here.
+ */
+enum cal_btn { CAL_BTN_REDO = 0, CAL_BTN_ACCEPT, CAL_BTN_COUNT };
+
+static void cal_btn_rect(int i, int *x, int *y, int *w, int *h)
+{
+	int gap = 8;
+	int total = ui_disp_w() - 2 * MARG;
+
+	*h = ui_body_h() + 10;
+	*w = (total - gap) / CAL_BTN_COUNT;
+	*x = MARG + i * (*w + gap);
+	*y = ui_disp_h() - MARG - *h;
 }
 
 static void cal_start(void)
@@ -734,12 +795,12 @@ static void draw_calibrate(void)
 		ui_text(MARG, MARG, cal_required ? "TOUCH CAL (required)" : "TOUCH CAL",
 			COLOR_WHITE, COLOR_BLACK);
 		snprintf(l, sizeof(l), "Tap the + (%d/%d)", cal_idx + 1, CAL_POINTS);
-		ui_text(MARG, MARG + bh + 2, l, COLOR_WHITE, COLOR_BLACK);
+		ui_text(MARG, cal_instr_y(), l, COLOR_WHITE, COLOR_BLACK);
 		ui_text(MARG, h - MARG - bh,
 			cal_required ? "required at power-on" : "B4 = cancel",
 			COLOR_WHITE, COLOR_BLACK);
 	} else if (cal_phase == CAL_VERIFY) {
-		int tx, ty;
+		int tx, ty, bx, by, bw, bbh;
 
 		cal_target(4, &tx, &ty);
 		draw_cross(tx, ty, COLOR_WHITE);
@@ -747,10 +808,22 @@ static void draw_calibrate(void)
 			ui_fill_rect(cal_test_x - 3, cal_test_y - 3, 7, 7, COLOR_GREY);
 		}
 		ui_text(MARG, MARG, "TOUCH CAL: verify", COLOR_WHITE, COLOR_BLACK);
-		ui_text(MARG, MARG + bh + 2, "Tap +; box = where it lands",
+		ui_text(MARG, cal_instr_y(), "Tap +; box = where it lands",
 			COLOR_WHITE, COLOR_BLACK);
-		ui_text(MARG, h - MARG - bh, "B3=accept B4=redo",
+
+		cal_btn_rect(CAL_BTN_REDO, &bx, &by, &bw, &bbh);
+		/* Hint sits above the buttons, clear of both them and the
+		 * centre target.
+		 */
+		ui_text(MARG, by - bh - 4, "or B3=accept B4=redo",
 			COLOR_WHITE, COLOR_BLACK);
+		ui_button(bx, by, bw, bbh, "REDO", false);
+
+		cal_btn_rect(CAL_BTN_ACCEPT, &bx, &by, &bw, &bbh);
+		/* ACCEPT highlighted as the primary action; tapping it
+		 * accurately is itself the proof the fit is good.
+		 */
+		ui_button(bx, by, bw, bbh, "ACCEPT", true);
 	} else { /* CAL_FAIL */
 		ui_text(MARG, MARG, "TOUCH CAL", COLOR_WHITE, COLOR_BLACK);
 		ui_text(MARG, MARG + bh + 2, "Failed - tap evenly",
@@ -758,6 +831,76 @@ static void draw_calibrate(void)
 		ui_text(MARG, h - MARG - bh,
 			cal_required ? "B3 = retry" : "B3=retry B4=cancel",
 			COLOR_WHITE, COLOR_BLACK);
+	}
+}
+
+/* ---------------------------------------------------------------------------
+ * ROLE PICK (power-on, immediately after calibration)
+ * ------------------------------------------------------------------------- */
+#define ROLE_BLURB_LINES 2
+
+static void role_btn_rect(int i, int *x, int *y, int *w, int *h)
+{
+	int top = body_top() + ROLE_BLURB_LINES * (ui_body_h() + 2) + 6;
+	int bot = body_bot();
+	int gap = 10;
+	int hh = (bot - top - gap) / 2;
+
+	*x = MARG;
+	*w = ui_disp_w() - 2 * MARG;
+	*h = hh;
+	*y = top + i * (hh + gap);
+}
+
+static void draw_role_pick(void)
+{
+	int y = body_top();
+	int sp = ui_body_h() + 2;
+
+	draw_header("SELECT ROLE");
+
+	ui_text(MARG, y, "One unit MASTER, the", COLOR_WHITE, COLOR_BLACK);
+	y += sp;
+	ui_text(MARG, y, "other SECONDARY.", COLOR_WHITE, COLOR_BLACK);
+
+	for (int i = 0; i < 2; i++) {
+		int bx, by, bw, bh;
+
+		role_btn_rect(i, &bx, &by, &bw, &bh);
+		ui_button(bx, by, bw, bh,
+			  i == 0 ? "MASTER" : "SECONDARY", role_sel == i);
+	}
+
+	draw_footer_summary();
+}
+
+static void role_pick_start(void)
+{
+	/* Start on the current role, which defaults to SECONDARY: pressing OK
+	 * without moving therefore takes the fail-safe option rather than
+	 * making a second master.
+	 */
+	role_sel = (role == TDMA_ROLE_MASTER) ? 0 : 1;
+	screen = SCR_ROLE_PICK;
+}
+
+static void role_activate(int i)
+{
+	role = (i == 0) ? TDMA_ROLE_MASTER : TDMA_ROLE_SECONDARY;
+	role_required = false;
+	screen = SCR_HOME;
+}
+
+/* Calibration accepted: hand off to role selection on the power-on pass,
+ * otherwise straight back to HOME (a re-calibration started from HOME).
+ */
+static void cal_accept(void)
+{
+	cal_required = false;
+	if (role_required) {
+		role_pick_start();
+	} else {
+		screen = SCR_HOME;
 	}
 }
 
@@ -771,22 +914,8 @@ static void home_activate(int i)
 		pick_sel = 0;
 		screen = SCR_SOAK_PICK;
 		break;
-	case HR_ROLE:
-		if (engine_inited) {
-			snprintf(home_msg, sizeof(home_msg),
-				 "role locked - reboot");
-			mark_dirty();
-		} else {
-			role = (role == TDMA_ROLE_MASTER) ? TDMA_ROLE_SECONDARY
-							  : TDMA_ROLE_MASTER;
-			mark_dirty();
-		}
-		break;
 	case HR_POWER:
 		power_keypad_open();
-		break;
-	case HR_CAL:
-		cal_start();
 		break;
 	default:
 		break;
@@ -813,6 +942,17 @@ static void handle_nav(enum nav_action a)
 		} else if (a == NAV_OK) {
 			home_msg[0] = '\0';
 			home_activate(home_sel);
+		}
+		break;
+
+	case SCR_ROLE_PICK:
+		/* No BACK: both options are valid, so there is nothing to
+		 * cancel to — one of them must be chosen.
+		 */
+		if (a == NAV_UP || a == NAV_DOWN) {
+			role_sel = (role_sel + 1) % 2;
+		} else if (a == NAV_OK) {
+			role_activate(role_sel);
 		}
 		break;
 
@@ -866,8 +1006,7 @@ static void handle_nav(enum nav_action a)
 		 */
 		if (cal_phase == CAL_VERIFY) {
 			if (a == NAV_OK) {
-				cal_required = false; /* accept the fit */
-				screen = SCR_HOME;
+				cal_accept();
 			} else if (a == NAV_BACK) {
 				cal_phase = CAL_COLLECT; /* redo from point 1 */
 				cal_idx = 0;
@@ -902,6 +1041,19 @@ static void handle_tap(int x, int y, int rx, int ry)
 				home_sel = i;
 				home_msg[0] = '\0';
 				home_activate(i);
+				return;
+			}
+		}
+		break;
+
+	case SCR_ROLE_PICK:
+		for (int i = 0; i < 2; i++) {
+			int bx, by, bw, bh;
+
+			role_btn_rect(i, &bx, &by, &bw, &bh);
+			if (ui_hit(x, y, bx, by, bw, bh)) {
+				role_sel = i;
+				role_activate(i);
 				return;
 			}
 		}
@@ -955,6 +1107,25 @@ static void handle_tap(int x, int y, int rx, int ry)
 						    : CAL_FAIL;
 			}
 		} else if (cal_phase == CAL_VERIFY) {
+			int bx, by, bw, bbh;
+
+			/* Buttons first: otherwise a tap on one would only be
+			 * recorded as a verify hit.
+			 */
+			cal_btn_rect(CAL_BTN_ACCEPT, &bx, &by, &bw, &bbh);
+			if (ui_hit(x, y, bx, by, bw, bbh)) {
+				cal_accept();
+				return;
+			}
+
+			cal_btn_rect(CAL_BTN_REDO, &bx, &by, &bw, &bbh);
+			if (ui_hit(x, y, bx, by, bw, bbh)) {
+				cal_phase = CAL_COLLECT;
+				cal_idx = 0;
+				cal_test_x = -1;
+				return;
+			}
+
 			cal_test_x = x; /* x,y already mapped by the new fit */
 			cal_test_y = y;
 		}
@@ -982,6 +1153,9 @@ static void draw_current(void)
 		break;
 	case SCR_CALIBRATE:
 		draw_calibrate();
+		break;
+	case SCR_ROLE_PICK:
+		draw_role_pick();
 		break;
 	default:
 		break;

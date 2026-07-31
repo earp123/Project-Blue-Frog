@@ -22,13 +22,28 @@
 #define SD_DISK_NAME	"SD"	/* matches disk-name in the display overlay */
 #define SD_MOUNT_POINT	"/SD:"
 #define SD_MAX_SESSIONS	1000	/* NNN in the 8.3 session filename */
+#define SD_DISK_INIT_TRIES	3
+#define SD_DISK_INIT_RETRY_MS	250
 
 static FATFS fat_fs;
 static struct fs_mount_t sd_mp = {
 	.type = FS_FATFS,
 	.fs_data = &fat_fs,
 	.mnt_point = SD_MOUNT_POINT,
+	/*
+	 * NEVER auto-format. With CONFIG_FS_FATFS_MOUNT_MKFS enabled (its
+	 * default) Zephyr answers a FR_NO_FILESYSTEM mount by running f_mkfs
+	 * with FM_ANY | FM_SFD — which reformats the card and drops its
+	 * partition table. A soak logger must not be able to destroy the
+	 * operator's card because it failed to recognise the volume. The
+	 * Kconfig is also turned off in the board conf; this flag is the
+	 * belt-and-braces that survives a config change.
+	 */
+	.flags = FS_MOUNT_FLAG_NO_FORMAT,
 };
+
+/* Which step of the bring-up failed, for the on-screen error. */
+static const char *mount_stage = "";
 
 static bool mounted;
 static bool file_open;
@@ -56,23 +71,45 @@ int sd_log_mount(void)
 	}
 
 	/*
-	 * Initialise the disk explicitly first. fs_mount() would do it too,
-	 * but going through disk_access lets "no card inserted" surface as
-	 * -ENODEV instead of being folded into a generic mount failure — the
-	 * single most common bench condition.
+	 * Two distinct steps, reported separately: "disk" failing means the
+	 * card never came up (absent, unseated, wiring), "mount" failing means
+	 * the card talks but the volume was rejected (unsupported format).
+	 * Collapsing both into -ENODEV hid exactly the distinction needed to
+	 * tell a missing card from an unreadable filesystem.
 	 */
-	rc = disk_access_init(SD_DISK_NAME);
+	/*
+	 * Retry the card bring-up: a marginal card fails this intermittently
+	 * (and with a different errno each time as the garbled response is
+	 * read differently), so a second or third attempt often succeeds where
+	 * the first did not. This runs on the writer thread, so the seconds it
+	 * can cost are invisible to the UI.
+	 */
+	mount_stage = "disk";
+	for (int i = 0; i < SD_DISK_INIT_TRIES; i++) {
+		rc = disk_access_init(SD_DISK_NAME);
+		if (rc == 0) {
+			break;
+		}
+		k_msleep(SD_DISK_INIT_RETRY_MS);
+	}
 	if (rc < 0) {
-		return -ENODEV;
+		return rc;
 	}
 
+	mount_stage = "mount";
 	rc = fs_mount(&sd_mp);
 	if (rc < 0) {
 		return rc;
 	}
 
+	mount_stage = "";
 	mounted = true;
 	return 0;
+}
+
+const char *sd_log_mount_stage(void)
+{
+	return mount_stage;
 }
 
 int sd_log_unmount(void)
@@ -172,14 +209,24 @@ int sd_log_open(const char *prefix, char *path_out, size_t path_len)
 		return -EBUSY;
 	}
 
-	/* First unused <prefix>NNN.CSV, so a run never clobbers an earlier one. */
+	/*
+	 * First unused <prefix>NNN.BIN, so a run never clobbers an earlier one.
+	 * Only -ENOENT means "free"; any other error is a sick volume and must
+	 * abort the scan immediately. Grinding through all 1000 candidates on a
+	 * card that errors every stat is a thousand SPI round-trips.
+	 */
 	for (int i = 0; i < SD_MAX_SESSIONS; i++) {
-		snprintf(path, sizeof(path), SD_MOUNT_POINT "/%s%03d.CSV",
+		snprintf(path, sizeof(path), SD_MOUNT_POINT "/%s%03d.BIN",
 			 prefix, i);
-		if (fs_stat(path, &ent) == -ENOENT) {
+		rc = fs_stat(path, &ent);
+		if (rc == -ENOENT) {
 			rc = 0;
 			break;
 		}
+		if (rc < 0) {
+			return rc;	/* volume unusable, not "name taken" */
+		}
+		rc = -ENOSPC;		/* exists; keep looking */
 	}
 	if (rc < 0) {
 		return rc;

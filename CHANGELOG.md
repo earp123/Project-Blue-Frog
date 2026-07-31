@@ -12,11 +12,11 @@ For hardware wiring, build/flash instructions, and SDK setup, see
 
 On-device radio-evaluation tooling for the nRF5340 DK + Wio-SX1262 (SX1262),
 plus the first slice of the wireless-intercom firmware (TDMA radio layer).
-_Last updated: 2026-07-21._
+_Last updated: 2026-07-31._
 
 ### Firmware variants
 
-Four variants build from one source tree; exactly one `main()` is linked,
+Five variants build from one source tree; exactly one `main()` is linked,
 chosen by the Kconfig choice in [`Kconfig`](Kconfig):
 
 - **LoRa send** (`CONFIG_APP_LORA_SEND`, default) — [`src/main.c`](src/main.c).
@@ -30,6 +30,10 @@ chosen by the Kconfig choice in [`Kconfig`](Kconfig):
 - **Intercom TDMA field console** (`CONFIG_APP_TDMA_CONSOLE`) —
   [`src/tdma_console/main.c`](src/tdma_console/main.c) + the same
   [`src/tdma/`](src/tdma) engine. See "TDMA field console" below.
+- **Soak test** (`CONFIG_APP_SOAK`) — [`src/soak/`](src/soak). Headless,
+  UART-CSV bench harness over the same [`src/tdma/`](src/tdma) engine, with a
+  nested `SOAK_TEST_*` choice picking the individual test. See "Soak test
+  harness" below.
 
 ### Intercom TDMA radio layer (M0-M2 implementation)
 
@@ -71,10 +75,11 @@ exclusively the TDMA L1/L2 shim (the old console's native-driver modules —
 `radio_cfg`/`payload`/`pingpong` — are not used). Display-only: no UART,
 logging, or shell.
 
-- **One image for both units**: role (MASTER/SECONDARY) is picked on the HOME
-  screen and locks at the first soak start (`tdma_init()` is once-only);
-  reboot to change. Defaults to SECONDARY — two unconfigured units just
-  listen instead of both beaconing into slot 0.
+- **One image for both units**: role (MASTER/SECONDARY) is chosen at boot and
+  locks at the first soak start (`tdma_init()` is once-only); reboot to
+  change. Defaults to SECONDARY — two unconfigured units just listen instead
+  of both beaconing into slot 0. (Role selection moved off HOME into the
+  power-on sequence on 2026-07-31; see that section below.)
 - **SOAK TEST** — pick 5 min / 30 min / 2 h / continuous; the engine runs the
   full TX/RX frame exchange while the screen shows live per-soak deltas:
   tx/stale, rx/crc/bad-hdr, phase error and ppm, RSSI/SNR, BUSY faults, and
@@ -91,7 +96,8 @@ logging, or shell.
   next `SetTx` (chip in FS — the datasheet-legal window), so it applies from
   the next packet without disturbing slot timing. Everything else stays a
   compile-time constant in [`src/tdma/tdma.h`](src/tdma/tdma.h).
-- **TOUCH CAL** — the console's 5-point calibrate/verify flow, unchanged.
+- **TOUCH CAL** — the console's 5-point calibrate/verify flow (made a
+  mandatory power-on step on 2026-07-31; see that section below).
 - The soak screen is laid out for a future slot-width selector (the engine
   still pins `TDMA_SLOT_DURATION_US` at compile time; making it runtime is
   the planned next engine change for width evaluation).
@@ -99,8 +105,162 @@ logging, or shell.
   `west build -b nrf5340dk/nrf5340/cpuapp -p always -d build-tdma-console --`
   `-DEXTRA_DTC_OVERLAY_FILE=boards/nrf5340dk_nrf5340_cpuapp_display.overlay`
   `-DEXTRA_CONF_FILE=boards/nrf5340dk_nrf5340_cpuapp_tdma_console.conf`
-  (same display/touch wiring as the telemetry console; the SD stack is left
-  out of this build).
+  (same display/touch wiring as the telemetry console; the SD stack was
+  added to this build on 2026-07-31).
+
+### Soak test harness (2026-07-30)
+
+New [`src/soak/`](src/soak) subtree (`CONFIG_APP_SOAK`): individually flashable
+bench soak tests that stream machine-ingestible CSV over the DK's VCOM UART,
+for quick automated ingestion of bench-top radio performance. Reuses the
+[`src/tdma/`](src/tdma) L1/L2 engine unchanged — that layer has no dependency
+on the application Kconfig symbols, only on the `TDMA_*` constants and the
+`tdma_config` it is handed.
+
+- **Role from a jumper, not a build flag.** P1.10 → 3V3 = MASTER (slot 0),
+  open = SECONDARY (slot 1), via an internal pull-down
+  ([`src/soak/role_select.overlay`](src/soak/role_select.overlay)). One image
+  flashes to both units. P1.10 is free (the Wio-SX1262 shield uses only
+  P1.00–P1.09) and sits on the port-1 header clear of the Arduino shield.
+  Fails safe to SECONDARY if the GPIO cannot be read, so a unit never claims
+  the timing-master role by accident.
+- **Shared runner** [`src/soak/soak_run.c`](src/soak/soak_run.c) — brings up
+  the engine at the requested TX power on the locked PHY, runs a fixed-length
+  exchange, emits `SOAK,<id>,...` lines (meta / hdr / row / done / END) and a
+  derived packet-error rate. The `SOAK,` prefix survives interleaved Zephyr
+  log output.
+- **First test** [`src/soak/s01_baseline_m9dbm_5min/`](src/soak/s01_baseline_m9dbm_5min)
+  — both radios at −9 dBm (the SX1262 PA minimum, giving later tests a
+  worst-case floor), 5 minutes, 5 s sample cadence. Each test owns a `main()`
+  guarded by its own `CONFIG_SOAK_TEST_*` symbol, so only the selected one
+  links; CMake globs `src/soak/**/*.c`, so adding a test needs no build-file
+  edit.
+- **Ingest** [`src/soak/tools/ingest_soak.py`](src/soak/tools/ingest_soak.py)
+  — parses a saved capture or reads the serial port live, writes tidy CSV,
+  prints the run metadata and summary.
+- Build:
+  `west build -b nrf5340dk/nrf5340/cpuapp -p always -d build-soak-s01 --`
+  `-DEXTRA_CONF_FILE=src/soak/s01_baseline_m9dbm_5min/s01.conf`
+  `-DEXTRA_DTC_OVERLAY_FILE=src/soak/role_select.overlay`
+
+### Soak logging to SD (2026-07-31)
+
+Every soak on the field console now writes a binary record log to the microSD
+card — [`src/tdma_console/soak_log.c`](src/tdma_console/soak_log.c) over
+[`src/tdma_console/sd_log.c`](src/tdma_console/sd_log.c). Automatic: it hangs
+off `soak_start()` / `soak_finish()`, the only ways in and out of a run, so no
+soak goes unlogged. Each run opens the next free `/SD:/SOAKnnn.BIN`.
+
+- **Fixed 64-byte binary records, not CSV.** The payload alone is 40 bytes,
+  which as hex text is 80 characters before any telemetry, and formatting it
+  per packet costs far more than a `memcpy`. 64 B also divides 512 exactly, so
+  eight records fill a FAT sector with nothing wasted and no partial-sector
+  rewrite. `BUILD_ASSERT`s pin both the size and the division. Text formatting
+  happens offline in the decoder, where it is free.
+- **Rate budget** — sized for the 20 ms production slot, not today's 50 ms: a
+  4-unit 80 ms frame yields 3 RX + 1 TX = 50 records/s = 3.2 KB/s = ~6 sector
+  writes/s.
+- **Producers never touch the card.** Records go into a 128-deep `k_msgq`
+  ring; a dedicated preemptible writer thread drains it. Mount, open, write
+  and close all happen there, so a card stall blocks only the writer — never
+  the UI loop, and never the cooperative radio thread that outranks both.
+  Every FatFs call being on one thread also makes the LFN BSS working buffer
+  (documented as not thread-safe) safe by construction.
+- **Logging failure is non-fatal** — a missing or unreadable card must not
+  abort a radio test. The soak runs regardless and the soak screen shows
+  `LOG FAIL <stage> <errno>`, where stage is `disk` (card never came up),
+  `mount` (volume rejected) or `open` (file creation failed).
+- **What is captured**: full payload per received packet plus `t_us` (DIO1
+  edge, for jitter), `frame_ctr`, RSSI/SNR and sync state; TX records; and a
+  1 Hz engine-counter snapshot (ten counters pack exactly into the 40-byte
+  payload field). Record 0 is a META record describing role, PHY, TX power and
+  slot/frame timing, so a decoded file is self-contained.
+- **`tdma_rx_msgq` deepened 8 → 32** (`TDMA_RX_MSGQ_DEPTH` in
+  [`src/tdma/tdma.h`](src/tdma/tdma.h)). Depth must cover the consumer's worst
+  stall, not the average rate: at 50 records/s a couple of hundred ms of
+  consumer stall silently dropped packets *before* any logger could see them.
+- **Decoder** [`src/tdma_console/tools/decode_soak_log.py`](src/tdma_console/tools/decode_soak_log.py)
+  — binary to tidy CSV plus a summary (RSSI/SNR spread, frame continuity,
+  PER, engine counters). Detects on-device ring drops from `seq` gaps. Payload
+  integrity is checked against the firmware's `payload[i] = base + i` pattern,
+  recovering `base` by majority vote across all 40 positions rather than
+  trusting `payload[0]` — one corrupted first byte would otherwise make every
+  byte look wrong.
+
+> [!NOTE]
+> Because packet CRC is on, the modem drops corrupted frames and they never
+> reach the log, so payload checking reads clean essentially always. Measuring
+> true BER would mean disabling the packet CRC so damaged frames still surface.
+
+### Mandatory power-on sequence + minimal HOME (2026-07-31)
+
+The field console now runs a two-step, session-only power-on sequence before
+HOME is reachable: **TOUCH CAL → SELECT ROLE**. Neither is reachable from HOME
+afterwards — reboot to redo either.
+
+- **Calibration first, deliberately**: the transform is RAM-only, so every
+  boot starts from the identity mapping and the role could not otherwise be
+  picked by touch. Point collection uses the *raw* samples, so it bootstraps
+  correctly from the identity transform.
+- **ACCEPT / REDO touch buttons** on the verify screen, so confirming no
+  longer needs a DK button. These exist only in the verify phase, and that is
+  the point: it is the one phase where a freshly solved transform is already
+  active, so a tap lands where it looks — tapping ACCEPT accurately *is* the
+  proof the fit is good. In collect (identity transform) and fail (solve
+  rejected) an on-screen button would be unpressable, so the DK buttons stay
+  the only control there, and remain a working fallback throughout.
+- **Calibration text no longer collides with the first target.** The
+  instruction line sat at `MARG + body + 2` and ran straight through the
+  top-left crosshair — the one target you look at while reading it. It now
+  derives its baseline from the same 15 % inset `cal_target()` uses, so it
+  clears every target and stays correct if the panel geometry changes.
+- **SELECT ROLE** — two full-width touch buttons. The highlight starts on the
+  current role (SECONDARY by default), so confirming without moving takes the
+  fail-safe option instead of creating a second master.
+- **HOME reduced to SOAK TEST + TX pwr.** Role and touch cal left the menu;
+  role moved into the HOME header (`FIELD TEST: MASTER`), since with two
+  identical DKs on the bench it is the one thing that cannot be inferred by
+  looking at them.
+
+### Hardware test findings (2026-07-31) — SD card bring-up
+
+Found while bringing the soak logger up against a 128 GB exFAT card; the
+smaller FAT32 card had masked all of it.
+
+- **Root cause 1 — the logger could reformat the operator's card.**
+  `CONFIG_FS_FATFS_MOUNT_MKFS` is enabled by default, and the mount struct
+  left `.flags` at 0. Zephyr's answer to a `FR_NO_FILESYSTEM` mount is then
+  `f_mkfs(FM_ANY | FM_SFD)` — which reformats the card and, with `FM_SFD`,
+  writes no partition table at all. A card that had been in the unit came back
+  to a PC as garbage, consistent with a partial run of exactly that. Fixed
+  three ways: `FS_MOUNT_FLAG_NO_FORMAT` on the mount, `MOUNT_MKFS=n` to remove
+  the code path, and both documented at the site.
+- **Root cause 2 — card I/O ran on the UI thread.** Mount, open and the
+  session-file scan all happened inside `soak_start()`, and the scan only
+  broke out of its 1000-candidate loop on `-ENOENT` — so a volume erroring
+  every `fs_stat` produced a thousand SPI round-trips and a frozen UI. The
+  scan now aborts on any non-`-ENOENT` error, and all card I/O moved to the
+  writer thread. The UI can no longer be stalled by the card in any state.
+  This also retired a ~1.5 s freeze on every soak start with no card inserted
+  (`CONFIG_SD_INIT_TIMEOUT`).
+- **Root cause 3 — the card never enumerated.** With the stage-aware error
+  reporting added above, the failure reported `disk -134` (`ENOTSUP`) and
+  `disk -116` (`ETIMEDOUT`) on successive attempts — meaning the filesystem
+  was never reached, and exFAT support was never the issue. The *alternation*
+  was the diagnostic: a genuinely unsupported card fails identically every
+  time, so two different errors on identical attempts meant garbled responses,
+  i.e. a physical-layer problem. Fixes, in the display overlay:
+  `power-delay-ms` 1 → 250 (the binding's own note says to raise it when card
+  init misbehaves; a large SDXC card draws far more inrush than the smaller
+  one and the SD spec allows 250 ms before a card must answer), and
+  `spi-max-frequency` 24 MHz → 4 MHz (the logger needs ~3.2 KB/s, so this
+  keeps two orders of magnitude of headroom while being far kinder to a card
+  on jumper wires sharing the display bus). `sd_log_mount()` also retries the
+  bring-up three times, 250 ms apart. Verified writing reliably afterwards.
+- **exFAT support added** for cards Windows will not format as FAT32:
+  `CONFIG_FS_FATFS_EXFAT=y` (which auto-selects `FS_FATFS_LFN` — FatFs
+  requires it) plus `CONFIG_FS_FATFS_LBA64=y` for GPT-partitioned cards.
+  Filenames stay 8.3-clean so the same naming works on FAT32.
 
 ### Hardware test findings (2026-07-21) — link closed full-duplex
 
@@ -305,8 +465,27 @@ native SX126x LoRa driver this project uses. See the README's
   screens.
 - **ASCII keypad** (the keypad modal is data-driven and architected for a third
   key table).
-- **Touch calibration and ping/pong stats are in-RAM only** — no persistence
-  across reflash/reboot yet (settings/NVS or SD is the planned store).
+- **Touch calibration is in-RAM only.** On the field console this is now
+  deliberate — a mandatory power-on step lasting the session (see above).
+  Elsewhere (and for ping/pong stats) persistence to settings/NVS or SD
+  remains unbuilt.
+- **TX records carry no frame counter.** `frame_ctr` is a *shared* frame
+  number — the master owns it and the secondary adopts it verbatim from each
+  beacon, so both units stamp the same value in a given frame, which is what
+  makes cross-unit correlation work at all. But the engine does not expose its
+  counter to the application, so `soak_log_tx()` writes 0 with `SOAK_F_NO_CTR`
+  set. RX-to-RX alignment across the two files works today; pairing a unit's
+  own TX against the peer's RX needs the counter added to
+  `struct tdma_telemetry`.
+- **`frame_ctr` wraps** at 65536 frames — 3.6 h at the current 50 ms slot, but
+  **1.46 h at the 20 ms target**, which the console's 2-hour soak preset
+  exceeds. Within-file continuity is already wrap-safe (both firmware and
+  decoder use modular deltas and ignore backward jumps as a peer restart);
+  absolute cross-file alignment past a wrap would need the decoder to unwrap
+  into a monotonic index, which is not built.
+- **The binary soak log has not yet been decoded from real hardware.** The
+  format, writer and decoder are validated against a synthetic file only; the
+  first device-written `SOAKnnn.BIN` is the outstanding test.
 - **Transmit is synchronous** on a dedicated thread (no `lora_send_async` /
   LBT / CAD result semantics).
 - **Front end** (display/touch/SD) is still jumper-wired to the DK headers,

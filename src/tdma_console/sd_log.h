@@ -53,17 +53,30 @@ struct sd_log_stats {
 	uint32_t dropped;	/* rows lost (buffer full and flush failed) */
 };
 
-/* Mount the FAT volume. Returns 0 on success, or a negative errno; -ENODEV
- * distinguishes "no card / disk init failed" from a mount/format failure.
+/*
+ * Mount the volume (FAT32 or exFAT). Returns 0, or a negative errno — pair it
+ * with sd_log_mount_stage() to tell a card that never came up from a volume
+ * that was rejected. Never formats: an unrecognised card is reported, not
+ * overwritten.
  */
 int sd_log_mount(void);
 int sd_log_unmount(void);
 bool sd_log_mounted(void);
 
+/* Which step the last sd_log_mount() failed at: "disk" (card never came up)
+ * or "mount" (card responds, volume rejected). Empty string on success.
+ */
+const char *sd_log_mount_stage(void);
+
 /*
- * Open a new session file "<prefix>NNN.CSV" at the next free NNN (8.3 names:
- * prefix must be <= 4 chars, since FATFS long names are not enabled). The
- * chosen path is copied to path_out. Resets the statistics.
+ * Open a new session file "<prefix>NNN.BIN" at the next free NNN. The chosen
+ * path is copied to path_out. Resets the statistics.
+ *
+ * Names are kept 8.3-clean even though exFAT (and therefore FatFs long-name
+ * support) is enabled, so the same file naming works on a FAT32 card too.
+ *
+ * May block for as long as the card takes to answer: call it from the
+ * soak_log writer thread, never from the UI loop.
  */
 int sd_log_open(const char *prefix, char *path_out, size_t path_len);
 
