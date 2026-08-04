@@ -57,7 +57,19 @@
 			width = <320>;
 			height = <240>;
 			pixel-format = <ILI9XXX_PIXEL_FORMAT_RGB565>;
-			rotation = <90>;
+			/*
+			 * Portrait, 240x320. Note the driver takes its resolution
+			 * from ILI9341_X_RES/Y_RES in display_ili9341.h (240x320
+			 * native) and ignores the width/height properties above
+			 * for that purpose — only this rotation decides the
+			 * reported geometry. 0/180 report 240x320 portrait, 90/270
+			 * swap to 320x240 landscape (which is what we used to be).
+			 *
+			 * 180 is reachable at runtime via ui_set_flipped(), and
+			 * because both 0 and 180 report the same 240x320, flipping
+			 * the view never changes a single layout coordinate.
+			 */
+			rotation = <0>;
 		};
 	};
 };

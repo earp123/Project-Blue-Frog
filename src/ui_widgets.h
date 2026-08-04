@@ -34,6 +34,18 @@
  */
 bool ui_init(void);
 
+/* ---- View flip (180 deg) ------------------------------------------------ *
+ * The panel is driven in portrait (240x320). A 180 deg flip is done by the
+ * controller itself (MADCTL via display_set_orientation), not in software, so
+ * it costs nothing per draw and — because 0 deg and 180 deg report the same
+ * 240x320 geometry — no layout coordinate changes. Only touch has to be
+ * corrected, since the controller's axes do not move with the panel: use
+ * ui_flip_point() on an already-calibrated screen coordinate.
+ */
+bool ui_set_flipped(bool flipped);	/* false = upright, true = 180 deg */
+bool ui_flipped(void);
+void ui_flip_point(int *x, int *y);	/* no-op unless flipped */
+
 uint16_t ui_disp_w(void);
 uint16_t ui_disp_h(void);
 uint8_t ui_body_w(void); /* body font glyph width  (px) */
@@ -59,11 +71,12 @@ void ui_value_row(int x, int y, int w, int h, const char *label,
 		  const char *value, bool steppable, bool selected, bool invalid);
 
 /* ---- Keypad modal (reusable) ------------------------------------------- *
- * HEX mode: 0-9 A-F, two nibbles per byte; DEC mode: 0-9 plus '.' (for MHz).
+ * HEX mode: 0-9 A-F, two nibbles per byte; DEC mode: 0-9 plus '.' (for MHz);
+ * ALPHA mode: A-Z 0-9 _ (FAT-safe filename labels).
  * The editor accumulates a text string; the caller interprets it on OK via
  * keypad_text(). Drawn and driven entirely from the main loop.
  */
-enum keypad_mode { KEYPAD_HEX, KEYPAD_DEC };
+enum keypad_mode { KEYPAD_HEX, KEYPAD_DEC, KEYPAD_ALPHA };
 enum keypad_result { KEYPAD_PENDING = 0, KEYPAD_OK, KEYPAD_CANCEL };
 
 /* Open the modal. initial may be NULL (start empty) or seed the entry. */

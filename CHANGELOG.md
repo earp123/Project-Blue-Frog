@@ -12,7 +12,7 @@ For hardware wiring, build/flash instructions, and SDK setup, see
 
 On-device radio-evaluation tooling for the nRF5340 DK + Wio-SX1262 (SX1262),
 plus the first slice of the wireless-intercom firmware (TDMA radio layer).
-_Last updated: 2026-07-31._
+_Last updated: 2026-08-01._
 
 ### Firmware variants
 
@@ -171,10 +171,10 @@ soak goes unlogged. Each run opens the next free `/SD:/SOAKnnn.BIN`.
   `LOG FAIL <stage> <errno>`, where stage is `disk` (card never came up),
   `mount` (volume rejected) or `open` (file creation failed).
 - **What is captured**: full payload per received packet plus `t_us` (DIO1
-  edge, for jitter), `frame_ctr`, RSSI/SNR and sync state; TX records; and a
-  1 Hz engine-counter snapshot (ten counters pack exactly into the 40-byte
-  payload field). Record 0 is a META record describing role, PHY, TX power and
-  slot/frame timing, so a decoded file is self-contained.
+  edge, for jitter), `frame_ctr`, RSSI/SNR and sync state; one record per
+  *transmitted* packet; and a 1 Hz engine-counter snapshot plus a baseline
+  snapshot at t=0. Record 0 is a META record describing role, PHY, TX power
+  and slot/frame timing, so a decoded file is self-contained.
 - **`tdma_rx_msgq` deepened 8 → 32** (`TDMA_RX_MSGQ_DEPTH` in
   [`src/tdma/tdma.h`](src/tdma/tdma.h)). Depth must cover the consumer's worst
   stall, not the average rate: at 50 records/s a couple of hundred ms of
@@ -191,6 +191,79 @@ soak goes unlogged. Each run opens the next free `/SD:/SOAKnnn.BIN`.
 > Because packet CRC is on, the modem drops corrupted frames and they never
 > reach the log, so payload checking reads clean essentially always. Measuring
 > true BER would mean disabling the packet CRC so damaged frames still surface.
+
+### First logged soak + log format v2 (2026-08-01)
+
+First 5-minute two-unit soak captured to SD and decoded off the cards, at
+−9 dBm on the 50 ms bench slot. The record format, writer and decoder were
+validated end to end on the first attempt — no padding or byte-order
+mismatch — and **neither file had a single `seq` discontinuity**, so the ring
+dropped nothing at ~1.16 KB/s.
+
+- **Zero packet loss in both directions**: 1486 frames in which both units
+  logged a packet, 0 missed / 0 dup / 0 payload bit errors either way, one
+  CRC error total. RSSI −67…−62 dBm, SNR 6…10 dB. The secondary's three
+  "extra" frames (counters 2–4) are simply the master starting its soak three
+  frames later, not loss — both files end on counter 1490.
+- **Slot timing has enormous margin at the 20 ms target.** RX inter-arrival
+  error against the nominal frame: σ = 21 µs, p50 ≈ 0, p99 +55 µs, full range
+  −135…+69 µs; the secondary's sync phase error held to −63…+36 µs. A 20 ms
+  slot leaves 12.37 ms of guard after the 7.632 ms time-on-air, so the worst
+  observed excursion is ~1 % of the budget. Clock discipline is not what
+  limits tightening the slot.
+- Caveat: ~45 dB of margin over SF5/BW500 sensitivity on the bench. 0 % PER
+  here says the stack is correct; it says nothing about range.
+
+Three logging defects the first real capture exposed, all now fixed:
+
+- **TX records counted submissions, not transmissions.** The master logged
+  3693 TX records against 1499 actual transmissions — `tdma_tx_submit()`
+  succeeds whenever the engine's stage buffer is free, which the 20 ms UI loop
+  hits ~2.4× per frame, and every extra payload was overwritten in place
+  before its slot. Two thirds of the file described bytes that never reached
+  the air. The runner now holds a payload "armed" and logs it only once the
+  engine's `tx_done` confirms it went out, so a TX record is a transmission
+  and carries the payload that was actually sent.
+- **`ppm` was destroyed by clamping.** v1 squeezed the clock-rate estimate
+  into the record's `int8` `snr` field, where it railed at ±127 — and that is
+  the single measurement that matters most for tightening the slot. The phase
+  error had the same latent bug (`int16` cannot hold the ±frame/2 range).
+  Format **v2** gives STATS a typed 40-byte overlay (`struct soak_stats`) with
+  both as `int32`, making room by dropping `rx_ok`/`missed`/`dup` — which the
+  decoder derives from frame-counter continuity anyway.
+- **Engine counters are absolute, not per-soak.** `tdma_start()` deliberately
+  does not reset `eng.telem`, so a second soak in one boot keeps counting: the
+  master's log read `tx_done=1608` absolute against 1499 for that run. A
+  baseline STATS record is now written at t=0 and the decoder reports
+  `engine (this run)` alongside `engine (absolute)`.
+
+The decoder reads both v1 and v2, so the captures above remain readable; it
+prints the format version and warns when a v1 log's `ppm` sits on the int8
+rails.
+
+### Log naming, drawers + SD file browser (2026-08-01)
+
+Soak log names now encode the run: `<PWR>_<DUR>_NNN.BIN` — `M`/`P` for the
+power sign and minutes/hours for the duration (`M9_5M_000.BIN`,
+`P22_2H_007.BIN`, `CT` = continuous). Long-name support is always compiled in
+(exFAT selects `FS_FATFS_LFN`, and LFN works on FAT32 too), so the old 8.3
+constraint no longer applies. Logs can be pointed at one of four fixed
+top-level drawers (`DRAWER0`–`3`) or the root, selected on the soak-pick
+screen ("LOG" row); a missing drawer is created when a log opens there.
+
+- **FILES browser** on HOME: list (directories first, 10 rows, DK-button or
+  tap scroll), **delete** with a two-press confirm, **move** between root and
+  drawers (`fs_rename`, destination auto-created), **+ DRAWER** (next free of
+  the four), and an optional **label** appended before the extension
+  (`M9_5M_000_RANGE1.BIN`) — never part of a default name.
+- **Alpha keypad**: third key table for the existing modal (A–Z 0–9 `_`,
+  6×7 grid; the grid's column count is now per-table). Used for labels.
+- **All card I/O stays on the writer thread**: the browser submits one op at
+  a time (`sd_fsop_*` in soak_log.c) and polls from the 20 ms loop — the LFN
+  working buffer is a shared static (not thread-safe) and a sick card must
+  never stall the UI, so this holds by construction, browser included.
+- Foreign directories (e.g. Windows' "System Volume Information") list but
+  are not enterable; >64 entries shows a truncation marker.
 
 ### Mandatory power-on sequence + minimal HOME (2026-07-31)
 
@@ -483,9 +556,9 @@ native SX126x LoRa driver this project uses. See the README's
   decoder use modular deltas and ignore backward jumps as a peer restart);
   absolute cross-file alignment past a wrap would need the decoder to unwrap
   into a monotonic index, which is not built.
-- **The binary soak log has not yet been decoded from real hardware.** The
-  format, writer and decoder are validated against a synthetic file only; the
-  first device-written `SOAKnnn.BIN` is the outstanding test.
+- **Field PER is unmeasured.** The 5-minute bench soak below closed at 0 % loss
+  with ~45 dB of margin over SF5/BW500 sensitivity — that validates the stack,
+  not the range. Loss behaviour at distance is still unknown.
 - **Transmit is synchronous** on a dedicated thread (no `lora_send_async` /
   LBT / CAD result semantics).
 - **Front end** (display/touch/SD) is still jumper-wired to the DK headers,

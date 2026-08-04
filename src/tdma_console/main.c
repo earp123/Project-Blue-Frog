@@ -21,10 +21,17 @@
  * unset role. Neither is reachable from HOME afterwards — reboot to redo
  * either; the selected role is shown in the HOME header.
  *
- * Screens: HOME -> {SOAK PICK -> SOAK, TX PWR keypad}. The soak
+ * Screens: HOME -> {SOAK PICK -> SOAK, TX PWR keypad, FILES}. The soak
  * screen shows per-soak deltas of the engine telemetry plus frame-counter
  * continuity stats (received / missed / duplicate peer frames), which catch
  * losses the CRC counters cannot.
+ *
+ * FILES is a minimal SD browser: list, delete (two-press confirm), move
+ * between the fixed top-level drawers (DRAWER0-3, created on demand), and an
+ * optional label appended to a filename via the alpha keypad. The soak-pick
+ * screen selects which drawer (or the root) new logs land in. All card I/O
+ * is submitted to the soak_log writer thread and polled, never blocking the
+ * UI; log files are named <PWR>_<DUR>_NNN.BIN (e.g. M9_5M_000.BIN).
  *
  * Every soak also writes a binary record log to the microSD card (soak_log ->
  * sd_log): one 64-byte record per received packet — payload included — plus
@@ -48,9 +55,26 @@
 #include "tdma.h"
 #include "soak_log.h"
 
-/* ---- Layout (mirrors console.c) ---- */
+/* ---- Layout ----
+ * Portrait, 240x320 (see the rotation note in the display overlay). Rows use
+ * fixed heights rather than dividing the body: portrait leaves 272 px of body,
+ * and splitting that between two menu rows would produce 130 px-tall buttons.
+ * Text is 10 px/char, so a full-width line is 23 characters at MARG.
+ */
 #define BORDER_PX 3
 #define MARG 4
+
+#define ROW_H	 56	/* HOME menu row */
+#define ROW_GAP	 10
+#define FLIP_W	120	/* the small 180-deg view-flip button */
+#define FLIP_H	 34
+#define PICK_H	 38	/* soak-pick rows (log-dir + durations + BACK) */
+#define PICK_GAP  8
+#define ROLE_H	 90	/* role-select buttons */
+#define ROLE_GAP 14
+#define BR_ROW_H 22	/* file-browser list row */
+#define ACT_H	 44	/* stacked action buttons (file act / move) */
+#define ACT_GAP	  8
 
 /* ---- Navigation (posted by the button callback, consumed in main) ---- */
 enum nav_action {
@@ -74,9 +98,12 @@ enum screen_id {
 	SCR_HOME = 0,
 	SCR_SOAK_PICK,
 	SCR_SOAK,
-	SCR_KEYPAD,	/* TX power entry */
+	SCR_KEYPAD,	/* TX power / label entry */
 	SCR_CALIBRATE,
 	SCR_ROLE_PICK,	/* power-on role selection */
+	SCR_FILES,	/* SD file browser: list + new-drawer */
+	SCR_FILE_ACT,	/* per-file actions: delete / move / label */
+	SCR_FILE_MOVE,	/* move destination pick */
 };
 static enum screen_id screen = SCR_HOME;
 
@@ -99,6 +126,35 @@ static bool cal_required = true;
 static bool role_required = true;
 static int role_sel;
 
+/* ---- Log destination + file browser state ----
+ * dir index 0 is the card root; 1..SD_DRAWERS are the fixed drawer names. The
+ * soak logger points at log_dir_idx (selectable on the soak-pick screen); a
+ * missing drawer is created when a log actually opens there.
+ */
+#define SD_DRAWERS 4
+static const char *const drawer_name[SD_DRAWERS + 1] = {
+	"", "DRAWER0", "DRAWER1", "DRAWER2", "DRAWER3",
+};
+static int log_dir_idx;			/* 0 = "/" */
+
+#define BR_LIST_MAX 64
+static struct sd_dirent br_ents[BR_LIST_MAX];
+static int br_count;
+static int br_dir;			/* browsed dir, same indexing */
+static int br_sel;
+static int br_scroll;
+static bool br_busy;			/* fs op in flight on the writer */
+static bool br_truncated;		/* directory had > BR_LIST_MAX entries */
+static char br_msg[24];			/* footer status / error */
+static enum sd_fsop_op br_op;		/* op awaiting completion */
+static char fa_name[SD_FSOP_NAME_MAX];	/* file the action menu targets */
+static int fa_sel;
+static bool fa_confirm_del;
+static int mv_sel;
+
+/* What the keypad edits when SCR_KEYPAD closes. */
+static enum { KP_FOR_POWER, KP_FOR_LABEL } kp_purpose;
+
 static int home_sel;
 static int pick_sel;
 static char home_msg[28] = "";
@@ -120,7 +176,10 @@ static const struct {
 	{ "2 HOURS", 120 * 60 * 1000LL },
 	{ "CONTINUOUS", 0 },
 };
-#define PICK_COUNT (ARRAY_SIZE(soak_durations) + 1) /* + BACK */
+/* Rows on the pick screen: log-dir selector, durations, BACK. */
+#define PICK_COUNT (ARRAY_SIZE(soak_durations) + 2)
+#define PICK_ROW_DIR  0
+#define PICK_ROW_BACK ((int)PICK_COUNT - 1)
 
 static struct {
 	bool active;
@@ -142,6 +201,18 @@ static struct {
 	int16_t last_rssi;
 	int8_t last_snr;
 	uint8_t seq;		/* TX pattern sequence */
+
+	/*
+	 * Staged-payload tracking, so the log records transmissions rather
+	 * than submissions. tdma_tx_submit() succeeds whenever the engine's
+	 * stage buffer is free — several times per frame at the 20 ms UI
+	 * cadence — but only one payload per frame is actually sent; the rest
+	 * are overwritten in place. We therefore hold a payload "armed" and
+	 * only log it once the engine's tx_done confirms it went out.
+	 */
+	bool tx_armed;
+	uint8_t tx_payload[TDMA_PAYLOAD_LEN];
+	uint32_t tx_done_at_arm;
 } soak;
 
 static int64_t soak_last_draw_ms;
@@ -306,20 +377,28 @@ static void fmt_dur(char *out, size_t n, int64_t ms)
 enum home_row {
 	HR_SOAK = 0,
 	HR_POWER,
+	HR_FILES,
+	HR_FLIP,	/* small button, sits apart from the menu rows */
 	HR_COUNT,
 };
 
 static void home_row_rect(int i, int *x, int *y, int *w, int *h)
 {
-	int top = body_top();
-	int bot = body_bot();
-	int gap = 6;
-	int hh = (bot - top - (HR_COUNT - 1) * gap) / HR_COUNT;
+	if (i == HR_FLIP) {
+		/* Deliberately small and set apart at the foot of the body:
+		 * it changes how the screen is held, not what the test does.
+		 */
+		*w = FLIP_W;
+		*h = FLIP_H;
+		*x = (ui_disp_w() - FLIP_W) / 2;
+		*y = body_bot() - FLIP_H;
+		return;
+	}
 
 	*x = MARG;
 	*w = ui_disp_w() - 2 * MARG;
-	*h = hh;
-	*y = top + i * (hh + gap);
+	*h = ROW_H;
+	*y = body_top() + i * (ROW_H + ROW_GAP);
 }
 
 static void draw_home(void)
@@ -348,6 +427,13 @@ static void draw_home(void)
 			ui_value_row(x, y, w, h, "TX pwr", val, false,
 				     home_sel == i, false);
 			break;
+		case HR_FILES:
+			ui_button(x, y, w, h, "FILES", home_sel == i);
+			break;
+		case HR_FLIP:
+			ui_button(x, y, w, h, ui_flipped() ? "FLIP ^" : "FLIP v",
+				  home_sel == i);
+			break;
 		default:
 			break;
 		}
@@ -365,15 +451,19 @@ static void draw_home(void)
  * ------------------------------------------------------------------------- */
 static void pick_btn_rect(int i, int *x, int *y, int *w, int *h)
 {
-	int top = body_top();
-	int bot = body_bot();
-	int gap = 6;
-	int hh = (bot - top - ((int)PICK_COUNT - 1) * gap) / (int)PICK_COUNT;
+	int stack = (int)PICK_COUNT * PICK_H + ((int)PICK_COUNT - 1) * PICK_GAP;
+	int top = body_top() + (body_bot() - body_top() - stack) / 2;
 
 	*x = MARG;
 	*w = ui_disp_w() - 2 * MARG;
-	*h = hh;
-	*y = top + i * (hh + gap);
+	*h = PICK_H;
+	*y = top + i * (PICK_H + PICK_GAP);
+}
+
+/* "/" or the drawer name, for the selector row and browser headers. */
+static const char *dir_label(int idx)
+{
+	return (idx == 0) ? "/" : drawer_name[idx];
 }
 
 static void draw_soak_pick(void)
@@ -385,12 +475,18 @@ static void draw_soak_pick(void)
 
 	for (int i = 0; i < (int)PICK_COUNT; i++) {
 		int x, y, w, h;
-		const char *label = (i < (int)ARRAY_SIZE(soak_durations))
-					    ? soak_durations[i].label
-					    : "BACK";
 
 		pick_btn_rect(i, &x, &y, &w, &h);
-		ui_button(x, y, w, h, label, pick_sel == i);
+		if (i == PICK_ROW_DIR) {
+			ui_value_row(x, y, w, h, "LOG",
+				     dir_label(log_dir_idx), true,
+				     pick_sel == i, false);
+		} else if (i == PICK_ROW_BACK) {
+			ui_button(x, y, w, h, "BACK", pick_sel == i);
+		} else {
+			ui_button(x, y, w, h, soak_durations[i - 1].label,
+				  pick_sel == i);
+		}
 	}
 
 	draw_footer_summary();
@@ -456,8 +552,15 @@ static void draw_soak_dynamic(void)
 	ui_text(MARG, y, l, COLOR_WHITE, COLOR_BLACK);
 	y += sp;
 
-	snprintf(l, sizeof(l), "rx %u  crc %u  hdr %u", soak.rx_ok,
-		 t->rx_crc_err - soak.snap.rx_crc_err,
+	/* Split across lines rather than packed: a 240 px row holds 23
+	 * characters, and large counters overran the combined form.
+	 */
+	snprintf(l, sizeof(l), "rx %u  crc %u", soak.rx_ok,
+		 t->rx_crc_err - soak.snap.rx_crc_err);
+	ui_text(MARG, y, l, COLOR_WHITE, COLOR_BLACK);
+	y += sp;
+
+	snprintf(l, sizeof(l), "bad hdr %u",
 		 t->rx_bad_header - soak.snap.rx_bad_header);
 	ui_text(MARG, y, l, COLOR_WHITE, COLOR_BLACK);
 	y += sp;
@@ -466,7 +569,7 @@ static void draw_soak_dynamic(void)
 	ui_text(MARG, y, l, COLOR_WHITE, COLOR_BLACK);
 	y += sp;
 
-	snprintf(l, sizeof(l), "phase %dus ppm %d",
+	snprintf(l, sizeof(l), "ph %dus  ppm %d",
 		 t->last_phase_err_us, t->last_ppm);
 	ui_text(MARG, y, l, COLOR_WHITE, COLOR_BLACK);
 	y += sp;
@@ -503,8 +606,13 @@ static void draw_soak_dynamic(void)
 		 */
 		snprintf(l, sizeof(l), "LOG FAIL %s %d", ls.err_stage, ls.err);
 	} else if (ls.path[0]) {
-		snprintf(l, sizeof(l), "%s %uk drop %u",
-			 ls.path + 4, /* skip the "/SD:" mount prefix */
+		/* Basename only: with a drawer in it the full path no longer
+		 * fits a 23-character portrait line.
+		 */
+		const char *base = strrchr(ls.path, '/');
+
+		snprintf(l, sizeof(l), "%s %uk d%u",
+			 (base != NULL) ? base + 1 : ls.path,
 			 ls.written / 1000u, ls.dropped);
 	} else if (ls.active) {
 		/* Mount/open runs on the writer thread, so the file name only
@@ -568,7 +676,8 @@ static void soak_start(int64_t duration_ms)
 	 * radio test. The failure is surfaced on the soak screen instead.
 	 */
 	(void)soak_log_start(role, (role == TDMA_ROLE_MASTER) ? 0 : 1,
-			     (int8_t)tx_power_dbm);
+			     (int8_t)tx_power_dbm, (uint32_t)duration_ms,
+			     drawer_name[log_dir_idx]);
 
 	rc = tdma_start();
 	if (rc < 0) {
@@ -583,6 +692,17 @@ static void soak_start(int64_t duration_ms)
 	soak.duration_ms = duration_ms;
 	soak_last_draw_ms = 0;
 	home_msg[0] = '\0';
+
+	/*
+	 * Baseline counter snapshot at t=0. The engine's counters are not
+	 * reset by tdma_start(), so they carry over between soaks in one boot;
+	 * with this record the decoder gets an exact per-run delta by
+	 * differencing the first and last STATS instead of missing the first
+	 * sample period.
+	 */
+	soak_last_stats_ms = k_uptime_get();
+	soak_log_stats(tdma_get_telemetry());
+
 	screen = SCR_SOAK;
 }
 
@@ -591,7 +711,7 @@ static void soak_finish(void)
 	tdma_stop();
 
 	/* One last counter snapshot, then drain and close the log. */
-	soak_log_stats(tdma_get_telemetry(), soak.rx_ok, soak.missed, soak.dup);
+	soak_log_stats(tdma_get_telemetry());
 	soak_log_stop();
 
 	soak.active = false;
@@ -640,16 +760,26 @@ static void soak_poll(void)
 		return;
 	}
 
-	/* One fresh pattern payload per frame; -EAGAIN just means the
-	 * previous one has not been taken yet.
-	 */
-	uint8_t payload[TDMA_PAYLOAD_LEN];
+	const struct tdma_telemetry *t = tdma_get_telemetry();
 
-	fill_pattern(payload, soak.seq);
-	if (tdma_tx_submit(payload) == 0) {
-		soak_log_tx(payload, (role == TDMA_ROLE_MASTER) ? 0 : 1,
-			    tdma_get_telemetry()->sync_state);
-		soak.seq++;
+	/*
+	 * An armed payload that the engine has now transmitted: log it as the
+	 * transmission it actually was, then arm the next one. Submitting on
+	 * every pass instead would overwrite most payloads before their slot.
+	 */
+	if (soak.tx_armed && t->tx_done != soak.tx_done_at_arm) {
+		soak_log_tx(soak.tx_payload, (role == TDMA_ROLE_MASTER) ? 0 : 1,
+			    t->sync_state);
+		soak.tx_armed = false;
+	}
+
+	if (!soak.tx_armed) {
+		fill_pattern(soak.tx_payload, soak.seq);
+		if (tdma_tx_submit(soak.tx_payload) == 0) {
+			soak.tx_armed = true;
+			soak.tx_done_at_arm = t->tx_done;
+			soak.seq++;
+		}
 	}
 
 	/* Periodic engine-counter snapshot: cheap, and it lets the decoder
@@ -657,8 +787,7 @@ static void soak_poll(void)
 	 */
 	if (k_uptime_get() - soak_last_stats_ms >= SOAK_STATS_PERIOD_MS) {
 		soak_last_stats_ms = k_uptime_get();
-		soak_log_stats(tdma_get_telemetry(), soak.rx_ok, soak.missed,
-			       soak.dup);
+		soak_log_stats(t);
 	}
 
 	if (soak.duration_ms &&
@@ -675,12 +804,29 @@ static void power_keypad_open(void)
 	char init[8];
 
 	snprintf(init, sizeof(init), "%d", tx_power_dbm);
+	kp_purpose = KP_FOR_POWER;
 	keypad_open(KEYPAD_DEC, "TX power dBm", init);
 	screen = SCR_KEYPAD;
 }
 
+/* Implemented with the browser (needs its path helpers). */
+static void label_apply(const char *label);
+
 static void keypad_finish(enum keypad_result r)
 {
+	if (r == KEYPAD_PENDING) {
+		return;
+	}
+
+	if (kp_purpose == KP_FOR_LABEL) {
+		if (r == KEYPAD_OK && keypad_text()[0] != '\0') {
+			label_apply(keypad_text());
+		}
+		screen = SCR_FILES;	/* cancel/empty: back to the list */
+		mark_dirty();
+		return;
+	}
+
 	if (r == KEYPAD_OK) {
 		int v = (int)strtol(keypad_text(), NULL, 10);
 
@@ -691,9 +837,7 @@ static void keypad_finish(enum keypad_result r)
 		mark_dirty();
 	}
 
-	if (r == KEYPAD_OK || r == KEYPAD_CANCEL) {
-		screen = SCR_HOME;
-	}
+	screen = SCR_HOME;
 }
 
 /* ---------------------------------------------------------------------------
@@ -808,7 +952,7 @@ static void draw_calibrate(void)
 			ui_fill_rect(cal_test_x - 3, cal_test_y - 3, 7, 7, COLOR_GREY);
 		}
 		ui_text(MARG, MARG, "TOUCH CAL: verify", COLOR_WHITE, COLOR_BLACK);
-		ui_text(MARG, cal_instr_y(), "Tap +; box = where it lands",
+		ui_text(MARG, cal_instr_y(), "Tap +; box = hit",
 			COLOR_WHITE, COLOR_BLACK);
 
 		cal_btn_rect(CAL_BTN_REDO, &bx, &by, &bw, &bbh);
@@ -841,15 +985,14 @@ static void draw_calibrate(void)
 
 static void role_btn_rect(int i, int *x, int *y, int *w, int *h)
 {
-	int top = body_top() + ROLE_BLURB_LINES * (ui_body_h() + 2) + 6;
-	int bot = body_bot();
-	int gap = 10;
-	int hh = (bot - top - gap) / 2;
+	int blurb = body_top() + ROLE_BLURB_LINES * (ui_body_h() + 2) + 6;
+	int stack = 2 * ROLE_H + ROLE_GAP;
+	int top = blurb + (body_bot() - blurb - stack) / 2;
 
 	*x = MARG;
 	*w = ui_disp_w() - 2 * MARG;
-	*h = hh;
-	*y = top + i * (hh + gap);
+	*h = ROLE_H;
+	*y = top + i * (ROLE_H + ROLE_GAP);
 }
 
 static void draw_role_pick(void)
@@ -905,6 +1048,440 @@ static void cal_accept(void)
 }
 
 /* ---------------------------------------------------------------------------
+ * FILES (SD browser). Every card op runs on the soak_log writer thread; this
+ * screen only submits and polls, so a sick card can never stall the UI.
+ * ------------------------------------------------------------------------- */
+
+/* Full VFS path of name inside drawer dir_idx (0 = root). */
+static void dir_path(char *out, size_t n, int dir_idx, const char *name)
+{
+	if (dir_idx == 0) {
+		snprintf(out, n, SD_MOUNT_POINT "/%s", name);
+	} else {
+		snprintf(out, n, SD_MOUNT_POINT "/%s/%s",
+			 drawer_name[dir_idx], name);
+	}
+}
+
+static void br_submit(enum sd_fsop_op op, const char *a, const char *b)
+{
+	if (sd_fsop_submit(op, a, b, br_ents, BR_LIST_MAX) == 0) {
+		br_op = op;
+		br_busy = true;
+		br_msg[0] = '\0';
+	} else {
+		snprintf(br_msg, sizeof(br_msg), "busy");
+	}
+	mark_dirty();
+}
+
+static void br_request_list(void)
+{
+	char a[SD_PATH_MAX];
+
+	dir_path(a, sizeof(a), br_dir, "");
+	/* Trim the trailing '/' the root form leaves ("/SD:/" -> "/SD:"). */
+	size_t len = strlen(a);
+
+	if (len > 0 && a[len - 1] == '/') {
+		a[len - 1] = '\0';
+	}
+	br_submit(SD_FSOP_LIST, a, NULL);
+}
+
+static void browser_open(void)
+{
+	br_dir = 0;
+	br_sel = 0;
+	br_scroll = 0;
+	br_count = 0;
+	br_msg[0] = '\0';
+	br_request_list();
+	screen = SCR_FILES;
+}
+
+/* List rows fill the body above the two bottom buttons. */
+static int br_list_bot(void)
+{
+	return body_bot() - FLIP_H - 6;
+}
+
+static int br_visible(void)
+{
+	return (br_list_bot() - body_top()) / BR_ROW_H;
+}
+
+/* Selection space: the list entries, then the two bottom buttons. */
+#define BR_SEL_LEFT  (br_count)
+#define BR_SEL_RIGHT (br_count + 1)
+
+static void files_btn_rect(int i, int *x, int *y, int *w, int *h)
+{
+	*w = (ui_disp_w() - 2 * MARG - 8) / 2;
+	*h = FLIP_H;
+	*x = MARG + i * (*w + 8);
+	*y = body_bot() - FLIP_H;
+}
+
+static void draw_files(void)
+{
+	char hdr[28], l[28];
+	int y = body_top();
+	int bx, by, bw, bh;
+
+	snprintf(hdr, sizeof(hdr), "FILES: %s", dir_label(br_dir));
+	draw_header(hdr);
+
+	ui_fill_rect(BORDER_PX, y, ui_disp_w() - 2 * BORDER_PX,
+		     br_list_bot() - y, COLOR_BLACK);
+
+	if (br_busy) {
+		ui_text(MARG, y, "working...", COLOR_WHITE, COLOR_BLACK);
+	} else if (br_count == 0) {
+		ui_text(MARG, y, "(empty)", COLOR_GREY, COLOR_BLACK);
+	}
+
+	if (!br_busy) {
+		int vis = br_visible();
+
+		for (int i = 0; i < vis && br_scroll + i < br_count; i++) {
+			const struct sd_dirent *e = &br_ents[br_scroll + i];
+			bool sel = (br_sel == br_scroll + i);
+			uint16_t fg = sel ? COLOR_BLACK : COLOR_WHITE;
+			uint16_t bg = sel ? COLOR_WHITE : COLOR_BLACK;
+			int ry = y + i * BR_ROW_H;
+
+			ui_fill_rect(MARG, ry, ui_disp_w() - 2 * MARG,
+				     BR_ROW_H, bg);
+			if (e->is_dir) {
+				snprintf(l, sizeof(l), "/%.21s", e->name);
+			} else {
+				snprintf(l, sizeof(l), "%.22s", e->name);
+			}
+			ui_text(MARG + 2, ry + (BR_ROW_H - ui_body_h()) / 2,
+				l, fg, bg);
+		}
+	}
+
+	files_btn_rect(0, &bx, &by, &bw, &bh);
+	ui_button(bx, by, bw, bh, (br_dir == 0) ? "+ DRAWER" : "UP",
+		  br_sel == BR_SEL_LEFT);
+	files_btn_rect(1, &bx, &by, &bw, &bh);
+	ui_button(bx, by, bw, bh, "BACK", br_sel == BR_SEL_RIGHT);
+
+	if (br_msg[0]) {
+		draw_footer_text(br_msg);
+	} else {
+		snprintf(l, sizeof(l), "%d items%s  log %s", br_count,
+			 br_truncated ? "+" : "", dir_label(log_dir_idx));
+		draw_footer_text(l);
+	}
+}
+
+/* First drawer name not present in the (root) listing; 0 if all exist. */
+static int br_free_drawer(void)
+{
+	for (int d = 1; d <= SD_DRAWERS; d++) {
+		bool found = false;
+
+		for (int i = 0; i < br_count; i++) {
+			if (br_ents[i].is_dir &&
+			    strcmp(br_ents[i].name, drawer_name[d]) == 0) {
+				found = true;
+				break;
+			}
+		}
+		if (!found) {
+			return d;
+		}
+	}
+	return 0;
+}
+
+static void files_activate_left(void)
+{
+	if (br_dir != 0) {	/* UP */
+		br_dir = 0;
+		br_sel = 0;
+		br_scroll = 0;
+		br_request_list();
+		return;
+	}
+
+	int d = br_free_drawer();	/* + DRAWER */
+
+	if (d == 0) {
+		snprintf(br_msg, sizeof(br_msg), "%d drawers max", SD_DRAWERS);
+		mark_dirty();
+		return;
+	}
+
+	char a[SD_PATH_MAX];
+
+	snprintf(a, sizeof(a), SD_MOUNT_POINT "/%s", drawer_name[d]);
+	br_submit(SD_FSOP_MKDIR, a, NULL);
+}
+
+static void files_activate_sel(void)
+{
+	if (br_busy) {
+		return;
+	}
+
+	if (br_sel == BR_SEL_LEFT) {
+		files_activate_left();
+		return;
+	}
+	if (br_sel == BR_SEL_RIGHT) {
+		if (br_dir != 0) {
+			br_dir = 0;
+			br_sel = 0;
+			br_scroll = 0;
+			br_request_list();
+		} else {
+			screen = SCR_HOME;
+		}
+		return;
+	}
+	if (br_sel >= br_count) {
+		return;
+	}
+
+	const struct sd_dirent *e = &br_ents[br_sel];
+
+	if (e->is_dir) {
+		/* Only the fixed drawers are enterable; foreign directories
+		 * (e.g. what Windows drops on a card) are listed but opaque.
+		 */
+		for (int d = 1; d <= SD_DRAWERS; d++) {
+			if (strcmp(e->name, drawer_name[d]) == 0) {
+				br_dir = d;
+				br_sel = 0;
+				br_scroll = 0;
+				br_request_list();
+				return;
+			}
+		}
+		snprintf(br_msg, sizeof(br_msg), "not a drawer");
+		mark_dirty();
+		return;
+	}
+
+	strncpy(fa_name, e->name, sizeof(fa_name) - 1);
+	fa_name[sizeof(fa_name) - 1] = '\0';
+	fa_sel = 0;
+	fa_confirm_del = false;
+	screen = SCR_FILE_ACT;
+}
+
+static void files_move_sel(int dir)
+{
+	int last = BR_SEL_RIGHT;
+
+	br_sel = (br_sel + dir + last + 1) % (last + 1);
+
+	/* Keep a list selection scrolled into view. */
+	if (br_sel < br_count) {
+		int vis = br_visible();
+
+		if (br_sel < br_scroll) {
+			br_scroll = br_sel;
+		} else if (br_sel >= br_scroll + vis) {
+			br_scroll = br_sel - vis + 1;
+		}
+	}
+}
+
+/* ---- Per-file action menu ---- */
+
+enum fa_row { FA_DELETE = 0, FA_MOVE, FA_LABEL, FA_BACK, FA_COUNT };
+
+static void fa_btn_rect(int i, int *x, int *y, int *w, int *h)
+{
+	int top = body_top() + ui_body_h() + 8;
+
+	*x = MARG;
+	*w = ui_disp_w() - 2 * MARG;
+	*h = ACT_H;
+	*y = top + i * (ACT_H + ACT_GAP);
+}
+
+static void draw_file_act(void)
+{
+	char l[28];
+
+	draw_header("FILE");
+	snprintf(l, sizeof(l), "%.22s", fa_name);
+	ui_text(MARG, body_top(), l, COLOR_WHITE, COLOR_BLACK);
+
+	static const char *const labels[FA_COUNT] = {
+		"DELETE", "MOVE", "LABEL", "BACK",
+	};
+
+	for (int i = 0; i < FA_COUNT; i++) {
+		int x, y, w, h;
+		const char *lab = labels[i];
+
+		if (i == FA_DELETE && fa_confirm_del) {
+			lab = "CONFIRM DELETE?";
+		}
+		fa_btn_rect(i, &x, &y, &w, &h);
+		ui_button(x, y, w, h, lab, fa_sel == i);
+	}
+
+	draw_footer_text(fa_confirm_del ? "DELETE again = erase"
+					: "label adds _TEXT");
+}
+
+static void fa_activate(int i)
+{
+	char a[SD_PATH_MAX];
+
+	if (i != FA_DELETE) {
+		fa_confirm_del = false;
+	}
+
+	switch (i) {
+	case FA_DELETE:
+		if (!fa_confirm_del) {
+			fa_confirm_del = true;	/* arm; next press erases */
+			mark_dirty();
+			break;
+		}
+		dir_path(a, sizeof(a), br_dir, fa_name);
+		br_submit(SD_FSOP_UNLINK, a, NULL);
+		screen = SCR_FILES;
+		break;
+	case FA_MOVE:
+		mv_sel = 0;
+		screen = SCR_FILE_MOVE;
+		break;
+	case FA_LABEL:
+		kp_purpose = KP_FOR_LABEL;
+		keypad_open(KEYPAD_ALPHA, "ADD LABEL (A-Z 0-9)", NULL);
+		screen = SCR_KEYPAD;
+		break;
+	case FA_BACK:
+	default:
+		screen = SCR_FILES;
+		break;
+	}
+}
+
+/* Rename in place: insert "_LABEL" ahead of the extension (or append). */
+static void label_apply(const char *label)
+{
+	char newname[SD_FSOP_NAME_MAX];
+	char a[SD_PATH_MAX], b[SD_PATH_MAX];
+	const char *dot = strrchr(fa_name, '.');
+	int stem = (dot != NULL) ? (int)(dot - fa_name) : (int)strlen(fa_name);
+
+	snprintf(newname, sizeof(newname), "%.*s_%.10s%s",
+		 stem, fa_name, label, (dot != NULL) ? dot : "");
+
+	dir_path(a, sizeof(a), br_dir, fa_name);
+	dir_path(b, sizeof(b), br_dir, newname);
+	br_submit(SD_FSOP_RENAME, a, b);
+}
+
+/* ---- Move destination pick ---- */
+
+/* Destinations: every location except the current one, then BACK. */
+static int mv_dest(int row)
+{
+	int n = 0;
+
+	for (int d = 0; d <= SD_DRAWERS; d++) {
+		if (d == br_dir) {
+			continue;
+		}
+		if (n == row) {
+			return d;
+		}
+		n++;
+	}
+	return -1;	/* BACK row */
+}
+
+#define MV_ROWS (SD_DRAWERS + 1)	/* 4 destinations + BACK */
+
+static void mv_btn_rect(int i, int *x, int *y, int *w, int *h)
+{
+	int top = body_top() + ui_body_h() + 8;
+
+	*x = MARG;
+	*w = ui_disp_w() - 2 * MARG;
+	*h = ACT_H;
+	*y = top + i * (ACT_H + ACT_GAP);
+}
+
+static void draw_file_move(void)
+{
+	char l[28];
+
+	draw_header("MOVE TO");
+	snprintf(l, sizeof(l), "%.22s", fa_name);
+	ui_text(MARG, body_top(), l, COLOR_WHITE, COLOR_BLACK);
+
+	for (int i = 0; i < MV_ROWS; i++) {
+		int x, y, w, h;
+		int d = mv_dest(i);
+
+		mv_btn_rect(i, &x, &y, &w, &h);
+		ui_button(x, y, w, h, (d < 0) ? "BACK" : dir_label(d),
+			  mv_sel == i);
+	}
+
+	draw_footer_text("auto-creates drawer");
+}
+
+static void mv_activate(int i)
+{
+	int d = mv_dest(i);
+
+	if (d < 0) {
+		screen = SCR_FILE_ACT;
+		return;
+	}
+
+	char a[SD_PATH_MAX], b[SD_PATH_MAX];
+
+	dir_path(a, sizeof(a), br_dir, fa_name);
+	dir_path(b, sizeof(b), d, fa_name);
+	br_submit(SD_FSOP_RENAME, a, b);
+	screen = SCR_FILES;
+}
+
+/* Completion poll, run every main-loop pass. Mutating ops chain into a fresh
+ * listing so the screen always shows the card as it now is.
+ */
+static void br_poll(void)
+{
+	int res, cnt;
+
+	if (!br_busy || !sd_fsop_poll(&res, &cnt)) {
+		return;
+	}
+	br_busy = false;
+
+	if (res < 0) {
+		snprintf(br_msg, sizeof(br_msg), "err %d (card?)", res);
+		if (br_op == SD_FSOP_LIST) {
+			br_count = 0;
+		}
+	} else if (br_op == SD_FSOP_LIST) {
+		br_count = cnt;
+		br_truncated = (cnt >= BR_LIST_MAX);
+		if (br_sel > BR_SEL_RIGHT) {
+			br_sel = 0;
+		}
+	} else {
+		br_request_list();	/* delete/mkdir/rename done */
+	}
+	mark_dirty();
+}
+
+/* ---------------------------------------------------------------------------
  * Event routing
  * ------------------------------------------------------------------------- */
 static void home_activate(int i)
@@ -917,6 +1494,18 @@ static void home_activate(int i)
 	case HR_POWER:
 		power_keypad_open();
 		break;
+	case HR_FILES:
+		browser_open();
+		break;
+	case HR_FLIP:
+		/* Controller-side 180 deg rotation: geometry is unchanged, so
+		 * only a full repaint is needed.
+		 */
+		ui_set_flipped(!ui_flipped());
+		ui_clear(COLOR_BLACK);
+		draw_border();
+		mark_dirty();
+		break;
 	default:
 		break;
 	}
@@ -924,10 +1513,16 @@ static void home_activate(int i)
 
 static void pick_activate(int i)
 {
-	if (i < (int)ARRAY_SIZE(soak_durations)) {
-		soak_start(soak_durations[i].ms);
-	} else {
+	if (i == PICK_ROW_DIR) {
+		/* Cycle "/", DRAWER0..3. Just an intent — nothing touches the
+		 * card until a soak actually opens its log there.
+		 */
+		log_dir_idx = (log_dir_idx + 1) % (SD_DRAWERS + 1);
+		mark_dirty();
+	} else if (i == PICK_ROW_BACK) {
 		screen = SCR_HOME;
+	} else {
+		soak_start(soak_durations[i - 1].ms);
 	}
 }
 
@@ -953,6 +1548,51 @@ static void handle_nav(enum nav_action a)
 			role_sel = (role_sel + 1) % 2;
 		} else if (a == NAV_OK) {
 			role_activate(role_sel);
+		}
+		break;
+
+	case SCR_FILES:
+		if (a == NAV_UP) {
+			files_move_sel(-1);
+		} else if (a == NAV_DOWN) {
+			files_move_sel(1);
+		} else if (a == NAV_OK) {
+			files_activate_sel();
+		} else if (a == NAV_BACK) {
+			if (br_dir != 0) {
+				br_dir = 0;
+				br_sel = 0;
+				br_scroll = 0;
+				br_request_list();
+			} else {
+				screen = SCR_HOME;
+			}
+		}
+		break;
+
+	case SCR_FILE_ACT:
+		if (a == NAV_UP) {
+			fa_sel = (fa_sel + FA_COUNT - 1) % FA_COUNT;
+			fa_confirm_del = false;
+		} else if (a == NAV_DOWN) {
+			fa_sel = (fa_sel + 1) % FA_COUNT;
+			fa_confirm_del = false;
+		} else if (a == NAV_OK) {
+			fa_activate(fa_sel);
+		} else if (a == NAV_BACK) {
+			screen = SCR_FILES;
+		}
+		break;
+
+	case SCR_FILE_MOVE:
+		if (a == NAV_UP) {
+			mv_sel = (mv_sel + MV_ROWS - 1) % MV_ROWS;
+		} else if (a == NAV_DOWN) {
+			mv_sel = (mv_sel + 1) % MV_ROWS;
+		} else if (a == NAV_OK) {
+			mv_activate(mv_sel);
+		} else if (a == NAV_BACK) {
+			screen = SCR_FILE_ACT;
 		}
 		break;
 
@@ -1059,6 +1699,54 @@ static void handle_tap(int x, int y, int rx, int ry)
 		}
 		break;
 
+	case SCR_FILES: {
+		int bx, by, bw, bh;
+
+		for (int i = 0; i < 2; i++) {
+			files_btn_rect(i, &bx, &by, &bw, &bh);
+			if (ui_hit(x, y, bx, by, bw, bh)) {
+				br_sel = br_count + i;
+				files_activate_sel();
+				return;
+			}
+		}
+		if (y >= body_top() && y < br_list_bot() && !br_busy) {
+			int idx = br_scroll + (y - body_top()) / BR_ROW_H;
+
+			if (idx < br_count) {
+				br_sel = idx;
+				files_activate_sel();
+			}
+		}
+		break;
+	}
+
+	case SCR_FILE_ACT:
+		for (int i = 0; i < FA_COUNT; i++) {
+			int bx, by, bw, bh;
+
+			fa_btn_rect(i, &bx, &by, &bw, &bh);
+			if (ui_hit(x, y, bx, by, bw, bh)) {
+				fa_sel = i;
+				fa_activate(i);
+				return;
+			}
+		}
+		break;
+
+	case SCR_FILE_MOVE:
+		for (int i = 0; i < MV_ROWS; i++) {
+			int bx, by, bw, bh;
+
+			mv_btn_rect(i, &bx, &by, &bw, &bh);
+			if (ui_hit(x, y, bx, by, bw, bh)) {
+				mv_sel = i;
+				mv_activate(i);
+				return;
+			}
+		}
+		break;
+
 	case SCR_SOAK_PICK:
 		for (int i = 0; i < (int)PICK_COUNT; i++) {
 			int bx, by, bw, bh;
@@ -1157,6 +1845,15 @@ static void draw_current(void)
 	case SCR_ROLE_PICK:
 		draw_role_pick();
 		break;
+	case SCR_FILES:
+		draw_files();
+		break;
+	case SCR_FILE_ACT:
+		draw_file_act();
+		break;
+	case SCR_FILE_MOVE:
+		draw_file_move();
+		break;
 	default:
 		break;
 	}
@@ -1204,6 +1901,11 @@ int main(void)
 			rawx = tap_raw_x;
 			rawy = tap_raw_y;
 			touch_cal_apply(rawx, rawy, &sx, &sy);
+			/* The touch controller's axes are fixed to the glass,
+			 * so a 180-deg flipped view needs the mapped point
+			 * mirrored before any hit test sees it.
+			 */
+			ui_flip_point(&sx, &sy);
 		}
 
 		if (a != NAV_NONE) {
@@ -1215,6 +1917,9 @@ int main(void)
 
 		/* Feed the engine / collect stats every pass, soak or not. */
 		soak_poll();
+
+		/* Browser card-op completions (writer thread finishes them). */
+		br_poll();
 
 		bool dirty = atomic_cas(&screen_dirty, 1, 0);
 		bool changed = (screen != last);

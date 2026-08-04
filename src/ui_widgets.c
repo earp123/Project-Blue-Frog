@@ -21,6 +21,7 @@ static const struct gpio_dt_spec backlight = GPIO_DT_SPEC_GET(DT_NODELABEL(backl
 
 static uint16_t disp_w;
 static uint16_t disp_h;
+static bool view_flipped;
 
 static const struct cfb_font *body_font;  /* 10x16 */
 static const struct cfb_font *title_font; /* 20x32 */
@@ -205,6 +206,39 @@ bool ui_init(void)
 	return body_font != NULL;
 }
 
+bool ui_set_flipped(bool flipped)
+{
+	enum display_orientation o = flipped ? DISPLAY_ORIENTATION_ROTATED_180
+					     : DISPLAY_ORIENTATION_NORMAL;
+
+	if (!device_is_ready(display_dev)) {
+		return false;
+	}
+	if (display_set_orientation(display_dev, o) != 0) {
+		return false;
+	}
+
+	view_flipped = flipped;
+	return true;
+}
+
+bool ui_flipped(void)
+{
+	return view_flipped;
+}
+
+void ui_flip_point(int *x, int *y)
+{
+	if (!view_flipped) {
+		return;
+	}
+	/* The touch controller's axes are fixed to the glass, so a flipped
+	 * panel needs the point mirrored through the screen centre.
+	 */
+	*x = disp_w - 1 - *x;
+	*y = disp_h - 1 - *y;
+}
+
 uint16_t ui_disp_w(void)
 {
 	return disp_w;
@@ -333,10 +367,31 @@ static const struct kp_key dec_tab[] = {
 	{3, 0, "0", KK_CH, '0'}, {3, 1, ".", KK_CH, '.'}, {3, 2, "+/-", KK_SIGN, 0}, {3, 3, "CXL", KK_CANCEL, 0},
 };
 
+/* Filename-label entry: A-Z 0-9 _ only, all FAT-safe. Six columns (the grid
+ * width is per-table) so the 41 keys still get finger-sized cells.
+ */
+static const struct kp_key alpha_tab[] = {
+	{0, 0, "A", KK_CH, 'A'}, {0, 1, "B", KK_CH, 'B'}, {0, 2, "C", KK_CH, 'C'},
+	{0, 3, "D", KK_CH, 'D'}, {0, 4, "E", KK_CH, 'E'}, {0, 5, "F", KK_CH, 'F'},
+	{1, 0, "G", KK_CH, 'G'}, {1, 1, "H", KK_CH, 'H'}, {1, 2, "I", KK_CH, 'I'},
+	{1, 3, "J", KK_CH, 'J'}, {1, 4, "K", KK_CH, 'K'}, {1, 5, "L", KK_CH, 'L'},
+	{2, 0, "M", KK_CH, 'M'}, {2, 1, "N", KK_CH, 'N'}, {2, 2, "O", KK_CH, 'O'},
+	{2, 3, "P", KK_CH, 'P'}, {2, 4, "Q", KK_CH, 'Q'}, {2, 5, "R", KK_CH, 'R'},
+	{3, 0, "S", KK_CH, 'S'}, {3, 1, "T", KK_CH, 'T'}, {3, 2, "U", KK_CH, 'U'},
+	{3, 3, "V", KK_CH, 'V'}, {3, 4, "W", KK_CH, 'W'}, {3, 5, "X", KK_CH, 'X'},
+	{4, 0, "Y", KK_CH, 'Y'}, {4, 1, "Z", KK_CH, 'Z'}, {4, 2, "0", KK_CH, '0'},
+	{4, 3, "1", KK_CH, '1'}, {4, 4, "2", KK_CH, '2'}, {4, 5, "3", KK_CH, '3'},
+	{5, 0, "4", KK_CH, '4'}, {5, 1, "5", KK_CH, '5'}, {5, 2, "6", KK_CH, '6'},
+	{5, 3, "7", KK_CH, '7'}, {5, 4, "8", KK_CH, '8'}, {5, 5, "9", KK_CH, '9'},
+	{6, 0, "_", KK_CH, '_'}, {6, 1, "DEL", KK_DEL, 0}, {6, 2, "CLR", KK_CLR, 0},
+	{6, 3, "OK", KK_OK, 0}, {6, 4, "CXL", KK_CANCEL, 0},
+};
+
 static enum keypad_mode kp_mode;
 static const struct kp_key *kp_tab;
 static int kp_count;
 static int kp_rows;
+static int kp_cols;
 static char kp_title[24];
 static char kp_buf[KP_MAX_CHARS + 1];
 static int kp_len;
@@ -355,7 +410,7 @@ static void kp_cell_rect(int idx, int *x, int *y, int *w, int *h)
 	int gtop = kp_grid_top();
 	int gw = disp_w - 2 * KP_MARGIN;
 	int gh = disp_h - gtop - KP_MARGIN;
-	int cw = gw / 4;
+	int cw = gw / kp_cols;
 	int chh = gh / kp_rows;
 
 	*x = KP_MARGIN + kp_tab[idx].col * cw;
@@ -376,10 +431,17 @@ void keypad_open(enum keypad_mode mode, const char *title, const char *initial)
 		kp_tab = hex_tab;
 		kp_count = ARRAY_SIZE(hex_tab);
 		kp_rows = 5;
+		kp_cols = 4;
+	} else if (mode == KEYPAD_ALPHA) {
+		kp_tab = alpha_tab;
+		kp_count = ARRAY_SIZE(alpha_tab);
+		kp_rows = 7;
+		kp_cols = 6;
 	} else {
 		kp_tab = dec_tab;
 		kp_count = ARRAY_SIZE(dec_tab);
 		kp_rows = 4;
+		kp_cols = 4;
 	}
 
 	strncpy(kp_title, title ? title : "", sizeof(kp_title) - 1);
@@ -403,6 +465,12 @@ void keypad_open(enum keypad_mode mode, const char *title, const char *initial)
 				if (keep && c >= 'a') {
 					c -= 32; /* upper-case */
 				}
+			} else if (mode == KEYPAD_ALPHA) {
+				if (c >= 'a' && c <= 'z') {
+					c -= 32; /* upper-case */
+				}
+				keep = (c >= '0' && c <= '9') ||
+				       (c >= 'A' && c <= 'Z') || c == '_';
 			} else {
 				keep = (c >= '0' && c <= '9') ||
 				       (c == '.' && !kp_has_dot());

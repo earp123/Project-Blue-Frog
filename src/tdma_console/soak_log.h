@@ -38,8 +38,19 @@
 #include "tdma.h"
 #include "sd_log.h"
 
-/* On-disk format version; bump on any struct soak_rec change. */
-#define SOAK_LOG_VERSION	1
+/*
+ * On-disk format version; bump on any record-layout change.
+ *
+ * v2: STATS records gained a typed payload overlay (struct soak_stats).
+ *     v1 packed ten uint32 counters into the payload and squeezed the phase
+ *     error and clock-rate estimate into the record's rssi/snr header fields —
+ *     but ppm is an int32 and snr is an int8, so it railed at ±127 and the
+ *     measurement was destroyed. phase_err had the same latent problem
+ *     (int16 cannot hold the ±frame/2 range). Both are now int32. Room was
+ *     made by dropping rx_ok/missed/dup, which the decoder derives from the
+ *     RX records' frame-counter continuity anyway.
+ */
+#define SOAK_LOG_VERSION	2
 #define SOAK_LOG_MAGIC		0x4B414F53UL	/* "SOAK", little-endian */
 
 /* Eight records per 512-byte sector. Keep this exact. */
@@ -88,6 +99,33 @@ BUILD_ASSERT(sizeof(struct soak_rec) == SOAK_REC_SIZE,
 BUILD_ASSERT(SD_LOG_BLOCK % SOAK_REC_SIZE == 0,
 	     "record size must divide the FAT sector exactly");
 
+/*
+ * STATS payload overlay (little-endian, written into soak_rec.payload).
+ * Exactly 40 bytes: seven raw engine counters plus the three sync-quality
+ * measurements, all int32/uint32 so nothing is clamped.
+ *
+ * The counters are logged ABSOLUTE, not per-soak: tdma_start() deliberately
+ * does not reset the engine's telemetry, so a second soak in the same boot
+ * continues counting. Per-run figures come from differencing the first and
+ * last STATS record, and the runner emits a baseline record at t=0 so that
+ * difference is exact.
+ */
+struct soak_stats {
+	uint32_t tx_done;
+	uint32_t rx_done;
+	uint32_t rx_crc_err;
+	uint32_t rx_bad_header;
+	uint32_t slot_timeouts;
+	uint32_t stale_retx;
+	uint32_t busy_timeouts;
+	int32_t  phase_err_us;	/* secondary: last beacon phase error */
+	int32_t  ppm;		/* secondary: local-vs-master clock rate */
+	uint32_t evt_dt_us;	/* last boundary-to-DIO1 delay */
+} __packed;
+
+BUILD_ASSERT(sizeof(struct soak_stats) <= TDMA_PAYLOAD_LEN,
+	     "soak_stats must fit the record payload");
+
 /* META payload overlay (little-endian, written into soak_rec.payload). */
 struct soak_meta {
 	uint32_t magic;
@@ -123,17 +161,69 @@ struct soak_log_status {
  * Open a session file and queue the META record. Returns 0, or a negative
  * errno if the card is unusable — the caller should carry on with the soak
  * regardless and simply show the failure.
+ *
+ * The file name encodes the run: "<PWR>_<DUR>_NNN.BIN" with M/P for the
+ * power sign (M9 = -9 dBm, P22 = +22 dBm) and the duration in minutes/hours
+ * ("5M", "30M", "2H"; "CT" = continuous, duration_ms == 0). dir is a bare
+ * top-level directory name ("DRAWER0"...) or ""/NULL for the card root; a
+ * missing drawer is created when the file opens.
  */
-int soak_log_start(enum tdma_role role, uint8_t slot_id, int8_t tx_power_dbm);
+int soak_log_start(enum tdma_role role, uint8_t slot_id, int8_t tx_power_dbm,
+		   uint32_t duration_ms, const char *dir);
+
+/* ---- Card file operations (browser back end) --------------------------- *
+ * All card I/O runs on the writer thread — the FatFs LFN working buffer is
+ * a single static (not thread-safe), and a sick card must never stall the
+ * UI. So the browser submits an op and polls for completion from its 20 ms
+ * loop; one op may be in flight at a time.
+ */
+#define SD_FSOP_NAME_MAX 32	/* entry name (truncating longer LFNs) */
+
+enum sd_fsop_op {
+	SD_FSOP_LIST,		/* a = directory path; fills ents */
+	SD_FSOP_UNLINK,		/* a = path */
+	SD_FSOP_MKDIR,		/* a = path */
+	SD_FSOP_RENAME,		/* a -> b (also moves across directories; a
+				 * missing destination drawer is created) */
+};
+
+struct sd_dirent {
+	char name[SD_FSOP_NAME_MAX];
+	uint32_t size;
+	bool is_dir;
+};
+
+/*
+ * Queue one op. a/b are full VFS paths ("/SD:/..."). For LIST, ents/cap
+ * receive the entries (directories first, then names sorted); the buffer is
+ * owned by the caller and must not be read until the op completes. Returns
+ * -EBUSY if an op is already in flight.
+ */
+int sd_fsop_submit(enum sd_fsop_op op, const char *a, const char *b,
+		   struct sd_dirent *ents, int cap);
+
+/* True once the op has finished; result (0 / -errno) and, for LIST, the
+ * entry count are returned and the slot frees for the next op.
+ */
+bool sd_fsop_poll(int *result, int *count);
 
 /* Producers. All are non-blocking and safe to call whether or not a log is
  * open; they drop (and count) rather than wait.
  */
 void soak_log_rx(const struct tdma_rx_msg *msg, uint8_t sync_state);
+
+/*
+ * Record one *transmitted* packet. Call this when the engine's tx_done has
+ * actually advanced, not when a payload is staged: tdma_tx_submit() succeeds
+ * whenever the stage buffer is free, which is far more often than the engine
+ * transmits, and every extra staged payload is overwritten before its slot.
+ * Logging at stage time produced ~2.4 records per real transmission, two
+ * thirds of them for bytes that never reached the air.
+ */
 void soak_log_tx(const uint8_t payload[TDMA_PAYLOAD_LEN], uint8_t slot_id,
 		 uint8_t sync_state);
-void soak_log_stats(const struct tdma_telemetry *t, uint32_t rx_ok,
-		    uint32_t missed, uint32_t dup);
+
+void soak_log_stats(const struct tdma_telemetry *t);
 
 /* Drain the ring, flush and close. Blocks briefly for the writer to finish. */
 int soak_log_stop(void);

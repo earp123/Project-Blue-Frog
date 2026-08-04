@@ -42,6 +42,14 @@
 /* fs_sync() cadence: bounds data loss on a power cut to this many bytes. */
 #define SD_LOG_SYNC_BYTES 65536
 
+/* Longest VFS path handled anywhere in the SD code:
+ * "/SD:/DRAWER0/P22_30M_000_ABCDEFGHIJ.BIN" comfortably fits.
+ */
+#define SD_PATH_MAX	64
+
+/* FAT volume mount point; browser paths are built against this. */
+#define SD_MOUNT_POINT	"/SD:"
+
 struct sd_log_stats {
 	uint32_t rows;		/* successful sd_log_printf() calls */
 	uint32_t bytes;		/* payload bytes staged */
@@ -69,16 +77,20 @@ bool sd_log_mounted(void);
 const char *sd_log_mount_stage(void);
 
 /*
- * Open a new session file "<prefix>NNN.BIN" at the next free NNN. The chosen
- * path is copied to path_out. Resets the statistics.
+ * Open a new session file "<base>_NNN.BIN" at the next free NNN, inside dir
+ * (a bare top-level directory name, e.g. "DRAWER0"; "" or NULL = the root).
+ * A missing dir is created first. The chosen path is copied to path_out.
+ * Resets the statistics.
  *
- * Names are kept 8.3-clean even though exFAT (and therefore FatFs long-name
- * support) is enabled, so the same file naming works on a FAT32 card too.
+ * Names may exceed 8.3: long-name support is always compiled in
+ * (CONFIG_FS_FATFS_EXFAT selects FS_FATFS_LFN), and LFN works on FAT32
+ * volumes too, so the naming is portable across both card formats.
  *
  * May block for as long as the card takes to answer: call it from the
  * soak_log writer thread, never from the UI loop.
  */
-int sd_log_open(const char *prefix, char *path_out, size_t path_len);
+int sd_log_open(const char *dir, const char *base,
+		char *path_out, size_t path_len);
 
 /* Append one formatted row. Returns 0, or a negative errno on write failure
  * (the row is counted in stats.dropped and logging continues).

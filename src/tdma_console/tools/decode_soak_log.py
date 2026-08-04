@@ -25,17 +25,28 @@ REC_FMT = "<BBBBIHhb3sII40s"
 META_FMT = "<IHBBIIIIBBHbBBBI"
 MAGIC = 0x4B414F53  # "SOAK"
 
+SOAK_LOG_VERSION = 2	# newest format this decoder writes assumptions for
 REC_META, REC_RX, REC_TX, REC_STATS = 1, 2, 3, 4
 TYPE_NAME = {REC_META: "meta", REC_RX: "rx", REC_TX: "tx", REC_STATS: "stats"}
 SYNC_NAME = {0: "STOPPED", 1: "SYNCING", 2: "RUNNING"}
 F_NO_CTR = 1 << 0
 
-STATS_FIELDS = ["tx_done", "rx_done", "rx_crc_err", "rx_bad_header",
-                "slot_timeouts", "stale_retx", "busy_timeouts",
-                "rx_ok", "missed", "dup"]
+# v2 STATS payload: seven raw engine counters + three int32 sync measurements.
+STATS_FMT_V2 = "<7I3i"
+STATS_FIELDS_V2 = ["tx_done", "rx_done", "rx_crc_err", "rx_bad_header",
+                   "slot_timeouts", "stale_retx", "busy_timeouts",
+                   "phase_err_us", "ppm", "evt_dt_us"]
+# v1 packed ten uint32 and put phase/ppm in the rssi/snr header fields, where
+# ppm railed against int8. Still decoded so existing logs stay readable.
+STATS_FMT_V1 = "<10I"
+STATS_FIELDS_V1 = ["tx_done", "rx_done", "rx_crc_err", "rx_bad_header",
+                   "slot_timeouts", "stale_retx", "busy_timeouts",
+                   "rx_ok", "missed", "dup"]
+
+ALL_STATS_FIELDS = STATS_FIELDS_V2 + ["rx_ok", "missed", "dup"]
 
 CSV_FIELDS = ["seq", "type", "uptime_ms", "t_us", "slot_id", "sync",
-              "frame_ctr", "rssi", "snr"] + STATS_FIELDS + ["payload"]
+              "frame_ctr", "rssi", "snr"] + ALL_STATS_FIELDS + ["payload"]
 
 
 def parse_meta(payload):
@@ -106,7 +117,7 @@ def main():
     rows = []
     counts = Counter()
     rssi_vals, snr_vals = [], []
-    last_stats = None
+    first_stats = last_stats = None
     seq_prev = None
     seq_gaps = 0
     ctr_by_slot = {}
@@ -136,11 +147,21 @@ def main():
             continue
 
         if rtype == REC_STATS:
-            vals = struct.unpack("<10I", payload[:40])
-            last_stats = dict(zip(STATS_FIELDS, vals))
-            row.update(last_stats)
-            # STATS reuses rssi/snr for phase error and ppm.
-            row.update(rssi=rssi, snr=snr)
+            ver = meta["version"] if meta else SOAK_LOG_VERSION
+            if ver >= 2:
+                vals = struct.unpack(STATS_FMT_V2, payload[:40])
+                cur = dict(zip(STATS_FIELDS_V2, vals))
+            else:
+                vals = struct.unpack(STATS_FMT_V1, payload[:40])
+                cur = dict(zip(STATS_FIELDS_V1, vals))
+                # v1 squeezed these into the header fields; ppm railed at
+                # int8 there, so flag it rather than present it as a reading.
+                cur["phase_err_us"] = rssi
+                cur["ppm"] = snr
+            if first_stats is None:
+                first_stats = cur
+            last_stats = cur
+            row.update(cur)
             rows.append(row)
             continue
 
@@ -173,9 +194,9 @@ def main():
     # ---- report ----
     print("file:     %s (%d records)" % (args.logfile, total))
     if meta:
-        print("meta:     role=%s slot=%d %s %+ddBm freq=%d" % (
+        print("meta:     role=%s slot=%d %s %+ddBm freq=%d (fmt v%d)" % (
             meta["role"], meta["slot_id"], meta["phy"],
-            meta["tx_power_dbm"], meta["freq_hz"]))
+            meta["tx_power_dbm"], meta["freq_hz"], meta["version"]))
         print("timing:   slot=%dus frame=%dus toa=%dus slots=%d" % (
             meta["slot_us"], meta["frame_us"], meta["toa_us"],
             meta["slot_count"]))
@@ -201,8 +222,29 @@ def main():
             bad_bytes_tot, bad_bits_tot, recvd))
 
     if last_stats:
-        print("engine:   " + " ".join("%s=%d" % (k, v)
-                                      for k, v in last_stats.items()))
+        # Engine counters are absolute and are NOT reset by tdma_start(), so a
+        # second soak in one boot continues counting. Difference the baseline
+        # (t=0) record against the last one for the figures for THIS run.
+        counters = [f for f in STATS_FIELDS_V2 if not f.startswith(("phase", "ppm", "evt"))]
+        if first_stats:
+            delta = {k: last_stats.get(k, 0) - first_stats.get(k, 0)
+                     for k in counters}
+            print("engine (this run): " +
+                  " ".join("%s=%d" % (k, v) for k, v in delta.items()))
+        print("engine (absolute): " +
+              " ".join("%s=%d" % (k, last_stats.get(k, 0)) for k in counters))
+
+        ppm_vals = [r["ppm"] for r in rows
+                    if r["type"] == "stats" and r["ppm"] != ""]
+        ph_vals = [r["phase_err_us"] for r in rows
+                   if r["type"] == "stats" and r["phase_err_us"] != ""]
+        if ph_vals:
+            print("sync:     phase_err %d..%d us   ppm %d..%d" % (
+                min(ph_vals), max(ph_vals), min(ppm_vals), max(ppm_vals)))
+            if meta and meta["version"] < 2 and (
+                    min(ppm_vals) <= -128 or max(ppm_vals) >= 127):
+                print("WARNING:  ppm is clamped at the int8 rails in v1 logs --"
+                      " the real value is unknown (fixed in v2)")
 
     if args.out:
         with open(args.out, "w", newline="", encoding="utf-8") as fh:

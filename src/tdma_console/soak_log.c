@@ -11,6 +11,7 @@
 #include "soak_log.h"
 #include "sd_log.h"
 
+#include <zephyr/fs/fs.h>
 #include <zephyr/sys/util.h>
 #include <errno.h>
 #include <string.h>
@@ -44,11 +45,27 @@ static struct {
 	enum tdma_role role;
 	uint8_t slot_id;
 	int8_t tx_power_dbm;
+	char dir[16];	/* "" = root */
+	char base[16];	/* "<PWR>_<DUR>", e.g. "M9_5M" */
 } open_req;
+
+/* One-deep browser op slot (see soak_log.h). */
+enum { FSOP_IDLE, FSOP_PENDING, FSOP_DONE };
+
+static struct {
+	enum sd_fsop_op op;
+	char a[SD_PATH_MAX];
+	char b[SD_PATH_MAX];
+	struct sd_dirent *ents;
+	int cap;
+	int count;
+	int result;
+} fsop;
+static atomic_t fsop_state = ATOMIC_INIT(FSOP_IDLE);
 
 static atomic_t log_active;	/* producers gate on this */
 static bool file_open;		/* writer-thread side */
-static char log_path[32];
+static char log_path[SD_PATH_MAX];
 static const char *err_stage = "";	/* which step failed, for the UI */
 
 static uint32_t seq_next;
@@ -76,10 +93,33 @@ static void submit(struct soak_rec *r)
 	atomic_inc(&stat_queued);
 }
 
-int soak_log_start(enum tdma_role role, uint8_t slot_id, int8_t tx_power_dbm)
+/* "M9" / "P22": sign letter + magnitude, no characters FAT dislikes. */
+static void fmt_power(char *out, size_t n, int8_t dbm)
+{
+	snprintf(out, n, "%c%d", (dbm < 0) ? 'M' : 'P',
+		 (dbm < 0) ? -(int)dbm : (int)dbm);
+}
+
+/* "5M" / "30M" / "2H" / "CT" (continuous). Whole hours shorten to H. */
+static void fmt_duration(char *out, size_t n, uint32_t ms)
+{
+	uint32_t mins = ms / 60000U;
+
+	if (ms == 0U) {
+		snprintf(out, n, "CT");
+	} else if (mins >= 60U && (mins % 60U) == 0U) {
+		snprintf(out, n, "%uH", mins / 60U);
+	} else {
+		snprintf(out, n, "%uM", mins);
+	}
+}
+
+int soak_log_start(enum tdma_role role, uint8_t slot_id, int8_t tx_power_dbm,
+		   uint32_t duration_ms, const char *dir)
 {
 	struct soak_rec r = { 0 };
 	struct soak_meta m = { 0 };
+	char pwr[8], dur[8];
 
 	if (atomic_get(&log_active) || file_open) {
 		return -EBUSY;	/* previous run still closing */
@@ -101,6 +141,11 @@ int soak_log_start(enum tdma_role role, uint8_t slot_id, int8_t tx_power_dbm)
 	open_req.role = role;
 	open_req.slot_id = slot_id;
 	open_req.tx_power_dbm = tx_power_dbm;
+	strncpy(open_req.dir, (dir != NULL) ? dir : "", sizeof(open_req.dir) - 1);
+	open_req.dir[sizeof(open_req.dir) - 1] = '\0';
+	fmt_power(pwr, sizeof(pwr), tx_power_dbm);
+	fmt_duration(dur, sizeof(dur), duration_ms);
+	snprintf(open_req.base, sizeof(open_req.base), "%s_%s", pwr, dur);
 
 	/* Record 0 describes the run, so a decoded file is self-contained. */
 	m.magic = SOAK_LOG_MAGIC;
@@ -176,30 +221,29 @@ void soak_log_tx(const uint8_t payload[TDMA_PAYLOAD_LEN], uint8_t slot_id,
 	submit(&r);
 }
 
-void soak_log_stats(const struct tdma_telemetry *t, uint32_t rx_ok,
-		    uint32_t missed, uint32_t dup)
+void soak_log_stats(const struct tdma_telemetry *t)
 {
 	struct soak_rec r = { 0 };
-	uint32_t c[10];
+	struct soak_stats s = {
+		.tx_done = t->tx_done,
+		.rx_done = t->rx_done,
+		.rx_crc_err = t->rx_crc_err,
+		.rx_bad_header = t->rx_bad_header,
+		.slot_timeouts = t->slot_timeouts,
+		.stale_retx = t->stale_retx,
+		.busy_timeouts = t->busy_timeouts,
+		/* Full width: these are the sync-quality numbers that decide
+		 * how far the slot can be tightened, and v1 clamped ppm into
+		 * an int8 where it simply railed.
+		 */
+		.phase_err_us = t->last_phase_err_us,
+		.ppm = t->last_ppm,
+		.evt_dt_us = t->last_evt_dt_us,
+	};
 
 	r.type = SOAK_REC_STATS;
 	r.sync_state = t->sync_state;
-	r.t_us = t->last_evt_dt_us;
-	r.rssi = (int16_t)t->last_phase_err_us;	/* reuse: phase error, us */
-	r.snr = (int8_t)CLAMP(t->last_ppm, -128, 127);
-
-	/* Exactly ten counters fit the 40-byte payload. */
-	c[0] = t->tx_done;
-	c[1] = t->rx_done;
-	c[2] = t->rx_crc_err;
-	c[3] = t->rx_bad_header;
-	c[4] = t->slot_timeouts;
-	c[5] = t->stale_retx;
-	c[6] = t->busy_timeouts;
-	c[7] = rx_ok;
-	c[8] = missed;
-	c[9] = dup;
-	memcpy(r.payload, c, sizeof(c));
+	memcpy(r.payload, &s, sizeof(s));
 
 	submit(&r);
 }
@@ -245,7 +289,8 @@ static void do_open(void)
 	int rc = sd_log_mount();
 
 	if (rc == 0) {
-		rc = sd_log_open("SOAK", log_path, sizeof(log_path));
+		rc = sd_log_open(open_req.dir, open_req.base,
+				 log_path, sizeof(log_path));
 	}
 
 	if (rc < 0) {
@@ -278,6 +323,140 @@ static void do_close(void)
 	}
 }
 
+/* ---- Browser fs ops (writer thread only) ------------------------------- */
+
+int sd_fsop_submit(enum sd_fsop_op op, const char *a, const char *b,
+		   struct sd_dirent *ents, int cap)
+{
+	if (atomic_get(&fsop_state) != FSOP_IDLE) {
+		return -EBUSY;
+	}
+
+	fsop.op = op;
+	strncpy(fsop.a, (a != NULL) ? a : "", sizeof(fsop.a) - 1);
+	fsop.a[sizeof(fsop.a) - 1] = '\0';
+	strncpy(fsop.b, (b != NULL) ? b : "", sizeof(fsop.b) - 1);
+	fsop.b[sizeof(fsop.b) - 1] = '\0';
+	fsop.ents = ents;
+	fsop.cap = cap;
+	fsop.count = 0;
+	fsop.result = -EIO;
+
+	atomic_set(&fsop_state, FSOP_PENDING);
+	return 0;
+}
+
+bool sd_fsop_poll(int *result, int *count)
+{
+	if (atomic_get(&fsop_state) != FSOP_DONE) {
+		return false;
+	}
+	*result = fsop.result;
+	*count = fsop.count;
+	atomic_set(&fsop_state, FSOP_IDLE);
+	return true;
+}
+
+/* Directories first, then names; insertion sort is plenty at <= cap items. */
+static void fsop_sort(struct sd_dirent *e, int n)
+{
+	for (int i = 1; i < n; i++) {
+		struct sd_dirent key = e[i];
+		int j = i - 1;
+
+		while (j >= 0 &&
+		       (( key.is_dir && !e[j].is_dir) ||
+			(key.is_dir == e[j].is_dir &&
+			 strcmp(key.name, e[j].name) < 0))) {
+			e[j + 1] = e[j];
+			j--;
+		}
+		e[j + 1] = key;
+	}
+}
+
+static int fsop_list(void)
+{
+	/* Static: an LFN fs_dirent is large and the writer stack is sized for
+	 * FatFs, not for name buffers.
+	 */
+	static struct fs_dir_t dirp;
+	static struct fs_dirent ent;
+	int rc;
+
+	fs_dir_t_init(&dirp);
+	rc = fs_opendir(&dirp, fsop.a);
+	if (rc < 0) {
+		return rc;
+	}
+
+	while (fsop.count < fsop.cap) {
+		rc = fs_readdir(&dirp, &ent);
+		if (rc < 0 || ent.name[0] == '\0') {
+			break;
+		}
+
+		struct sd_dirent *d = &fsop.ents[fsop.count++];
+
+		strncpy(d->name, ent.name, sizeof(d->name) - 1);
+		d->name[sizeof(d->name) - 1] = '\0';
+		d->size = (uint32_t)ent.size;
+		d->is_dir = (ent.type == FS_DIR_ENTRY_DIR);
+	}
+
+	fs_closedir(&dirp);
+	if (rc == 0) {
+		fsop_sort(fsop.ents, fsop.count);
+	}
+	return rc;
+}
+
+/* RENAME doubles as move; create a missing destination drawer on the way. */
+static int fsop_rename(void)
+{
+	char *slash = strrchr(fsop.b, '/');
+
+	if (slash != NULL && slash > fsop.b + strlen(SD_MOUNT_POINT)) {
+		*slash = '\0';
+		int rc = fs_mkdir(fsop.b);
+
+		*slash = '/';
+		if (rc < 0 && rc != -EEXIST) {
+			return rc;
+		}
+	}
+	return fs_rename(fsop.a, fsop.b);
+}
+
+static void do_fsop(void)
+{
+	int rc = sd_log_mount();
+
+	if (rc < 0) {
+		fsop.result = rc;
+		return;
+	}
+
+	switch (fsop.op) {
+	case SD_FSOP_LIST:
+		rc = fsop_list();
+		break;
+	case SD_FSOP_UNLINK:
+		rc = fs_unlink(fsop.a);
+		break;
+	case SD_FSOP_MKDIR:
+		rc = fs_mkdir(fsop.a);
+		break;
+	case SD_FSOP_RENAME:
+		rc = fsop_rename();
+		break;
+	default:
+		rc = -EINVAL;
+		break;
+	}
+	fsop.result = rc;
+}
+
 static void writer_thread_fn(void *p1, void *p2, void *p3)
 {
 	struct soak_rec r;
@@ -289,6 +468,14 @@ static void writer_thread_fn(void *p1, void *p2, void *p3)
 	for (;;) {
 		if (atomic_and(&cmd_flags, ~CMD_OPEN) & CMD_OPEN) {
 			do_open();
+		}
+
+		/* Browser op, if one is queued. Interleaves freely with record
+		 * draining — same thread, so FatFs state is never contended.
+		 */
+		if (atomic_get(&fsop_state) == FSOP_PENDING) {
+			do_fsop();
+			atomic_set(&fsop_state, FSOP_DONE);
 		}
 
 		/* Wake on a record, or periodically so the close handshake

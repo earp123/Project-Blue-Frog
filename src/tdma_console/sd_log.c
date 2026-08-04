@@ -20,8 +20,7 @@
 #include <string.h>
 
 #define SD_DISK_NAME	"SD"	/* matches disk-name in the display overlay */
-#define SD_MOUNT_POINT	"/SD:"
-#define SD_MAX_SESSIONS	1000	/* NNN in the 8.3 session filename */
+#define SD_MAX_SESSIONS	1000	/* NNN in the session filename */
 #define SD_DISK_INIT_TRIES	3
 #define SD_DISK_INIT_RETRY_MS	250
 
@@ -196,9 +195,11 @@ static int flush_blocks(bool final)
 	return 0;
 }
 
-int sd_log_open(const char *prefix, char *path_out, size_t path_len)
+int sd_log_open(const char *dir, const char *base,
+		char *path_out, size_t path_len)
 {
-	char path[32];
+	char prefix[SD_PATH_MAX];
+	char path[SD_PATH_MAX];
 	struct fs_dirent ent;
 	int rc = -ENOSPC;
 
@@ -209,15 +210,29 @@ int sd_log_open(const char *prefix, char *path_out, size_t path_len)
 		return -EBUSY;
 	}
 
+	/* Destination directory, created on first use so "point the log at
+	 * DRAWER2" works whether or not the drawer exists yet.
+	 */
+	if (dir != NULL && dir[0] != '\0') {
+		snprintf(prefix, sizeof(prefix), SD_MOUNT_POINT "/%s", dir);
+		rc = fs_mkdir(prefix);
+		if (rc < 0 && rc != -EEXIST) {
+			return rc;
+		}
+		snprintf(prefix, sizeof(prefix), SD_MOUNT_POINT "/%s/%s",
+			 dir, base);
+	} else {
+		snprintf(prefix, sizeof(prefix), SD_MOUNT_POINT "/%s", base);
+	}
+
 	/*
-	 * First unused <prefix>NNN.BIN, so a run never clobbers an earlier one.
+	 * First unused <base>_NNN.BIN, so a run never clobbers an earlier one.
 	 * Only -ENOENT means "free"; any other error is a sick volume and must
 	 * abort the scan immediately. Grinding through all 1000 candidates on a
 	 * card that errors every stat is a thousand SPI round-trips.
 	 */
 	for (int i = 0; i < SD_MAX_SESSIONS; i++) {
-		snprintf(path, sizeof(path), SD_MOUNT_POINT "/%s%03d.BIN",
-			 prefix, i);
+		snprintf(path, sizeof(path), "%s_%03d.BIN", prefix, i);
 		rc = fs_stat(path, &ent);
 		if (rc == -ENOENT) {
 			rc = 0;
