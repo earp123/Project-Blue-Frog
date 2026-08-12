@@ -12,7 +12,7 @@ For hardware wiring, build/flash instructions, and SDK setup, see
 
 On-device radio-evaluation tooling for the nRF5340 DK + Wio-SX1262 (SX1262),
 plus the first slice of the wireless-intercom firmware (TDMA radio layer).
-_Last updated: 2026-08-01._
+_Last updated: 2026-08-12._
 
 ### Firmware variants
 
@@ -265,6 +265,40 @@ screen ("LOG" row); a missing drawer is created when a log opens there.
 - Foreign directories (e.g. Windows' "System Volume Information") list but
   are not enterable; >64 entries shows a truncation marker.
 
+### TX-start latency instrumentation (2026-08-12)
+
+Instrumentation to measure `TDMA_TX_START_LATENCY_US` on the bench — no
+constant or behaviour change yet. The header defines the constant as the
+chip-only SetTx→first-preamble latency (100 µs), but its one consumer,
+`tdma_core_sync_feed()`, needs the full boundary→first-preamble delay, which
+additionally contains the radio-thread wake and the `slot_tx_enter` SPI
+sequence (ClearIrqStatus / SetFS / SetTx, each behind BUSY waits) — the
+~1 ms gap. The plan is to redefine the constant as boundary→air and set it
+from measurement rather than refine the chip figure.
+
+- **Two telemetry fields** (additive; the STATS v2 SD overlay is at exactly
+  40 bytes and is deliberately untouched): `dt_by_slot[]` — `last_evt_dt_us`
+  attributed to the slot it occurred in — and `tx_evt_dt_us`, that dt latched
+  only on TxDone events, i.e. this unit's own boundary→TxDone delay
+  (TX latency + time-on-air), independent of sync alignment.
+- **Soak screen gains a `dtx N  drx N` row**: own TX dt plus the watched peer
+  slot's RX dt (2-unit kit: master watches slot 1, secondary slot 0).
+- **Why both**: the open "~1.1 ms per-role asymmetry" (07-21 findings, below)
+  may not be per-role at all — `slot_tx_enter` has no role branch. A locked
+  secondary aligns its boundary through the wrong constant and so sits late
+  by exactly the constant's error, which makes *cross-unit*
+  boundary-referenced readings differ by ~1.1 ms even if the two units' true
+  TX latencies are identical. Own `dtx` is immune to that offset; cross-slot
+  `drx` carries it. Comparing the two separates a real asymmetry (split
+  per-role constants) from a plain constant error (one corrected constant).
+- Built-in self-check: the secondary's `drx` should read ≈7732 µs
+  (TOA_const + L_const) regardless of the true latency — the sync loop
+  aligns it there by construction. If it doesn't, the instrumentation itself
+  is suspect.
+- These fields join the bench-diagnostics strip candidates (see
+  "Bench diagnostics" below), except `tx_evt_dt_us` is likely worth keeping
+  as the permanent regression check on the constant.
+
 ### Mandatory power-on sequence + minimal HOME (2026-07-31)
 
 The field console now runs a two-step, session-only power-on sequence before
@@ -376,7 +410,10 @@ inferring it from DIO1 activity alone.
 - **Open items before tightening to 20 ms slots**: TX-start latency differs
   between master and secondary by ~1.1 ms and `TDMA_TX_START_LATENCY_US` only
   reflects the master's value (feeds the sync math, currently absorbed by the
-  50 ms guard band); `tdma_port_add_phase_adj()` overwrites rather than
+  50 ms guard band) — measurement instrumentation added 2026-08-12 (see
+  "TX-start latency instrumentation" above; the apparent asymmetry may be the
+  constant's own error reflected through sync rather than a per-role
+  difference); `tdma_port_add_phase_adj()` overwrites rather than
   accumulates a pending correction (latent — only one correction is issued
   per beacon today).
 
