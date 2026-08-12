@@ -281,6 +281,7 @@ void tdma_core_on_dio1(void)
 	eng.telem.dio1_edges = tdma_port_dio1_edges();
 	eng.telem.last_evt_dt_us = ts - tdma_port_last_boundary();
 	eng.telem.evt_by_slot[eng.cur_slot]++;
+	eng.telem.dt_by_slot[eng.cur_slot] = eng.telem.last_evt_dt_us;
 	if (ev.irq == 0U) {
 		eng.telem.drain_empty++;
 	}
@@ -293,6 +294,7 @@ void tdma_core_on_dio1(void)
 
 	if (ev.irq & SX126X_IRQ_TX_DONE) {
 		eng.telem.tx_done++;
+		eng.telem.tx_evt_dt_us = eng.telem.last_evt_dt_us;
 	}
 
 	if (ev.irq & (SX126X_IRQ_CRC_ERR | SX126X_IRQ_HEADER_ERR)) {

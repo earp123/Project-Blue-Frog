@@ -161,6 +161,19 @@ struct tdma_telemetry {
 	uint32_t arm_by_slot[TDMA_SLOT_COUNT];
 	uint32_t evt_by_slot[TDMA_SLOT_COUNT];
 	uint32_t last_evt_dt_us;
+
+	/*
+	 * TX-start latency measurement (card BlfSswKD). dt_by_slot is
+	 * last_evt_dt_us attributed per slot: the boundary-to-DIO1 delay of
+	 * the most recent event in each slot. tx_evt_dt_us latches that dt
+	 * only for events carrying TxDone, so on either role it is this
+	 * unit's own boundary -> TxDone delay (L_tx + TOA), independent of
+	 * sync alignment. Cross-slot RxDone dt additionally carries the
+	 * peer's boundary offset; comparing the two separates a real TX
+	 * latency asymmetry from a sync offset caused by a wrong constant.
+	 */
+	uint32_t dt_by_slot[TDMA_SLOT_COUNT];
+	uint32_t tx_evt_dt_us;
 };
 
 int tdma_init(const struct tdma_config *cfg);

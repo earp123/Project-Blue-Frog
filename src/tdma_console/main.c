@@ -574,6 +574,15 @@ static void draw_soak_dynamic(void)
 	ui_text(MARG, y, l, COLOR_WHITE, COLOR_BLACK);
 	y += sp;
 
+	/* Own boundary->TxDone dt, and the peer slot's boundary->RxDone dt
+	 * (2-unit kit: master watches slot 1, secondary watches slot 0).
+	 * Both are L + TOA; see the tdma_telemetry comment in tdma.h.
+	 */
+	snprintf(l, sizeof(l), "dtx %u  drx %u", t->tx_evt_dt_us,
+		 t->dt_by_slot[(role == TDMA_ROLE_MASTER) ? 1 : 0]);
+	ui_text(MARG, y, l, COLOR_WHITE, COLOR_BLACK);
+	y += sp;
+
 	if (soak.rx_ok) {
 		snprintf(l, sizeof(l), "rssi %d  snr %d",
 			 soak.last_rssi, soak.last_snr);
