@@ -265,9 +265,9 @@ int tdma_radio_slot_tx_enter(void)
 
 	/*
 	 * RX slots now run continuously, so the chip no longer drops to the FS
-	 * fallback on its own before a TX slot. Step through FS explicitly:
-	 * SetTx then starts from a locked PLL, which is the precondition
-	 * TDMA_TX_START_LATENCY_US describes.
+	 * fallback on its own before a TX slot. Step through FS explicitly so
+	 * SetTx starts from a locked PLL. This whole sequence is part of the
+	 * boundary-to-air delay TDMA_TX_START_LATENCY_US measures.
 	 */
 	ret = sx126x_cmd_set_fs();
 	if (ret < 0) {

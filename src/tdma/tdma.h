@@ -51,13 +51,15 @@
  * Time-on-air at SF5 / BW 500 kHz / CR 4-5, explicit header, CRC on,
  * LDRO off, 12-symbol preamble, 44-byte payload:
  *   t_sym      = 2^5 / 500 kHz                = 64 us
- *   t_preamble = (12 + 4.25) * t_sym          = 1040 us
+ *   t_preamble = (12 + 6.25) * t_sym          = 1168 us
+ *     (SF5/SF6 carry a 6.25-symbol sync overhead, not the 4.25 of
+ *      SF7+ — SX1261/2 datasheet, LoRa time-on-air)
  *   n_payload  = 8 + ceil((8*44 - 4*5 + 28 + 16) / (4*5)) * (4+1)
  *              = 8 + 19*5                     = 103 symbols
  *   t_payload  = 103 * t_sym                  = 6592 us
- *   total                                     = 7632 us
+ *   total                                     = 7760 us
  */
-#define TDMA_TOA_US		7632
+#define TDMA_TOA_US		7760
 
 /*
  * Test-build slot width: fat guard bands for bring-up. Production target is
@@ -73,13 +75,16 @@
 #define TDMA_SLOT_ACTIVE_US	((TDMA_SLOT_DURATION_US / 10) * 9)
 
 /*
- * Fixed latency between SetTx and first preamble symbol on air, with the
- * radio parked in FS (PLL locked) and a 40 us PA ramp. Used by the secondary
- * to derive the master's slot-0 boundary from an RxDone timestamp.
- * TODO(M2+): measure with a logic analyzer and refine; a constant error here
- * offsets all units identically, so the fat guard bands absorb it.
+ * Boundary -> first preamble symbol on air: radio-thread wake + the
+ * slot_tx_enter SPI sequence (ClearIrqStatus / SetFS / SetTx, each behind
+ * BUSY waits) + chip SetTx-from-FS latency. Used by the secondary to
+ * derive the master's slot-0 boundary from an RxDone timestamp.
+ * Role-independent: both units measured boundary -> TxDone at 8292 us
+ * (= TOA + 532) via the tx_evt_dt_us telemetry latch, bench, 50 ms
+ * slots, 2026-08-16; see card BlfSswKD. tx_evt_dt_us reading
+ * TDMA_TOA_US + this constant is the standing regression check.
  */
-#define TDMA_TX_START_LATENCY_US 100
+#define TDMA_TX_START_LATENCY_US 532
 
 /*
  * There is deliberately no RX guard lead. An earlier revision biased the

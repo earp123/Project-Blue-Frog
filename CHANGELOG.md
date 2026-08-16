@@ -12,7 +12,7 @@ For hardware wiring, build/flash instructions, and SDK setup, see
 
 On-device radio-evaluation tooling for the nRF5340 DK + Wio-SX1262 (SX1262),
 plus the first slice of the wireless-intercom firmware (TDMA radio layer).
-_Last updated: 2026-08-12._
+_Last updated: 2026-08-16._
 
 ### Firmware variants
 
@@ -299,6 +299,43 @@ from measurement rather than refine the chip figure.
   "Bench diagnostics" below), except `tx_evt_dt_us` is likely worth keeping
   as the permanent regression check on the constant.
 
+### TX-start latency measured; TOA + latency constants corrected (2026-08-16)
+
+Bench measurement over the instrumentation above (both consoles, 50 ms
+slots) closed the question: **there is no per-role asymmetry**. Both units
+read boundary→TxDone `dtx` = 8292 µs — identical — and every self-check
+landed exactly: the secondary's `drx` held at 7732 µs (TOA_const + L_const,
+where the sync loop parks it by construction) and the master's
+`drx` = 8852 µs matched the predicted sync offset Δ = 560 µs to the
+microsecond.
+
+The "~1.1 ms per-role asymmetry" from the 07-21 findings is thereby
+resolved as a **constant error propagated through sync alignment**: the
+secondary aligned its boundary through the wrong constants and sat 560 µs
+late (432 µs latency error + 128 µs TOA error), which any cross-unit
+boundary-referenced reading picked up in full — while the TX paths
+themselves are exactly role-symmetric.
+
+Two constants corrected in [`src/tdma/tdma.h`](src/tdma/tdma.h); no code
+change:
+
+- **`TDMA_TOA_US` 7632 → 7760.** The derivation used SF7+'s 4.25-symbol
+  preamble sync overhead; SF5/SF6 carry 6.25 symbols, so
+  t_preamble = (12 + 6.25) × 64 = 1168 µs.
+- **`TDMA_TX_START_LATENCY_US` 100 → 532**, redefined from the chip-only
+  SetTx→air figure to the full boundary→air delay its one consumer — the
+  sync equation — actually needs: radio-thread wake + the `slot_tx_enter`
+  SPI sequence + chip latency. 532 = measured 8292 − TOA 7760.
+  `tx_evt_dt_us` reading TOA + this constant is the standing regression
+  check.
+
+Effect: a locked secondary's boundary moves 560 µs earlier, coinciding with
+the master's. Guard budget at the 20 ms target: worst in-slot completion is
+532 + 7760 ≈ 8.3 ms, leaving ~11.7 ms of slack — now a measured number
+rather than an estimate. On-bench confirmation after reflashing both units:
+all four soak-screen readings (`dtx`/`drx`, both roles) should collapse to
+≈8292 µs.
+
 ### Mandatory power-on sequence + minimal HOME (2026-07-31)
 
 The field console now runs a two-step, session-only power-on sequence before
@@ -407,15 +444,14 @@ inferring it from DIO1 activity alone.
 - **Result**: full duplex on hardware, ~5 packets/s each direction, zero
   CRC/header errors either side, sync lock in ~6 s, `phase_err` settling to
   single-digit µs, RSSI −36…−40 dBm / SNR +7…+9 dB throughout.
-- **Open items before tightening to 20 ms slots**: TX-start latency differs
-  between master and secondary by ~1.1 ms and `TDMA_TX_START_LATENCY_US` only
-  reflects the master's value (feeds the sync math, currently absorbed by the
-  50 ms guard band) — measurement instrumentation added 2026-08-12 (see
-  "TX-start latency instrumentation" above; the apparent asymmetry may be the
-  constant's own error reflected through sync rather than a per-role
-  difference); `tdma_port_add_phase_adj()` overwrites rather than
-  accumulates a pending correction (latent — only one correction is issued
-  per beacon today).
+- **Open items before tightening to 20 ms slots**: TX-start latency
+  appeared to differ between master and secondary by ~1.1 ms — resolved
+  2026-08-16 as a constant error propagated through sync alignment, not a
+  per-role difference: measured role-identical, and both
+  `TDMA_TX_START_LATENCY_US` and `TDMA_TOA_US` corrected (see "TX-start
+  latency measured" above); `tdma_port_add_phase_adj()` overwrites rather
+  than accumulates a pending correction (latent — only one correction is
+  issued per beacon today).
 
 ### Bench diagnostics (2026-07-21)
 
