@@ -332,9 +332,10 @@ change:
 Effect: a locked secondary's boundary moves 560 µs earlier, coinciding with
 the master's. Guard budget at the 20 ms target: worst in-slot completion is
 532 + 7760 ≈ 8.3 ms, leaving ~11.7 ms of slack — now a measured number
-rather than an estimate. On-bench confirmation after reflashing both units:
-all four soak-screen readings (`dtx`/`drx`, both roles) should collapse to
-≈8292 µs.
+rather than an estimate. Confirmed on the bench after reflashing both
+units: all four soak-screen readings (`dtx`/`drx`, both roles) collapsed
+to ≈8292 µs with tens-of-µs jitter, i.e. the sync offset Δ went to zero
+as predicted.
 
 ### Mandatory power-on sequence + minimal HOME (2026-07-31)
 
