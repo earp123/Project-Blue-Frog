@@ -337,6 +337,41 @@ units: all four soak-screen readings (`dtx`/`drx`, both roles) collapsed
 to ≈8292 µs with tens-of-µs jitter, i.e. the sync offset Δ went to zero
 as predicted.
 
+### Phase corrections accumulate (2026-08-16)
+
+`tdma_port_add_phase_adj()` in
+[`src/tdma/tdma_port.c`](src/tdma/tdma_port.c) was named "add" but
+implemented *set* (`atomic_set`), so a second post landing before the next
+slot boundary silently discarded the first. Now `atomic_add`: corrections
+accumulate into one pending value that `slot_alarm_cb()` folds in once via
+`atomic_clear`.
+
+No behavior change for today's call pattern — `tdma_core_sync_feed()` posts
+one correction per beacon (one per frame) and boundaries consume four times
+per frame, so there is never more than one outstanding value. It matters
+once two posts can land between consumptions: a slew-limited loop splitting
+a large error into partial steps, or a drift/ppm feed-forward writer
+alongside the beacon correction, both on the table for the M3 filter work.
+At 20 ms slots with `TDMA_SYNC_LOCK_ERR_US` tightened, a dropped ms-scale
+correction can bounce a unit out of RUNNING.
+
+- The race with the consumer is benign under add: a post either lands
+  before the ISR's `atomic_clear` (applied at that boundary) or after
+  (pending for the next). Nothing is lost.
+- Negative adjustments still work through two's-complement wraparound on
+  the unsigned add at the consumer; the `(uint32_t)` cast stays.
+- **No consumption-side per-boundary clamp.** Post-side clamping already
+  exists where it matters (steady-state step clamped to
+  ±`TDMA_SYNC_STEP_CLAMP_US` at the call site), and the acquisition snap is
+  deliberately unclamped and forward-only. A per-boundary application clamp
+  belongs with the M3 sync-filter rework (`TODO(M3+)` in
+  `tdma_core_sync_feed()`).
+
+Step 3 (first half) of the 50 ms → 20 ms tightening sequence; tightening
+`TDMA_SYNC_LOCK_ERR_US` to ~250 µs follows as a separate change once this
+soaks clean. Task write-up:
+[`docs/phase_adj_accumulate.md`](docs/phase_adj_accumulate.md).
+
 ### Mandatory power-on sequence + minimal HOME (2026-07-31)
 
 The field console now runs a two-step, session-only power-on sequence before
@@ -450,9 +485,10 @@ inferring it from DIO1 activity alone.
   2026-08-16 as a constant error propagated through sync alignment, not a
   per-role difference: measured role-identical, and both
   `TDMA_TX_START_LATENCY_US` and `TDMA_TOA_US` corrected (see "TX-start
-  latency measured" above); `tdma_port_add_phase_adj()` overwrites rather
-  than accumulates a pending correction (latent — only one correction is
-  issued per beacon today).
+  latency measured" above); `tdma_port_add_phase_adj()` overwrote rather
+  than accumulated a pending correction (latent — only one correction is
+  issued per beacon today) — resolved 2026-08-16, it now accumulates (see
+  "Phase corrections accumulate" above).
 
 ### Bench diagnostics (2026-07-21)
 

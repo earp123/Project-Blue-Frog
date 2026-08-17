@@ -69,7 +69,7 @@ uint32_t tdma_port_last_boundary(void)
 
 void tdma_port_add_phase_adj(int32_t adj_us)
 {
-	atomic_set(&phase_adj_us, adj_us);
+	atomic_add(&phase_adj_us, adj_us);
 }
 
 /* DIO1 edge: timestamp + flag only; all SPI work happens on the radio thread. */
@@ -94,7 +94,8 @@ static struct counter_alarm_cfg alarm_cfg;
 /*
  * Slot boundary alarm. Re-arms itself from an accumulating absolute tick
  * target — never "now + delta" — so command latency and ISR jitter cannot
- * accumulate into the cadence. A pending sync correction is folded in once.
+ * accumulate into the cadence. Pending sync corrections accumulate and the
+ * sum is folded in once.
  */
 static void slot_alarm_cb(const struct device *dev, uint8_t chan,
 			  uint32_t ticks, void *user_data)

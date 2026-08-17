@@ -49,8 +49,10 @@ uint32_t tdma_port_last_boundary(void);	 /* slot-clock time of last slot tick */
 uint32_t tdma_port_dio1_edges(void);	 /* diagnostic: raw DIO1 edge count */
 
 /*
- * One-shot phase adjustment (us, signed) folded into the next alarm target
- * by the alarm ISR; the accumulating absolute target keeps it permanent.
+ * Post a phase adjustment (us, signed). Corrections accumulate into a single
+ * pending value that the alarm ISR folds into the next alarm target in full,
+ * so multiple posts between boundaries sum rather than overwrite one another.
+ * The accumulating absolute target keeps the adjustment permanent.
  */
 void tdma_port_add_phase_adj(int32_t adj_us);
 
