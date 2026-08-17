@@ -57,7 +57,10 @@ preamble, +22 dBm). Slot width 50 ms for bring-up (one constant,
   window's end; TX staging during RX-slot slack; drop-oldest RX msgq;
   telemetry counters. Secondary units acquire the master's slot-0 beacon
   (snap, then proportional step clamped to ±500 µs/frame) and go SYNCING →
-  RUNNING after 3 beacons under 1 ms error.
+  RUNNING after 3 beacons under 250 µs error. That transition is one-way:
+  `tdma_start()` is the only entry into SYNCING, so a locked unit never
+  re-enters acquisition and the lock threshold governs start-up alignment
+  only.
 - **App** — Kconfig role/slot (`TDMA_ROLE_MASTER`/`TDMA_ROLE_SECONDARY`,
   `TDMA_SLOT_ID`), telemetry print every 5 s over UART, and `tdma` shell
   commands (`tx`, `rx [s]`, `start`, `stop`, `stats`) for M0 manual bring-up.
@@ -524,7 +527,10 @@ inferring it from DIO1 activity alone.
   latency measured" above); `tdma_port_add_phase_adj()` overwrote rather
   than accumulated a pending correction (latent — only one correction is
   issued per beacon today) — resolved 2026-08-16, it now accumulates (see
-  "Phase corrections accumulate" above).
+  "Phase corrections accumulate" above). Both are now closed, and the
+  tightening sequence reached step 3 the same day
+  (`TDMA_SYNC_LOCK_ERR_US` 1000 → 250 µs). What remains before calling
+  20 ms proven is a soak at the 20 ms slot itself, with all four units.
 
 ### Bench diagnostics (2026-07-21)
 
@@ -702,6 +708,15 @@ native SX126x LoRa driver this project uses. See the README's
   decoder use modular deltas and ignore backward jumps as a peer restart);
   absolute cross-file alignment past a wrap would need the decoder to unwrap
   into a monotonic index, which is not built.
+- **The 250 µs lock threshold is validated on two units at 50 ms only.** Its
+  ~5× margin comes from an 11 min two-unit soak whose worst |`phase_err`| was
+  51 µs. At the 20 ms target the frame shortens to 80 ms and, with four units,
+  a secondary sees the beacon on the same one-per-frame cadence but has three
+  peers' slots between corrections — neither the phase envelope nor the
+  acquisition transient has been re-measured under those conditions. Tightening
+  cannot destabilise a *running* link (the transition is one-way), so the
+  failure mode to watch for is a unit that is slow to lock or never leaves
+  SYNCING, not one that drops out mid-run.
 - **Field PER is unmeasured.** The 5-minute bench soak below closed at 0 % loss
   with ~45 dB of margin over SF5/BW500 sensitivity — that validates the stack,
   not the range. Loss behaviour at distance is still unknown.
