@@ -337,6 +337,40 @@ units: all four soak-screen readings (`dtx`/`drx`, both roles) collapsed
 to ≈8292 µs with tens-of-µs jitter, i.e. the sync offset Δ went to zero
 as predicted.
 
+### Sync lock threshold tightened to 250 µs (2026-08-16)
+
+`TDMA_SYNC_LOCK_ERR_US` 1000 → 250 in [`src/tdma/tdma.h`](src/tdma/tdma.h).
+Step 3 (second half) of the 50 ms → 20 ms tightening sequence, taken after
+the accumulate change below soaked clean.
+
+**What the constant actually governs.** Acquisition only. It is the bar
+`SYNCING` measures against to reach `RUNNING`, and there is no
+`RUNNING` → `SYNCING` path — `tdma_start()` is the sole entry into
+`SYNCING`, so once a unit locks it stays locked and a beacon over the
+threshold only resets `lock_streak`. Tightening therefore cannot destabilise
+a running link; it raises how well aligned a unit must be before it starts
+transmitting, at the cost of possibly sitting in `SYNCING` a little longer.
+
+**Measured basis** — 11 min two-unit soak, 50 ms slots, +0 dBm, both roles
+logged to SD (fmt v2):
+
+- Secondary steady state (575 samples after 60 s): `phase_err` median 0 µs,
+  mean −1.7 µs, p95 |err| 24 µs, envelope −51…+27 µs. No drift — first-half
+  mean −1.85 µs vs second-half −1.61 µs.
+- Worst |`phase_err`| anywhere in the run was 51 µs, so 250 µs keeps ~5×
+  margin over the observed envelope.
+- Acquisition was already inside ±11 µs before the first lock (`SYNCING` →
+  `RUNNING` at +2.30 s), so the tighter bar would not have delayed this
+  run's lock at all.
+- `drx` median 8290 µs (secondary) / 8291 µs (master), σ 13–15 µs — both
+  roles agreeing to 1 µs, as the constants correction above predicted.
+- Link: PER 0.000%, 0 missed, 0 dup over 3322 packets; `slot_timeouts`,
+  `stale_retx`, `busy_timeouts` all 0 on the secondary.
+- `ppm` is a real reading for the first time (v1 railed it at ±127): mean
+  −6.9 ppm crystal-to-crystal offset. Its σ of 68 is measurement noise, not
+  clock instability — a per-beacon estimate over one 200 ms frame turns the
+  observed ±13 µs timestamp jitter into ±65 ppm.
+
 ### Phase corrections accumulate (2026-08-16)
 
 `tdma_port_add_phase_adj()` in
@@ -352,8 +386,10 @@ per frame, so there is never more than one outstanding value. It matters
 once two posts can land between consumptions: a slew-limited loop splitting
 a large error into partial steps, or a drift/ppm feed-forward writer
 alongside the beacon correction, both on the table for the M3 filter work.
-At 20 ms slots with `TDMA_SYNC_LOCK_ERR_US` tightened, a dropped ms-scale
-correction can bounce a unit out of RUNNING.
+A dropped ms-scale correction leaves the boundary transiently misaligned
+until the next beacon pulls it back — at 20 ms slots that is a meaningful
+fraction of the guard budget, though it cannot change sync state (nothing
+leaves RUNNING once locked).
 
 - The race with the consumer is benign under add: a post either lands
   before the ISR's `atomic_clear` (applied at that boundary) or after

@@ -96,9 +96,21 @@
  * boundary arrives and the two units' frames align exactly.
  */
 
-/* Secondary phase alignment (deliberately naive, see tdma_core_sync_feed). */
+/*
+ * Secondary phase alignment (deliberately naive, see tdma_core_sync_feed).
+ *
+ * LOCK_ERR gates acquisition only: it is the bar SYNCING measures against to
+ * reach RUNNING, and nothing leaves RUNNING once locked (tdma_start() is the
+ * sole entry into SYNCING). So it decides how well aligned a unit must be
+ * before it starts transmitting, and nothing else -- loosening it cannot buy
+ * steady-state stability and tightening it cannot cost any.
+ *
+ * 250 us is measured, not guessed: an 11 min two-unit soak at 50 ms slots held
+ * |phase_err| under 51 us throughout (p95 24 us, median 0), and sat inside
+ * +/-11 us well before the first lock. See the 2026-08-16 CHANGELOG entry.
+ */
 #define TDMA_SYNC_STEP_CLAMP_US	500	/* max correction per frame */
-#define TDMA_SYNC_LOCK_ERR_US	1000	/* |error| below this counts toward lock */
+#define TDMA_SYNC_LOCK_ERR_US	250	/* |error| below this counts toward lock */
 #define TDMA_SYNC_LOCK_STREAK	3	/* consecutive good beacons to reach RUNNING */
 
 /* ------------------------------------------------------------------ */
