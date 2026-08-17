@@ -116,8 +116,9 @@ static void slot_alarm_cb(const struct device *dev, uint8_t chan,
  * the nRF's own radio, so no other subsystem ever requests HFXO — HFCLK would
  * otherwise free-run on the internal RC. Measured cost of leaving it there:
  * roughly -1000 ppm between two units' slot clocks, which the secondary's
- * proportional sync can absorb at 50 ms slots but not at the 20 ms production
- * target. The request is never released; the engine owns the clock.
+ * proportional sync could absorb at the 50 ms bring-up width but not at the
+ * 20 ms production slot now in force — so this request is load-bearing, not
+ * merely prudent. It is never released; the engine owns the clock.
  */
 static int request_hfxo(void)
 {

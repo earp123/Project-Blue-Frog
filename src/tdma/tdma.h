@@ -62,10 +62,16 @@
 #define TDMA_TOA_US		7760
 
 /*
- * Test-build slot width: fat guard bands for bring-up. Production target is
- * 20 ms; tightening must stay a one-line change here. Frame is always 4 slots.
+ * Production slot width. Bring-up ran at 50 ms for fat guard bands; the flip
+ * to 20 ms landed 2026-08-17 once sync held its phase envelope well inside
+ * the lock threshold at the wider width. Frame is always 4 slots, so this one
+ * constant sets the frame too — everything below derives from it.
+ *
+ * Worst in-slot completion is TDMA_TX_START_LATENCY_US + TDMA_TOA_US = 8292 us,
+ * which must stay under TDMA_SLOT_ACTIVE_US (18 ms here). That is the number
+ * that limits how far this can tighten, and it is measured, not derived.
  */
-#define TDMA_SLOT_DURATION_US	50000
+#define TDMA_SLOT_DURATION_US	20000
 #define TDMA_SLOT_COUNT		4
 #define TDMA_FRAME_DURATION_US	(TDMA_SLOT_COUNT * TDMA_SLOT_DURATION_US)
 
@@ -173,7 +179,8 @@ struct tdma_telemetry {
 	 * Per-slot arm/event tallies and the boundary-to-edge delay. Together
 	 * these say whether the RX windows that produce no IRQ are a specific
 	 * slot (implicating the extra SPI done in that slot's slack) or spread
-	 * evenly, and whether a timeout lands at the programmed 45 ms or later.
+	 * evenly, and whether a timeout lands at the programmed
+	 * TDMA_SLOT_ACTIVE_US or later.
 	 */
 	uint32_t arm_by_slot[TDMA_SLOT_COUNT];
 	uint32_t evt_by_slot[TDMA_SLOT_COUNT];

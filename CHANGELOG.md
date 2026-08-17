@@ -40,8 +40,9 @@ chosen by the Kconfig choice in [`Kconfig`](Kconfig):
 New product hosted in this tree: the L1/L2 radio layer for the sports-officials
 intercom — a fixed 4-slot TDMA broadcast flood over the same SX1262 PHY
 (915.0 MHz, SF5 / BW 500 kHz / CR 4-5, 44-byte fixed packets, 12-symbol
-preamble, +22 dBm). Slot width 50 ms for bring-up (one constant,
-`TDMA_SLOT_DURATION_US`); frame = 4 slots.
+preamble, +22 dBm). Slot width 20 ms (one constant,
+`TDMA_SLOT_DURATION_US`); frame = 4 slots = 80 ms. Bring-up ran at 50 ms;
+the flip landed 2026-08-17 and its acceptance soak is still outstanding.
 
 - **L1** [`src/tdma/sx126x_cmd.c`](src/tdma/sx126x_cmd.c) — app-owned raw
   SX1262 opcode layer (datasheet-cited) with all BUSY gating in one choke
@@ -160,9 +161,10 @@ soak goes unlogged. Each run opens the next free `/SD:/SOAKnnn.BIN`.
   eight records fill a FAT sector with nothing wasted and no partial-sector
   rewrite. `BUILD_ASSERT`s pin both the size and the division. Text formatting
   happens offline in the decoder, where it is free.
-- **Rate budget** — sized for the 20 ms production slot, not today's 50 ms: a
-  4-unit 80 ms frame yields 3 RX + 1 TX = 50 records/s = 3.2 KB/s = ~6 sector
-  writes/s.
+- **Rate budget** — sized for the 20 ms production slot, which is now the
+  build's actual width: a 4-unit 80 ms frame yields 3 RX + 1 TX = 50
+  records/s = 3.2 KB/s = ~6 sector writes/s. On the 2-unit bench it is half
+  that.
 - **Producers never touch the card.** Records go into a 128-deep `k_msgq`
   ring; a dedicated preemptible writer thread drains it. Mount, open, write
   and close all happen there, so a card stall blocks only the writer — never
@@ -339,6 +341,60 @@ rather than an estimate. Confirmed on the bench after reflashing both
 units: all four soak-screen readings (`dtx`/`drx`, both roles) collapsed
 to ≈8292 µs with tens-of-µs jitter, i.e. the sync offset Δ went to zero
 as predicted.
+
+### Slot width 50 ms → 20 ms (2026-08-17)
+
+`TDMA_SLOT_DURATION_US` 50000 → 20000 in [`src/tdma/tdma.h`](src/tdma/tdma.h)
+— step 4, the last step of the tightening sequence. Frame follows to 80 ms
+and `TDMA_SLOT_ACTIVE_US` to 18 ms, both derived. A straight constant flip:
+no runtime slot-width selector, which stays a separate card.
+
+**Acceptance soak: not yet run.** The change is in and builds, but the
+criteria below are unverified on hardware. Until that soak passes, 20 ms is
+the build's width, not a proven one.
+
+Pre-flight audit, all clear at head:
+
+- Every variant's `tdma_config.slot_duration_us` passes the macro, never a
+  literal — [`soak_run.c`](src/soak/soak_run.c),
+  [`tdma_app/main.c`](src/tdma_app/main.c),
+  [`tdma_console/main.c`](src/tdma_console/main.c) — and `tdma_init()`
+  rejects a mismatch, so a stale literal would fail loudly rather than run
+  a split-brain frame.
+- Worst in-slot completion is `TDMA_TX_START_LATENCY_US` + `TDMA_TOA_US` =
+  8292 µs against an 18 ms `SLOT_ACTIVE`, ~9.7 ms of headroom. That governs
+  the TX timeout only; RX is continuous, so the slot boundary itself ends
+  the window.
+- `TDMA_SYNC_STEP_CLAMP_US` stays 500 µs, now per 80 ms frame — max slew
+  rises 2.5 → 6.25 ms/s. Intended: beacons arrive 2.5× more often, so the
+  loop should correct 2.5× faster.
+- `TDMA_RX_MSGQ_DEPTH` 32 was already sized for the 20 ms 4-unit case.
+- The HFXO request in [`tdma_port.c`](src/tdma/tdma_port.c) becomes
+  load-bearing rather than prudent: the ~−1000 ppm of RC drift it avoids is
+  absorbable at 50 ms, not at 20 ms. Comment updated to say so.
+
+**Pass criteria for the acceptance soak** (30 min, both bench units, +0 dBm,
+SD-logged both sides; 50 ms baselines in parentheses):
+
+| Signal | Bar | Baseline |
+|---|---|---|
+| Lock | SYNCING → RUNNING in single-digit seconds | 2.30 s |
+| `dtx` | 8292 ± tens of µs, both roles | 8292 |
+| `drx` | collapses to the same value both roles | 8290 / 8291 |
+| `phase_err` | median ≈ 0, p95 \|err\| ≤ 50 µs, worst < 125 µs | 0 / 24 / 51 |
+| Link | PER 0.000%, 0 missed/dup, 0 `seq` gaps | same |
+| Counters | `stale_retx`, `busy_timeouts`, `slot_timeouts` all 0 | same |
+| `ppm` | mean within a few ppm of −6.9 | −6.9 |
+
+Two readings that would be misread as regressions: per-sample `ppm` σ should
+*grow* to ~170 (the estimator divides the same ±13 µs timestamp jitter by an
+80 ms frame instead of 200 ms — the mean is the signal), and `phase_err`
+growth toward the 250 µs bar is a red flag even if the unit locks, since
+2.5× more frequent beacons should make the envelope equal or tighter.
+
+**Soak duration constraint at 20 ms**: `frame_ctr` wraps at 1.46 h (see
+Known limitations). Runs needing cross-file pairing must stay under that;
+the console's 2-hour preset exceeds it.
 
 ### Sync lock threshold tightened to 250 µs (2026-08-16)
 
@@ -528,9 +584,11 @@ inferring it from DIO1 activity alone.
   than accumulated a pending correction (latent — only one correction is
   issued per beacon today) — resolved 2026-08-16, it now accumulates (see
   "Phase corrections accumulate" above). Both are now closed, and the
-  tightening sequence reached step 3 the same day
-  (`TDMA_SYNC_LOCK_ERR_US` 1000 → 250 µs). What remains before calling
-  20 ms proven is a soak at the 20 ms slot itself, with all four units.
+  tightening sequence completed 2026-08-17 with the slot flip itself
+  (step 3: `TDMA_SYNC_LOCK_ERR_US` 1000 → 250 µs; step 4:
+  `TDMA_SLOT_DURATION_US` 50 → 20 ms). What remains before calling 20 ms
+  proven: the 2-unit acceptance soak at the new width, then a 4-unit soak
+  (gated on building units 3 and 4), then the field campaign.
 
 ### Bench diagnostics (2026-07-21)
 
@@ -702,21 +760,24 @@ native SX126x LoRa driver this project uses. See the README's
   set. RX-to-RX alignment across the two files works today; pairing a unit's
   own TX against the peer's RX needs the counter added to
   `struct tdma_telemetry`.
-- **`frame_ctr` wraps** at 65536 frames — 3.6 h at the current 50 ms slot, but
-  **1.46 h at the 20 ms target**, which the console's 2-hour soak preset
-  exceeds. Within-file continuity is already wrap-safe (both firmware and
+- **`frame_ctr` wraps** at 65536 frames — **1.46 h at the current 20 ms
+  slot** (it was 3.6 h at the 50 ms bring-up width), which the console's
+  2-hour soak preset exceeds. Until this closes, keep runs that need
+  cross-file pairing under ~1.4 h; a longer continuous run is still valid but
+  only pairwise-alignable up to the first wrap.
+  Within-file continuity is already wrap-safe (both firmware and
   decoder use modular deltas and ignore backward jumps as a peer restart);
   absolute cross-file alignment past a wrap would need the decoder to unwrap
   into a monotonic index, which is not built.
-- **The 250 µs lock threshold is validated on two units at 50 ms only.** Its
-  ~5× margin comes from an 11 min two-unit soak whose worst |`phase_err`| was
-  51 µs. At the 20 ms target the frame shortens to 80 ms and, with four units,
-  a secondary sees the beacon on the same one-per-frame cadence but has three
-  peers' slots between corrections — neither the phase envelope nor the
-  acquisition transient has been re-measured under those conditions. Tightening
-  cannot destabilise a *running* link (the transition is one-way), so the
-  failure mode to watch for is a unit that is slow to lock or never leaves
-  SYNCING, not one that drops out mid-run.
+- **The 20 ms slot is unsoaked, and the 250 µs lock threshold behind it was
+  validated at 50 ms.** That threshold's ~5× margin comes from an 11 min
+  two-unit soak at the old width whose worst |`phase_err`| was 51 µs. The
+  acceptance soak for the flip has not been run yet, and even when it passes
+  it will only cover two units: with four, a secondary still sees the beacon
+  once per frame but has three peers' slots between corrections, and neither
+  the phase envelope nor the acquisition transient has been measured there.
+  Because SYNCING → RUNNING is one-way, the failure mode to watch for is a
+  unit slow to lock or stuck in SYNCING — not one that drops out mid-run.
 - **Field PER is unmeasured.** The 5-minute bench soak below closed at 0 % loss
   with ~45 dB of margin over SF5/BW500 sensitivity — that validates the stack,
   not the range. Loss behaviour at distance is still unknown.

@@ -10,7 +10,7 @@ directory only adds the run harness and per-test entry points.
 
 Locked for every test (single source of truth in [`src/tdma/tdma.h`](../tdma/tdma.h)):
 the PHY — **SF5 / BW 500 kHz / CR 4-5 / 915 MHz**, 44-byte frames, 4 slots at
-50 ms (200 ms frame). Each test sets its own **TX power**, **duration**, and
+20 ms (80 ms frame). Each test sets its own **TX power**, **duration**, and
 **sample cadence** in its `struct soak_params`.
 
 ## Role jumper (one image, two units)
