@@ -166,7 +166,14 @@ static enum tdma_role role = TDMA_ROLE_SECONDARY; /* fail-safe default: two
 static bool engine_inited;	/* role locks once true */
 static int tx_power_dbm = TDMA_TX_POWER_DBM;
 
-/* ---- Soak test state (all owned by the main loop) ---- */
+/* ---- Soak test state ----
+ * Split ownership: the soak data thread (below) owns every field while a
+ * run is active; the UI loop only starts/stops a run and reads the fields
+ * to draw them. Reads for drawing are deliberately unlocked -- a counter
+ * caught mid-update misdraws one frame of a diagnostic, and holding a lock
+ * across a full-screen SPI repaint would reintroduce exactly the stall this
+ * split exists to remove.
+ */
 static const struct {
 	const char *label;
 	int64_t ms;		/* 0 = run until STOP */
@@ -205,14 +212,44 @@ static struct {
 	/*
 	 * Staged-payload tracking, so the log records transmissions rather
 	 * than submissions. tdma_tx_submit() succeeds whenever the engine's
-	 * stage buffer is free — several times per frame at the 20 ms UI
-	 * cadence — but only one payload per frame is actually sent; the rest
+	 * stage buffer is free — several times per frame at the data thread's
+	 * tick — but only one payload per frame is actually sent; the rest
 	 * are overwritten in place. We therefore hold a payload "armed" and
 	 * only log it once the engine's tx_done confirms it went out.
 	 */
 	bool tx_armed;
 	uint8_t tx_payload[TDMA_PAYLOAD_LEN];
 	uint32_t tx_done_at_arm;
+
+	/*
+	 * Staging headroom, measured as the worst gap between consecutive
+	 * data-thread passes while a run is active.
+	 *
+	 * This is deliberately NOT the interval between successful submits.
+	 * A submit can only follow the previous transmission (the tx_armed
+	 * gate above), so submit-to-submit has a floor of one frame period —
+	 * 80 ms at the 20 ms width — and is longer still across acquisition,
+	 * when a secondary cannot transmit at all. Measured that way it
+	 * exceeds SOAK_STAGE_BUDGET_US even on a perfectly healthy unit,
+	 * because the budget is a within-frame deadline and the interval is
+	 * not.
+	 *
+	 * What the budget actually constrains is how long after the engine's
+	 * TxDone the application takes to notice and re-stage, and that is
+	 * bounded by how promptly this thread runs. So: worst pass-to-pass
+	 * latency, against the budget. Under it, staging can never be late
+	 * and stale_retx is impossible; approaching it is the warning.
+	 */
+	int64_t last_tick_ms;
+	uint32_t tick_gap_max_ms;
+
+	/*
+	 * Set by the data thread when the elapsed limit is reached; the UI
+	 * loop performs the teardown. soak_finish() closes the log, which
+	 * waits on the writer thread for up to 5 s — that must never run on
+	 * the cooperative data thread.
+	 */
+	bool expired;
 } soak;
 
 static int64_t soak_last_draw_ms;
@@ -222,6 +259,57 @@ static int64_t soak_last_draw_ms;
  */
 #define SOAK_STATS_PERIOD_MS 1000
 static int64_t soak_last_stats_ms;
+
+/*
+ * Payload-staging budget: how long the application has, after its own TxDone,
+ * to hand the engine a fresh payload before the engine re-sends the previous
+ * one and counts a stale_retx.
+ *
+ * The engine takes a staged payload in rx_slot_slack_work(), which runs at
+ * every RX-slot entry. For a unit transmitting in slot S the last such entry
+ * before its next TX comes (TDMA_SLOT_COUNT - 1) slots later, so the usable
+ * window runs from TxDone — TX_START_LATENCY + TOA after the boundary — to
+ * that entry. Role-symmetric: the arithmetic is the same for any slot_id.
+ *
+ *   (SLOT_COUNT - 1) * SLOT_DURATION - (TX_START_LATENCY + TOA)
+ *
+ * 141.7 ms at the 50 ms bring-up width, 51.7 ms at the 20 ms production
+ * width — the flip cut it by 63 %. That is why staging cannot live on the UI
+ * loop: one draw_soak_dynamic() pass clears the body with a full-width SPI
+ * fill and overruns 51.7 ms on its own, so every repaint dropped a frame's
+ * payload. The same cost fitted inside the 50 ms-width budget, which is why
+ * it only surfaced after the flip.
+ *
+ * A 4-unit frame relaxes this slightly — a packet landing in the last RX slot
+ * triggers a second slack pass — but the guaranteed window is the one above.
+ */
+#define SOAK_STAGE_BUDGET_US \
+	((TDMA_SLOT_COUNT - 1) * TDMA_SLOT_DURATION_US - \
+	 (TDMA_TX_START_LATENCY_US + TDMA_TOA_US))
+
+BUILD_ASSERT(SOAK_STAGE_BUDGET_US > 0,
+	     "TX latency + time-on-air must leave a staging window");
+
+/*
+ * Data-thread tick. The engine needs one submit per frame; polling at 2 ms
+ * keeps worst-case staging latency an order of magnitude inside the budget,
+ * and the work per tick is a mutex plus a handful of compares. Slower when
+ * idle, since nothing can arrive between runs.
+ */
+#define SOAK_DATA_TICK_MS	2
+#define SOAK_DATA_IDLE_MS	50
+#define SOAK_DATA_STACK		1536
+
+/*
+ * Cooperative, one notch below the radio thread (K_PRIO_COOP(4)) and above
+ * every preemptible thread, so no amount of drawing, touch handling or card
+ * I/O can delay a payload. It never blocks on anything but its own sleep and
+ * never touches SPI, so sitting above the UI costs the UI nothing.
+ */
+#define SOAK_DATA_PRIO		K_PRIO_COOP(6)
+
+/* Guards the soak struct's lifecycle transitions against the data thread. */
+static K_MUTEX_DEFINE(soak_lock);
 
 /* Set by any thread to ask main to redraw. */
 static atomic_t screen_dirty = ATOMIC_INIT(0);
@@ -583,6 +671,25 @@ static void draw_soak_dynamic(void)
 	ui_text(MARG, y, l, COLOR_WHITE, COLOR_BLACK);
 	y += sp;
 
+	/*
+	 * Staging headroom: worst data-thread scheduling latency against the
+	 * budget the engine allows for re-staging after TxDone. Under budget,
+	 * staging cannot be late — this is the figure to watch as the product
+	 * takes on more concurrent work, since it degrades long before any
+	 * packet does.
+	 */
+	unsigned int budget_ms = SOAK_STAGE_BUDGET_US / 1000;
+
+	if (soak.tick_gap_max_ms >= budget_ms) {
+		snprintf(l, sizeof(l), "** LAT %u/%ums **",
+			 soak.tick_gap_max_ms, budget_ms);
+	} else {
+		snprintf(l, sizeof(l), "lat %u/%ums", soak.tick_gap_max_ms,
+			 budget_ms);
+	}
+	ui_text(MARG, y, l, COLOR_WHITE, COLOR_BLACK);
+	y += sp;
+
 	if (soak.rx_ok) {
 		snprintf(l, sizeof(l), "rssi %d  snr %d",
 			 soak.last_rssi, soak.last_snr);
@@ -678,8 +785,13 @@ static void soak_start(int64_t duration_ms)
 		engine_inited = true; /* role is now locked */
 	}
 
+	/* The data thread reads this struct on its own tick; clear and
+	 * republish it under the lock rather than racing a memset against it.
+	 */
+	k_mutex_lock(&soak_lock, K_FOREVER);
 	memset(&soak, 0, sizeof(soak));
 	soak.snap = *tdma_get_telemetry();
+	k_mutex_unlock(&soak_lock);
 
 	/* Logging is best-effort: a missing or failed card must never stop a
 	 * radio test. The failure is surfaced on the soak screen instead.
@@ -696,41 +808,72 @@ static void soak_start(int64_t duration_ms)
 		return;
 	}
 
-	soak.active = true;
-	soak.start_ms = k_uptime_get();
-	soak.duration_ms = duration_ms;
-	soak_last_draw_ms = 0;
-	home_msg[0] = '\0';
-
 	/*
 	 * Baseline counter snapshot at t=0. The engine's counters are not
 	 * reset by tdma_start(), so they carry over between soaks in one boot;
 	 * with this record the decoder gets an exact per-run delta by
 	 * differencing the first and last STATS instead of missing the first
 	 * sample period.
+	 *
+	 * Written before the data thread is armed, and it seeds
+	 * soak_last_stats_ms too: arming first would let the thread's own
+	 * cadence check fire against a stale timestamp and emit a snapshot
+	 * ahead of the baseline.
 	 */
 	soak_last_stats_ms = k_uptime_get();
 	soak_log_stats(tdma_get_telemetry());
+
+	/* Arming last: the data thread does nothing until active is set, so
+	 * the engine is running and the baseline is on disk by the time it
+	 * stages its first payload.
+	 */
+	k_mutex_lock(&soak_lock, K_FOREVER);
+	soak.start_ms = k_uptime_get();
+	soak.duration_ms = duration_ms;
+	soak.active = true;
+	k_mutex_unlock(&soak_lock);
+
+	soak_last_draw_ms = 0;
+	home_msg[0] = '\0';
 
 	screen = SCR_SOAK;
 }
 
 static void soak_finish(void)
 {
+	/*
+	 * Clear active first: it is what stops the data thread staging and
+	 * logging, so nothing can queue a record after soak_log_stop() has
+	 * drained and closed the file.
+	 */
+	k_mutex_lock(&soak_lock, K_FOREVER);
+	soak.active = false;
+	/* Clearing the latch matters: the UI loop calls us straight off
+	 * soak.expired, so leaving it set would tear the run down again on
+	 * every pass — stopping an already-stopped engine and reclosing a
+	 * closed log.
+	 */
+	soak.expired = false;
+	k_mutex_unlock(&soak_lock);
+
 	tdma_stop();
 
 	/* One last counter snapshot, then drain and close the log. */
 	soak_log_stats(tdma_get_telemetry());
 	soak_log_stop();
 
-	soak.active = false;
 	soak.done = true;
 	soak_last_draw_ms = k_uptime_get();
 	mark_dirty();
 }
 
-/* Drain received frames into the continuity stats. */
-static void soak_poll(void)
+/*
+ * One data-plane pass: drain received frames into the continuity stats, log
+ * the transmission the engine has just completed, and stage the next payload.
+ * Runs on the soak data thread with soak_lock held — never on the UI loop,
+ * whose repaints exceed SOAK_STAGE_BUDGET_US on their own.
+ */
+static void soak_data_step(void)
 {
 	struct tdma_rx_msg msg;
 
@@ -769,6 +912,23 @@ static void soak_poll(void)
 		return;
 	}
 
+	/*
+	 * Worst pass-to-pass latency of this thread — the headroom figure.
+	 * Seeded rather than recorded on the first active pass: the pass
+	 * before it was an idle-cadence sleep (SOAK_DATA_IDLE_MS), which
+	 * would otherwise be logged as the run's worst latency.
+	 */
+	int64_t tick_now = k_uptime_get();
+
+	if (soak.last_tick_ms) {
+		uint32_t lat = (uint32_t)(tick_now - soak.last_tick_ms);
+
+		if (lat > soak.tick_gap_max_ms) {
+			soak.tick_gap_max_ms = lat;
+		}
+	}
+	soak.last_tick_ms = tick_now;
+
 	const struct tdma_telemetry *t = tdma_get_telemetry();
 
 	/*
@@ -799,11 +959,37 @@ static void soak_poll(void)
 		soak_log_stats(t);
 	}
 
+	/*
+	 * Elapsed limit reached. Only flag it: soak_finish() closes the log,
+	 * which waits on the writer thread, and this thread is cooperative.
+	 */
 	if (soak.duration_ms &&
 	    k_uptime_get() - soak.start_ms >= soak.duration_ms) {
-		soak_finish();
+		soak.expired = true;
 	}
 }
+
+static void soak_data_fn(void *a, void *b, void *c)
+{
+	ARG_UNUSED(a);
+	ARG_UNUSED(b);
+	ARG_UNUSED(c);
+
+	while (1) {
+		bool active;
+
+		k_mutex_lock(&soak_lock, K_FOREVER);
+		soak_data_step();
+		active = soak.active;
+		k_mutex_unlock(&soak_lock);
+
+		k_sleep(active ? K_MSEC(SOAK_DATA_TICK_MS)
+			       : K_MSEC(SOAK_DATA_IDLE_MS));
+	}
+}
+
+K_THREAD_DEFINE(soak_data_tid, SOAK_DATA_STACK, soak_data_fn,
+		NULL, NULL, NULL, SOAK_DATA_PRIO, 0, 0);
 
 /* ---------------------------------------------------------------------------
  * TX power keypad
@@ -1924,8 +2110,15 @@ int main(void)
 			handle_tap(sx, sy, rawx, rawy);
 		}
 
-		/* Feed the engine / collect stats every pass, soak or not. */
-		soak_poll();
+		/*
+		 * The data plane runs on soak_data_tid, not here — a repaint
+		 * below overruns SOAK_STAGE_BUDGET_US on its own. All the UI
+		 * still owes it is the teardown, which blocks on the card
+		 * writer and so cannot run on that thread.
+		 */
+		if (soak.expired) {
+			soak_finish();
+		}
 
 		/* Browser card-op completions (writer thread finishes them). */
 		br_poll();

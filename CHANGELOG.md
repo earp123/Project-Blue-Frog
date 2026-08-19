@@ -12,7 +12,7 @@ For hardware wiring, build/flash instructions, and SDK setup, see
 
 On-device radio-evaluation tooling for the nRF5340 DK + Wio-SX1262 (SX1262),
 plus the first slice of the wireless-intercom firmware (TDMA radio layer).
-_Last updated: 2026-08-16._
+_Last updated: 2026-08-19._
 
 ### Firmware variants
 
@@ -342,6 +342,69 @@ units: all four soak-screen readings (`dtx`/`drx`, both roles) collapsed
 to ≈8292 µs with tens-of-µs jitter, i.e. the sync offset Δ went to zero
 as predicted.
 
+### Payload staging moved off the UI loop (2026-08-19)
+
+First bench run at 20 ms exposed an application-layer regression the flip
+caused but did not itself contain: the master reported `stale_retx` = 79
+against 224 transmissions — **35 % of packets re-sending the previous
+payload** — growing linearly from the first second. The 50 ms baseline was
+48 in 30 minutes. Confirmed independently from the air: 30.4 % of
+consecutive RX packets carried an identical payload base, i.e. both units
+were doing it.
+
+**The engine was never at risk, and that distinction is the point.** Through
+the whole 35 % run `dtx` held 8249–8300 µs and `slot_timeouts` stayed 0 —
+the radio thread is cooperative at `K_PRIO_COOP(4)` and preempts the UI, so
+slot timing was untouched. What starved was the *application data path*,
+which shared a thread with the screen.
+
+**The budget the flip actually cut.** The engine takes a staged payload in
+`rx_slot_slack_work()`, which runs at every RX-slot entry, so the last
+chance before a unit's next TX comes `TDMA_SLOT_COUNT - 1` slots after its
+own. The window runs from TxDone to that entry:
+
+    (SLOT_COUNT - 1) × SLOT_DURATION - (TX_START_LATENCY + TOA)
+
+141.7 ms at 50 ms slots, **51.7 ms at 20 ms** — a 63 % cut, and
+role-symmetric. `draw_soak_dynamic()` clears the body with a full-width SPI
+fill before drawing its rows and overruns 51.7 ms on its own, so every
+repaint dropped a frame's payload: 4 repaints/s against 4.4 stale/s. The
+same cost fitted inside the 50 ms budget, which is why it only surfaced
+after the flip.
+
+Fix, in [`src/tdma_console/main.c`](src/tdma_console/main.c):
+
+- **New `soak_data_tid` at `K_PRIO_COOP(6)`** — below the radio thread,
+  above every preemptible thread. It owns the RX drain, the TX arm/re-stage
+  and the periodic STATS snapshot, ticking at 2 ms. It never touches SPI and
+  never blocks, so sitting above the UI costs the UI nothing. The UI loop
+  keeps drawing, input, and the teardown only: `soak_finish()` closes the log,
+  which waits on the card writer for up to 5 s and must not run on a
+  cooperative thread. The data thread therefore latches `soak.expired` and
+  the UI performs the stop.
+- **A headroom gauge on the soak screen**, `lat N/51ms`, since the question
+  is ongoing rather than one-off: worst pass-to-pass latency of the data
+  thread against the budget. Under budget, staging cannot be late and
+  `stale_retx` is impossible; it degrades visibly long before any packet
+  does, which is what makes it useful as the product takes on more concurrent
+  work.
+- Cost: +448 B flash, +1712 B RAM.
+
+> [!NOTE]
+> The gauge first shipped measuring the interval between successful
+> `tdma_tx_submit()` calls, which is wrong: a submit can only follow the
+> previous *transmission* (the `tx_armed` gate that makes the log record
+> transmissions rather than submissions), so that interval has a floor of one
+> frame period — 80 ms — and cannot be compared with a within-frame deadline.
+> It read 88 ms on a healthy master (80 ms frame + 8 ms) and 349 ms on a
+> secondary (acquisition: it locked at +0.676 s and cannot transmit before
+> RUNNING). Both were correct behaviour reported as failures. The budget
+> constrains how long after TxDone the application takes to re-stage, which is
+> bounded by how promptly the data thread runs — hence pass-to-pass latency.
+
+**Result** — 20 ms, +0 dBm, two units, ~29 s, secondary logged to SD:
+`stale_retx` **0 across 353 transmissions**, flat from the first second.
+
 ### Slot width 50 ms → 20 ms (2026-08-17)
 
 `TDMA_SLOT_DURATION_US` 50000 → 20000 in [`src/tdma/tdma.h`](src/tdma/tdma.h)
@@ -349,9 +412,40 @@ as predicted.
 and `TDMA_SLOT_ACTIVE_US` to 18 ms, both derived. A straight constant flip:
 no runtime slot-width selector, which stays a separate card.
 
-**Acceptance soak: not yet run.** The change is in and builds, but the
-criteria below are unverified on hardware. Until that soak passes, 20 ms is
-the build's width, not a proven one.
+**Acceptance soak: still not run.** Two short bench runs (2026-08-19) put
+the width on the air and cleared every criterion they are long enough to
+test, but the 30-minute soak below has not been run. Until it passes, 20 ms
+is the build's width, not a proven one.
+
+Confirmed on hardware at 20 ms (~29 s, +0 dBm, two units, secondary logged
+to SD; sample counts in parentheses):
+
+| Signal | Bar | Measured |
+|---|---|---|
+| Width on air | 80 ms frames | 12.46 frames/s ✓ |
+| `dtx` | 8292 ± tens of µs | median **8292**, 8250–8318 (29) |
+| `phase_err` | median ≈ 0, p95 ≤ 50 µs, worst < 125 µs | **+1 / 38 / 38 µs** (29) |
+| Lock | single-digit seconds | **0.68 s** |
+| Link | PER 0 %, 0 missed/dup, 0 `seq` gaps | all clean (326 pkts) |
+| Counters | `stale_retx`/`slot_timeouts`/`busy_timeouts` = 0 | all 0 |
+| `ppm` | mean within a few ppm of −6.9 | **inconclusive** — see below |
+
+`dtx` landing on 8292 is the standing regression check on the corrected
+`TDMA_TOA_US` 7760 and `TDMA_TX_START_LATENCY_US` 532: it holds at the new
+width. The phase envelope (−33…+38 µs) is *tighter* than either 50 ms
+baseline, the direction the 2.5× beacon rate predicted.
+
+Two reasons these are not the acceptance soak:
+
+- **29 samples over 29 s**, against 575 over 11 min for the 50 ms baseline.
+  A short run sees a narrower envelope purely from fewer draws, so the phase
+  figures will widen in a real soak. They pass with room; that is not proof.
+- **`ppm` cannot be tested at this length.** Mean +32.3, median −18, σ 304
+  over 24 samples puts the standard error near 62 ppm — consistent with the
+  true −6.9 and with much else besides. Worth noting σ came in at 304 against
+  the ~170 predicted for 80 ms frames; with 24 samples that is likely real
+  rather than noise, so it is a thing to watch in the 30-minute run rather
+  than a settled figure.
 
 Pre-flight audit, all clear at head:
 
@@ -771,13 +865,27 @@ native SX126x LoRa driver this project uses. See the README's
   into a monotonic index, which is not built.
 - **The 20 ms slot is unsoaked, and the 250 µs lock threshold behind it was
   validated at 50 ms.** That threshold's ~5× margin comes from an 11 min
-  two-unit soak at the old width whose worst |`phase_err`| was 51 µs. The
-  acceptance soak for the flip has not been run yet, and even when it passes
+  two-unit soak at the old width whose worst |`phase_err`| was 51 µs. Short
+  bench runs at 20 ms (2026-08-19, above) clear every criterion they can
+  test, but the acceptance soak for the flip has not been run yet, and even
+  when it passes
   it will only cover two units: with four, a secondary still sees the beacon
   once per frame but has three peers' slots between corrections, and neither
   the phase envelope nor the acquisition transient has been measured there.
   Because SYNCING → RUNNING is one-way, the failure mode to watch for is a
   unit slow to lock or stuck in SYNCING — not one that drops out mid-run.
+- **One soak log came back with an 8 KB hole in it.** The master's file from
+  the 30 min 50 ms run (commit `337ec96`) contains 128 consecutive records —
+  16 sectors, sector-aligned — of garbage plus one sector of stale data, with
+  `seq` running 12743 → 12544…12551 → 12872. Decoded naively that reads as
+  `PER = 1.597 %` with 145 missed; excluding the hole the same file shows 0
+  missed / 0 dup, and the engine counters agree (secondary `tx_done` 8997 vs
+  master `rx_done` 8991, i.e. ~6 packets of real loss in 30 minutes). Cause
+  not established — the size matches `SOAK_LOG_RING_DEPTH` exactly, but a
+  producer-side ring drop leaves a `seq` gap without writing garbage, so this
+  is a write-path or card fault, not a drop. It matters because at 20 ms the
+  record rate roughly doubles: **check any one-sided loss for a hole before
+  reading it as a radio result.**
 - **Field PER is unmeasured.** The 5-minute bench soak below closed at 0 % loss
   with ~45 dB of margin over SF5/BW500 sensitivity — that validates the stack,
   not the range. Loss behaviour at distance is still unknown.
