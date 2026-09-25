@@ -57,10 +57,10 @@ config APP_TDMA_CONSOLE
 	  Same spi2 / port-1 radio as the TDMA test variant plus the spi4 /
 	  port-0 display/touch front end (apply
 	  boards/nrf5340dk_nrf5340_cpuapp_display.overlay and
-	  boards/nrf5340dk_nrf5340_cpuapp_tdma_console.conf). Role is picked at
-	  boot from the HOME menu (one image for every unit); all PHY parameters
-	  are compile-time constants in tdma.h except TX power. Display-only:
-	  no UART, logging, or shell.
+	  boards/nrf5340dk_nrf5340_cpuapp_tdma_console.conf). The unit (MASTER
+	  in slot 0, or SEC 1-3) is picked at boot (one image for every unit);
+	  all PHY parameters are compile-time constants in tdma.h except TX
+	  power. Display-only: no UART, logging, or shell.
 
 config APP_TDMA_FIELD
 	bool "Intercom TDMA field unit (rev 2 shield: OLED + microSD + Wio-SX1262)"
