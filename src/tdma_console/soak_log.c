@@ -6,14 +6,16 @@
 
 #include <zephyr/kernel.h>
 
-#if defined(CONFIG_APP_TDMA_CONSOLE)
+#if defined(CONFIG_APP_TDMA_CONSOLE) || defined(CONFIG_APP_TDMA_FIELD)
 
 #include "soak_log.h"
 #include "sd_log.h"
 
 #include <zephyr/fs/fs.h>
 #include <zephyr/sys/util.h>
+#include <ctype.h>
 #include <errno.h>
+#include <limits.h>
 #include <string.h>
 
 /*
@@ -58,6 +60,7 @@ static struct {
 	char b[SD_PATH_MAX];
 	struct sd_dirent *ents;
 	int cap;
+	struct sd_summary *sum;
 	int count;
 	int result;
 } fsop;
@@ -137,6 +140,7 @@ int soak_log_start(enum tdma_role role, uint8_t slot_id, int8_t tx_power_dbm,
 	atomic_set(&stat_err, 0);
 	atomic_set(&cmd_flags, 0);
 	log_path[0] = '\0';
+	err_stage = "";
 
 	open_req.role = role;
 	open_req.slot_id = slot_id;
@@ -317,6 +321,7 @@ static void do_close(void)
 		int rc = sd_log_close();
 
 		if (rc < 0) {
+			err_stage = "close";
 			atomic_set(&stat_err, rc);
 		}
 		file_open = false;
@@ -325,8 +330,9 @@ static void do_close(void)
 
 /* ---- Browser fs ops (writer thread only) ------------------------------- */
 
-int sd_fsop_submit(enum sd_fsop_op op, const char *a, const char *b,
-		   struct sd_dirent *ents, int cap)
+/* Fill the slot, then publish it: the writer reads nothing before PENDING. */
+static int fsop_submit(enum sd_fsop_op op, const char *a, const char *b,
+		       struct sd_dirent *ents, int cap, struct sd_summary *sum)
 {
 	if (atomic_get(&fsop_state) != FSOP_IDLE) {
 		return -EBUSY;
@@ -339,11 +345,26 @@ int sd_fsop_submit(enum sd_fsop_op op, const char *a, const char *b,
 	fsop.b[sizeof(fsop.b) - 1] = '\0';
 	fsop.ents = ents;
 	fsop.cap = cap;
+	fsop.sum = sum;
 	fsop.count = 0;
 	fsop.result = -EIO;
 
 	atomic_set(&fsop_state, FSOP_PENDING);
 	return 0;
+}
+
+int sd_fsop_submit(enum sd_fsop_op op, const char *a, const char *b,
+		   struct sd_dirent *ents, int cap)
+{
+	return fsop_submit(op, a, b, ents, cap, NULL);
+}
+
+int sd_fsop_submit_summary(const char *dir, struct sd_summary *out)
+{
+	if (out == NULL) {
+		return -EINVAL;
+	}
+	return fsop_submit(SD_FSOP_SUMMARY, dir, NULL, NULL, 0, out);
 }
 
 bool sd_fsop_poll(int *result, int *count)
@@ -375,13 +396,15 @@ static void fsop_sort(struct sd_dirent *e, int n)
 	}
 }
 
+/* Directory-walk scratch for LIST and SUMMARY. Static because an LFN
+ * fs_dirent is large and the writer stack is sized for FatFs, not for name
+ * buffers. Writer thread only, so one copy serves both ops.
+ */
+static struct fs_dir_t dirp;
+static struct fs_dirent ent;
+
 static int fsop_list(void)
 {
-	/* Static: an LFN fs_dirent is large and the writer stack is sized for
-	 * FatFs, not for name buffers.
-	 */
-	static struct fs_dir_t dirp;
-	static struct fs_dirent ent;
 	int rc;
 
 	fs_dir_t_init(&dirp);
@@ -409,6 +432,81 @@ static int fsop_list(void)
 		fsop_sort(fsop.ents, fsop.count);
 	}
 	return rc;
+}
+
+/* Case-insensitive ".BIN" suffix: a card touched by another OS may hold
+ * lower-case names.
+ */
+static bool is_bin_name(const char *name)
+{
+	static const char ext[] = ".BIN";
+	size_t n = strlen(name);
+	size_t e = sizeof(ext) - 1;
+
+	if (n <= e) {
+		return false;
+	}
+	for (size_t i = 0; i < e; i++) {
+		if (toupper((unsigned char)name[n - e + i]) != ext[i]) {
+			return false;
+		}
+	}
+	return true;
+}
+
+static int fsop_summary(void)
+{
+	struct sd_summary *s = fsop.sum;
+	struct fs_statvfs vfs;
+	int rc;
+
+	if (s == NULL) {
+		return -EINVAL;
+	}
+	memset(s, 0, sizeof(*s));
+
+	fs_dir_t_init(&dirp);
+	rc = fs_opendir(&dirp, fsop.a);
+	if (rc < 0) {
+		return rc;
+	}
+
+	for (;;) {
+		rc = fs_readdir(&dirp, &ent);
+		if (rc < 0 || ent.name[0] == '\0') {
+			break;
+		}
+		if (ent.type != FS_DIR_ENTRY_FILE || !is_bin_name(ent.name)) {
+			continue;
+		}
+		s->bin_count++;
+		/* Keep overwriting: the last match in directory order wins. */
+		strncpy(s->newest, ent.name, sizeof(s->newest) - 1);
+		s->newest[sizeof(s->newest) - 1] = '\0';
+	}
+
+	fs_closedir(&dirp);
+	if (rc < 0) {
+		return rc;
+	}
+
+	/*
+	 * Free space. Usually cheap: FatFs trusts the FAT32 FSInfo free count,
+	 * and on exFAT it scans the allocation bitmap once per mount and then
+	 * caches the result. A FAT32 volume with an invalid FSInfo forces a
+	 * full FAT scan, which can take seconds at 4 MHz. That cost lands on
+	 * this thread and delays nothing but the op's completion.
+	 */
+	s->vfs_err = fs_statvfs(fsop.a, &vfs);
+	if (s->vfs_err == 0) {
+		uint64_t frsize = vfs.f_frsize;
+
+		s->free_mib = (uint32_t)(((uint64_t)vfs.f_bfree * frsize) >> 20);
+		s->total_mib = (uint32_t)(((uint64_t)vfs.f_blocks * frsize) >> 20);
+	}
+
+	fsop.count = (int)MIN(s->bin_count, (uint32_t)INT_MAX);
+	return 0;
 }
 
 /* RENAME doubles as move; create a missing destination drawer on the way. */
@@ -450,6 +548,9 @@ static void do_fsop(void)
 	case SD_FSOP_RENAME:
 		rc = fsop_rename();
 		break;
+	case SD_FSOP_SUMMARY:
+		rc = fsop_summary();
+		break;
 	default:
 		rc = -EINVAL;
 		break;
@@ -486,6 +587,10 @@ static void writer_thread_fn(void *p1, void *p2, void *p3)
 				int rc = sd_log_write(&r, sizeof(r));
 
 				if (rc < 0) {
+					/* Stage first: the UI shows it only
+					 * once stat_err is non-zero.
+					 */
+					err_stage = "write";
 					atomic_set(&stat_err, rc);
 				} else {
 					atomic_inc(&stat_written);
@@ -507,4 +612,4 @@ static void writer_thread_fn(void *p1, void *p2, void *p3)
 K_THREAD_DEFINE(soak_log_writer, WRITER_STACK, writer_thread_fn,
 		NULL, NULL, NULL, WRITER_PRIO, 0, 0);
 
-#endif /* CONFIG_APP_TDMA_CONSOLE */
+#endif /* CONFIG_APP_TDMA_CONSOLE || CONFIG_APP_TDMA_FIELD */

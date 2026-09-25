@@ -1,6 +1,6 @@
 # Application configuration for the "send" project.
 #
-# This project carries three independent firmware variants. Exactly one is
+# This project carries several independent firmware variants. Exactly one is
 # built at a time, selected here (set the choice in prj.conf / the companion
 # conf, or on the west command line). The default is the LoRa-send firmware.
 
@@ -62,6 +62,19 @@ config APP_TDMA_CONSOLE
 	  are compile-time constants in tdma.h except TX power. Display-only:
 	  no UART, logging, or shell.
 
+config APP_TDMA_FIELD
+	bool "Intercom TDMA field unit (rev 2 shield: OLED + microSD + Wio-SX1262)"
+	select COUNTER
+	help
+	  The TDMA field console's soak runner on the rev 2 shield: an SSD1306
+	  128x64 OLED on i2c1, a microSD card on spi4, and the same spi2 /
+	  port-1 radio. Apply boards/nrf5340dk_nrf5340_cpuapp_shield.overlay
+	  and boards/nrf5340dk_nrf5340_cpuapp_shield.conf. Buttons only, with
+	  an essentials-only UI: unit (MASTER in slot 0, or SEC 1-3) at boot,
+	  then soak, TX power and an SD summary. Logs every run to the card
+	  through the console's sd_log/soak_log. UART logging stays on for
+	  bring-up.
+
 endchoice
 
 if APP_TDMA_TEST
@@ -120,6 +133,6 @@ endif # APP_SOAK
 # (sourced via Kconfig.zephyr below), so its conditional default wins.
 config LORA_SX126X_NATIVE_SLEEP
 	bool
-	default n if APP_TDMA_TEST || APP_TDMA_CONSOLE || APP_SOAK
+	default n if APP_TDMA_TEST || APP_TDMA_CONSOLE || APP_SOAK || APP_TDMA_FIELD
 
 source "Kconfig.zephyr"

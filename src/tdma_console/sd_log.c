@@ -6,7 +6,7 @@
 
 #include <zephyr/kernel.h>
 
-#if defined(CONFIG_APP_TDMA_CONSOLE)
+#if defined(CONFIG_APP_TDMA_CONSOLE) || defined(CONFIG_APP_TDMA_FIELD)
 
 #include "sd_log.h"
 
@@ -19,7 +19,7 @@
 #include <stdio.h>
 #include <string.h>
 
-#define SD_DISK_NAME	"SD"	/* matches disk-name in the display overlay */
+#define SD_DISK_NAME	"SD"	/* disk-name in the display and shield overlays */
 #define SD_MAX_SESSIONS	1000	/* NNN in the session filename */
 #define SD_DISK_INIT_TRIES	3
 #define SD_DISK_INIT_RETRY_MS	250
@@ -381,4 +381,4 @@ const struct sd_log_stats *sd_log_get_stats(void)
 	return &stats;
 }
 
-#endif /* CONFIG_APP_TDMA_CONSOLE */
+#endif /* CONFIG_APP_TDMA_CONSOLE || CONFIG_APP_TDMA_FIELD */

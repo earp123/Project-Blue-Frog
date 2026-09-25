@@ -9,8 +9,10 @@ FILE(GLOB app_sources src/*.c)
 target_sources(app PRIVATE ${app_sources})
 
 # Intercom TDMA variants: the L1/L2 radio layer is shared; each variant
-# links its own main() (UART-shell bench test vs. TFT field console).
-if(CONFIG_APP_TDMA_TEST OR CONFIG_APP_TDMA_CONSOLE OR CONFIG_APP_SOAK)
+# links its own main() (UART-shell bench test, TFT field console, OLED field
+# unit, soak harness).
+if(CONFIG_APP_TDMA_TEST OR CONFIG_APP_TDMA_CONSOLE OR CONFIG_APP_SOAK OR
+   CONFIG_APP_TDMA_FIELD)
   FILE(GLOB tdma_sources src/tdma/*.c)
   target_sources(app PRIVATE ${tdma_sources})
   target_include_directories(app PRIVATE src/tdma)
@@ -31,6 +33,18 @@ if(CONFIG_APP_TDMA_CONSOLE)
   target_sources(app PRIVATE ${tdma_console_sources})
   # For the shared display toolkit / touch cal headers (src/ui_widgets.h ...).
   target_include_directories(app PRIVATE src)
+endif()
+
+# Rev 2 shield field unit (OLED + microSD). It shares the console's SD logger
+# and soak logger, which do not depend on the display, so those two files are
+# named explicitly. Globbing src/tdma_console would also pull in the
+# console's main(), and ui_widgets/touch_cal are TFT-only.
+if(CONFIG_APP_TDMA_FIELD)
+  FILE(GLOB tdma_field_sources src/tdma_field/*.c)
+  target_sources(app PRIVATE ${tdma_field_sources}
+    src/tdma_console/sd_log.c
+    src/tdma_console/soak_log.c)
+  target_include_directories(app PRIVATE src/tdma_console)
 endif()
 
 # Soak harness: the shared runner (soak_run/soak_role) plus every per-test
