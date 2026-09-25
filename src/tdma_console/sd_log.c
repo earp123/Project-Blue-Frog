@@ -19,7 +19,7 @@
 #include <stdio.h>
 #include <string.h>
 
-#define SD_DISK_NAME	"SD"	/* disk-name in the display and shield overlays */
+#define SD_DISK_NAME	"SD"	/* disk-name in the tft and shield overlays */
 #define SD_MAX_SESSIONS	1000	/* NNN in the session filename */
 #define SD_DISK_INIT_TRIES	3
 #define SD_DISK_INIT_RETRY_MS	250

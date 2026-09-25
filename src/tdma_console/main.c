@@ -3,10 +3,10 @@
  *
  * Field-test container UI for the TDMA radio layer (src/tdma): run timed soak
  * tests of the continuous TX/RX frame exchange and watch link telemetry live
- * on the TFT. Reuses the telemetry console's display toolkit (ui_widgets) and
- * touch calibration (touch_cal); the radio path is exclusively the TDMA
- * L1/L2 shim — the native driver is init-only, exactly as in the TDMA test
- * variant. This file is only compiled for CONFIG_APP_TDMA_CONSOLE.
+ * on the TFT. Draws with the display toolkit (ui_widgets) and touch
+ * calibration (touch_cal) kept from the retired telemetry console; the
+ * radio path is exclusively the TDMA L1/L2 shim — the native driver is
+ * init-only. This file is only compiled for CONFIG_APP_TDMA_CONSOLE.
  *
  * Display-only build (no UART / log / shell). One firmware image serves every
  * unit: the unit (MASTER in slot 0, or SEC 1..3) is picked at power-on and
@@ -57,7 +57,7 @@
 #include "soak_log.h"
 
 /* ---- Layout ----
- * Portrait, 240x320 (see the rotation note in the display overlay). Rows use
+ * Portrait, 240x320 (see the rotation note in the TFT overlay). Rows use
  * fixed heights rather than dividing the body: portrait leaves 272 px of body,
  * and splitting that between two menu rows would produce 130 px-tall buttons.
  * Text is 10 px/char, so a full-width line is 23 characters at MARG.

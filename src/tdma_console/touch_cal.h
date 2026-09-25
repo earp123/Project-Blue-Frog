@@ -10,7 +10,7 @@
  *     screen_y = D*raw_x + E*raw_y + F
  *
  * The coefficients are fitted on-device from several (raw -> known screen point)
- * samples collected by the calibration UI (see SCR_CALIBRATE in console.c).
+ * samples collected by the calibration UI (see SCR_CALIBRATE in main.c).
  *
  * State is in-RAM only (re-run after each boot/reflash); persistence to
  * settings/NVS is a follow-up.

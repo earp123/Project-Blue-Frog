@@ -3,56 +3,50 @@
 cmake_minimum_required(VERSION 3.20.0)
 
 find_package(Zephyr REQUIRED HINTS $ENV{ZEPHYR_BASE})
-project(lora_send)
+project(blue_frog)
 
-FILE(GLOB app_sources src/*.c)
-target_sources(app PRIVATE ${app_sources})
-
-# Intercom TDMA variants: the L1/L2 radio layer is shared; each variant
-# links its own main() (UART-shell bench test, TFT field console, OLED field
-# unit, soak harness).
-if(CONFIG_APP_TDMA_TEST OR CONFIG_APP_TDMA_CONSOLE OR CONFIG_APP_SOAK OR
-   CONFIG_APP_TDMA_FIELD)
-  FILE(GLOB tdma_sources src/tdma/*.c)
-  target_sources(app PRIVATE ${tdma_sources})
-  target_include_directories(app PRIVATE src/tdma)
-  # Driver-internal header, needed once at init to detach the native
-  # driver's DIO1 gpio_callback (docs/tdma_layering.md). The installed
-  # driver *is* the repo's vendored copy (scripts/setup_sdk.sh), so the
-  # struct layout is the one this build links against.
-  target_include_directories(app PRIVATE ${ZEPHYR_BASE}/drivers/lora/native/sx126x)
+# One firmware per unit type, each with its own overlay + conf pair:
+#
+#   TFT unit     CONFIG_APP_TDMA_CONSOLE  src/tdma_console  boards/..._tft.*
+#   shield unit  CONFIG_APP_TDMA_FIELD    src/tdma_field    boards/..._shield.*
+#
+# A build given only one file of a pair, or neither, would link a front end
+# the devicetree does not have and fail somewhere obscure. Stop here instead,
+# with the two build lines.
+if(CONFIG_APP_TDMA_CONSOLE)
+  dt_nodelabel(unit_front_end NODELABEL ili9341)
+elseif(CONFIG_APP_TDMA_FIELD)
+  dt_nodelabel(unit_front_end NODELABEL ssd1306)
+endif()
+if(NOT unit_front_end)
+  message(FATAL_ERROR
+    "Build one unit type, passing both of its files:\n"
+    "  TFT unit:    -DEXTRA_DTC_OVERLAY_FILE=boards/nrf5340dk_nrf5340_cpuapp_tft.overlay"
+    " -DEXTRA_CONF_FILE=boards/nrf5340dk_nrf5340_cpuapp_tft.conf\n"
+    "  shield unit: -DEXTRA_DTC_OVERLAY_FILE=boards/nrf5340dk_nrf5340_cpuapp_shield.overlay"
+    " -DEXTRA_CONF_FILE=boards/nrf5340dk_nrf5340_cpuapp_shield.conf\n"
+    "(see README.md, \"Building and flashing\").")
 endif()
 
-if(CONFIG_APP_TDMA_TEST)
-  FILE(GLOB tdma_app_sources src/tdma_app/*.c)
-  target_sources(app PRIVATE ${tdma_app_sources})
-endif()
+# Shared by both units: the L1/L2 TDMA radio layer, and the SD card + soak
+# loggers, which do not depend on the display.
+FILE(GLOB tdma_sources src/tdma/*.c)
+target_sources(app PRIVATE ${tdma_sources}
+  src/tdma_console/sd_log.c
+  src/tdma_console/soak_log.c)
+target_include_directories(app PRIVATE src/tdma src/tdma_console)
+# Driver-internal header, needed once at init to detach the native driver's
+# DIO1 gpio_callback (docs/tdma_layering.md). The installed driver *is* the
+# repo's vendored copy (scripts/setup_sdk.sh), so the struct layout is the
+# one this build links against.
+target_include_directories(app PRIVATE ${ZEPHYR_BASE}/drivers/lora/native/sx126x)
 
 if(CONFIG_APP_TDMA_CONSOLE)
-  FILE(GLOB tdma_console_sources src/tdma_console/*.c)
-  target_sources(app PRIVATE ${tdma_console_sources})
-  # For the shared display toolkit / touch cal headers (src/ui_widgets.h ...).
-  target_include_directories(app PRIVATE src)
-endif()
-
-# Rev 2 shield field unit (OLED + microSD). It shares the console's SD logger
-# and soak logger, which do not depend on the display, so those two files are
-# named explicitly. Globbing src/tdma_console would also pull in the
-# console's main(), and ui_widgets/touch_cal are TFT-only.
-if(CONFIG_APP_TDMA_FIELD)
+  target_sources(app PRIVATE
+    src/tdma_console/main.c
+    src/tdma_console/ui_widgets.c
+    src/tdma_console/touch_cal.c)
+elseif(CONFIG_APP_TDMA_FIELD)
   FILE(GLOB tdma_field_sources src/tdma_field/*.c)
-  target_sources(app PRIVATE ${tdma_field_sources}
-    src/tdma_console/sd_log.c
-    src/tdma_console/soak_log.c)
-  target_include_directories(app PRIVATE src/tdma_console)
-endif()
-
-# Soak harness: the shared runner (soak_run/soak_role) plus every per-test
-# main() under src/soak. Each test's body is guarded by its CONFIG_SOAK_TEST_*
-# symbol, so only the selected one links a main(). GLOB_RECURSE reaches the
-# per-test subdirectories.
-if(CONFIG_APP_SOAK)
-  FILE(GLOB_RECURSE soak_sources src/soak/*.c)
-  target_sources(app PRIVATE ${soak_sources})
-  target_include_directories(app PRIVATE src/soak)
+  target_sources(app PRIVATE ${tdma_field_sources})
 endif()

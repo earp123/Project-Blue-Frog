@@ -231,7 +231,8 @@ extern struct k_msgq tdma_rx_msgq;
 
 /*
  * M0 bring-up helpers (engine must be stopped): fire one packet / one
- * blocking receive through L2/L1. Used by the "tdma" shell commands.
+ * blocking receive through L2/L1. Written for the retired UART-shell test
+ * variant's "tdma" commands; no current firmware calls them.
  */
 int tdma_manual_tx(const uint8_t payload[TDMA_PAYLOAD_LEN]);
 int tdma_manual_rx(uint32_t timeout_ms, struct tdma_rx_msg *msg);

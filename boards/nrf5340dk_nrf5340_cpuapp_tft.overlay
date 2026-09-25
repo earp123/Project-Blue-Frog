@@ -1,6 +1,7 @@
 /*
- * Hiletgo ILI9341 TFT breakout (display + XPT2046 touch + microSD), jumper-wired
- * to the nRF5340 DK Port 0 headers.
+ * TFT unit front end: Hiletgo ILI9341 TFT breakout (display + XPT2046 touch +
+ * microSD), jumper-wired to the nRF5340 DK Port 0 headers. Paired with
+ * boards/nrf5340dk_nrf5340_cpuapp_tft.conf.
  *
  * Separate from the Wio-SX1262 LoRa shield: the LoRa overlay
  * (nrf5340dk_nrf5340_cpuapp.overlay) uses spi2 on port 1; the breakout uses spi4

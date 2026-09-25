@@ -3,7 +3,7 @@
  * front end for the TDMA field variant (CONFIG_APP_TDMA_FIELD).
  *
  * Additive to the auto-applied radio overlay (nrf5340dk_nrf5340_cpuapp.overlay:
- * SX1262 on spi2 / port 1, unchanged). Like the display overlay, this one must
+ * SX1262 on spi2 / port 1, unchanged). Like the TFT overlay, this one must
  * be passed explicitly via EXTRA_DTC_OVERLAY_FILE, with
  * boards/nrf5340dk_nrf5340_cpuapp_shield.conf.
  *
@@ -20,7 +20,7 @@
  * SD "disk" failure with this mapping means the card is not seated: DET
  * reads raw 1 until the push-push socket clicks.
  *
- * The TFT/touch front end (display overlay: P0.10, P0.13-18, P0.28-31) is not
+ * The TFT/touch front end (TFT overlay: P0.10, P0.13-18, P0.28-31) is not
  * used by this variant, so the DK LEDs on P0.28-31 are free again.
  */
 
@@ -101,7 +101,7 @@
 		reg = <0>;
 		status = "okay";
 		/*
-		 * Copied verbatim from the display overlay. These two values are
+		 * Copied verbatim from the TFT overlay. These two values are
 		 * the fix for the 2026-07-31 enumeration failures, so do not
 		 * "tidy" them back to the binding defaults.
 		 *
