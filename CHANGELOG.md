@@ -12,40 +12,71 @@ For hardware wiring, build/flash instructions, and SDK setup, see
 
 On-device radio-evaluation tooling for the nRF5340 DK + Wio-SX1262 (SX1262),
 plus the first slice of the wireless-intercom firmware (TDMA radio layer).
-_Last updated: 2026-09-24._
+_Last updated: 2026-09-25._
 
 ### Firmware variants
 
-Six variants build from one source tree; exactly one `main()` is linked,
-chosen by the Kconfig choice in [`Kconfig`](Kconfig):
+Two variants, one per unit type on the bench, build from one source tree.
+Exactly one `main()` is linked, chosen by the Kconfig choice in
+[`Kconfig`](Kconfig) through the unit's companion conf. The README's
+"Building and flashing" has both build lines.
 
-- **LoRa send** (`CONFIG_APP_LORA_SEND`, default) — [`src/main.c`](src/main.c).
-  Minimal one-shot transmit plus a raw-SPI radio status dump. Radio-only bring-up.
-- **Telemetry console** (`CONFIG_APP_CONSOLE`) — [`src/console.c`](src/console.c)
-  and its modules. The full touch + DK-button device app described below
-  (native-driver radio path; kept as-is).
-- **Intercom TDMA test** (`CONFIG_APP_TDMA_TEST`) —
-  [`src/tdma_app/main.c`](src/tdma_app/main.c) +
-  [`src/tdma/`](src/tdma). See "Intercom TDMA radio layer" below.
-- **Intercom TDMA field console** (`CONFIG_APP_TDMA_CONSOLE`) —
-  [`src/tdma_console/main.c`](src/tdma_console/main.c) + the same
-  [`src/tdma/`](src/tdma) engine. See "TDMA field console" below.
-- **Soak test** (`CONFIG_APP_SOAK`) — [`src/soak/`](src/soak). Headless,
-  UART-CSV bench harness over the same [`src/tdma/`](src/tdma) engine, with a
-  nested `SOAK_TEST_*` choice picking the individual test. See "Soak test
-  harness" below.
-- **Intercom TDMA field unit** (`CONFIG_APP_TDMA_FIELD`) —
-  [`src/tdma_field/main.c`](src/tdma_field/main.c) + the same
-  [`src/tdma/`](src/tdma) engine, on the rev 2 shield (SSD1306 OLED +
-  microSD + Wio-SX1262). The field console's soak runner and SD logging
-  behind a buttons-only OLED UI. See "Rev 2 shield / field variant" below.
+- **TFT unit** (`CONFIG_APP_TDMA_CONSOLE`) —
+  [`src/tdma_console/`](src/tdma_console) + the [`src/tdma/`](src/tdma)
+  engine, built with `boards/nrf5340dk_nrf5340_cpuapp_tft.{overlay,conf}`.
+  See "TDMA field console" below.
+- **Shield unit** (`CONFIG_APP_TDMA_FIELD`) —
+  [`src/tdma_field/`](src/tdma_field) + the same engine, built with
+  `boards/nrf5340dk_nrf5340_cpuapp_shield.{overlay,conf}`. See "Rev 2 shield /
+  field variant" below.
+
+Four other variants were retired on 2026-09-25: LoRa send, the telemetry
+console, the TDMA UART-shell test and the UART soak harness (see "Streamlined
+to two unit types"). Their sections below are kept as history.
+
+### Streamlined to two unit types (2026-09-25)
+
+The bench now runs two kinds of radio, and the tree builds exactly those:
+
+| Unit | Firmware | Files |
+|---|---|---|
+| TFT unit | `CONFIG_APP_TDMA_CONSOLE` | `boards/nrf5340dk_nrf5340_cpuapp_tft.overlay` + `.conf` |
+| Shield unit | `CONFIG_APP_TDMA_FIELD` | `boards/nrf5340dk_nrf5340_cpuapp_shield.overlay` + `.conf` |
+
+- **Removed:**
+  - LoRa send (`src/main.c`).
+  - The telemetry console: `src/console.c`, `radio_cfg`, `payload`,
+    `pingpong` and `boards/..._display.conf`.
+  - The TDMA UART-shell test (`src/tdma_app/`).
+  - The UART soak harness (`src/soak/`).
+
+  Their Kconfig entries went with them, including the TDMA test's
+  role/slot/autostart options and the soak-test choice. Everything stays in
+  git history.
+- **One overlay + one conf per unit, with matching names.** The TFT pair was
+  `display.overlay` + `tdma_console.conf`, and some builds also stacked the
+  old telemetry console's `display.conf` on top. It is now `_tft.overlay` +
+  `_tft.conf`.
+- **A mismatched build stops at CMake.** If the unit's conf and overlay
+  don't match, or are missing, the build fails with the two correct build
+  lines rather than failing later in the link.
+- **Shared code is built for both units.** The TFT-only `ui_widgets` and
+  `touch_cal` moved into `src/tdma_console/`. The SD and soak loggers stay
+  there too, and CMake builds them for both units.
+  `LORA_SX126X_NATIVE_SLEEP` is now `n` unconditionally, and `prj.conf` only
+  holds settings both units share.
+- **No firmware change:** pristine builds of both units produce images the
+  same size as before (TFT 103,064 B, shield 117,460 B).
+- **README rewritten** around the two units: build and flash lines, the
+  power-on unit pick, the rev 2 shield pins, and the SD hot-swap caveat.
 
 ### Rev 2 shield / field variant (2026-09-24)
 
 The rev 2 shield carries the whole front end: SX1262 radio, a 0.96"
 SSD1306 128×64 OLED and a push-push microSD socket. The TFT breakout is not
-used. New variant `CONFIG_APP_TDMA_FIELD`; the TFT console and its display
-overlay/conf are unchanged and still build.
+used. New variant `CONFIG_APP_TDMA_FIELD`; the TFT console is unchanged
+apart from the unit pick. Its overlay/conf pair was renamed `_tft` on
+2026-09-25.
 
 | Device | Bus | Pins (DK Arduino header) |
 |---|---|---|
@@ -135,7 +166,7 @@ overlay/conf are unchanged and still build.
   the screen showed a bare errno. Those paths now report `write` / `close`,
   and each run starts with a clean stage. This affects the TFT console too.
 - Build (FLASH 117,292 B / RAM 45,756 B):
-  `west build -b nrf5340dk/nrf5340/cpuapp -p always -d build-tdma-field --`
+  `west build -b nrf5340dk/nrf5340/cpuapp -p always -d build-shield --`
   `-DEXTRA_DTC_OVERLAY_FILE=boards/nrf5340dk_nrf5340_cpuapp_shield.overlay`
   `-DEXTRA_CONF_FILE=boards/nrf5340dk_nrf5340_cpuapp_shield.conf`
 
@@ -244,7 +275,8 @@ on 2026-08-18 (see "Slot width 50 ms → 20 ms" below).
   `tdma_start()` is the only entry into SYNCING, so a locked unit never
   re-enters acquisition and the lock threshold governs start-up alignment
   only.
-- **App** — Kconfig role/slot (`TDMA_ROLE_MASTER`/`TDMA_ROLE_SECONDARY`,
+- **App** (the UART-shell test variant, retired 2026-09-25) — Kconfig
+  role/slot (`TDMA_ROLE_MASTER`/`TDMA_ROLE_SECONDARY`,
   `TDMA_SLOT_ID`), telemetry print every 5 s over UART, and `tdma` shell
   commands (`tx`, `rx [s]`, `start`, `stop`, `stats`) for M0 manual bring-up.
 - Build: `west build -b nrf5340dk/nrf5340/cpuapp -p always -- -DCONFIG_APP_TDMA_TEST=y`
@@ -255,8 +287,9 @@ on 2026-08-18 (see "Slot width 50 ms → 20 ms" below).
 First "test container": the bench diagnostics sequence above, packaged as an
 on-device TFT applet for field soak testing —
 [`src/tdma_console/main.c`](src/tdma_console/main.c). Reuses the telemetry
-console's display toolkit ([`src/ui_widgets.c`](src/ui_widgets.c)) and touch
-calibration ([`src/touch_cal.c`](src/touch_cal.c)); the radio path is
+console's display toolkit ([`src/tdma_console/ui_widgets.c`](src/tdma_console/ui_widgets.c))
+and touch calibration ([`src/tdma_console/touch_cal.c`](src/tdma_console/touch_cal.c));
+the radio path is
 exclusively the TDMA L1/L2 shim (the old console's native-driver modules —
 `radio_cfg`/`payload`/`pingpong` — are not used). Display-only: no UART,
 logging, or shell.
@@ -288,13 +321,15 @@ logging, or shell.
   still pins `TDMA_SLOT_DURATION_US` at compile time; making it runtime is
   the planned next engine change for width evaluation).
 - Build:
-  `west build -b nrf5340dk/nrf5340/cpuapp -p always -d build-tdma-console --`
-  `-DEXTRA_DTC_OVERLAY_FILE=boards/nrf5340dk_nrf5340_cpuapp_display.overlay`
-  `-DEXTRA_CONF_FILE=boards/nrf5340dk_nrf5340_cpuapp_tdma_console.conf`
-  (same display/touch wiring as the telemetry console; the SD stack was
-  added to this build on 2026-07-31).
+  `west build -b nrf5340dk/nrf5340/cpuapp -p always -d build-tft --`
+  `-DEXTRA_DTC_OVERLAY_FILE=boards/nrf5340dk_nrf5340_cpuapp_tft.overlay`
+  `-DEXTRA_CONF_FILE=boards/nrf5340dk_nrf5340_cpuapp_tft.conf`
+  (the pair was `display.overlay` + `tdma_console.conf` until 2026-09-25;
+  the SD stack was added to this build on 2026-07-31).
 
 ### Soak test harness (2026-07-30)
+
+_Retired 2026-09-25 with the streamline to two unit types (see that entry above); kept as history._
 
 New [`src/soak/`](src/soak) subtree (`CONFIG_APP_SOAK`): individually flashable
 bench soak tests that stream machine-ingestible CSV over the DK's VCOM UART,
@@ -940,6 +975,8 @@ proven at the 20 ms production slot width.
 
 ### HOME menu
 
+_Retired 2026-09-25 with the streamline to two unit types (see that entry above); kept as history._
+
 The console boots to a HOME screen. Navigate with the DK buttons
 (**B1 = UP, B2 = DOWN, B3 = OK, B4 = BACK**) or by touch. The footer shows the
 live applied-config summary.
@@ -979,18 +1016,20 @@ and **PING PONG STATS** views.
 
 ### Added (modules)
 
+_The telemetry console's modules were retired 2026-09-25; `ui_widgets` and `touch_cal` live on in `src/tdma_console/` as the TFT unit's toolkit._
+
 - **Staged RF config** — [`src/radio_cfg.c`](src/radio_cfg.c) /
   [`.h`](src/radio_cfg.h). Shadow + applied `lora_modem_config`, clamping
   setters/steppers, `radio_cfg_validate()` (datasheet limits), `radio_cfg_apply()`
   (the single commit point), dirty tracking, and value/summary formatters.
 - **Payload buffer** — [`src/payload.c`](src/payload.c) /
   [`.h`](src/payload.h). Byte buffer + length, canned presets, hex format/parse.
-- **UI toolkit + keypad** — [`src/ui_widgets.c`](src/ui_widgets.c) /
-  [`.h`](src/ui_widgets.h). RGB565 blit primitives (CFB glyph data only — see the
+- **UI toolkit + keypad** — [`src/tdma_console/ui_widgets.c`](src/tdma_console/ui_widgets.c) /
+  [`.h`](src/tdma_console/ui_widgets.h). RGB565 blit primitives (CFB glyph data only — see the
   CFB note in the README), hit-testing, button and config value-row widgets, and
   the reusable HEX/DEC keypad modal.
-- **Touch calibration** — [`src/touch_cal.c`](src/touch_cal.c) /
-  [`.h`](src/touch_cal.h). In-RAM affine transform + a 5-point least-squares
+- **Touch calibration** — [`src/tdma_console/touch_cal.c`](src/tdma_console/touch_cal.c) /
+  [`.h`](src/tdma_console/touch_cal.h). In-RAM affine transform + a 5-point least-squares
   solver (mean-centred, single-precision, FPU-optional).
 - **Ping/pong link test** — [`src/pingpong.c`](src/pingpong.c) /
   [`.h`](src/pingpong.h). A single dedicated RX thread that owns the radio while
@@ -1002,6 +1041,8 @@ and **PING PONG STATS** views.
   loop calls `display_write()`).
 
 ### Test functions & modes
+
+_Retired 2026-09-25 with the streamline to two unit types (see that entry above); kept as history._
 
 - **One-shot TX + radio status dump** — [`src/main.c`](src/main.c) (LoRa-send
   variant). Transmits a 16-byte payload once and dumps the SX1262 IRQ status and
@@ -1015,6 +1056,8 @@ and **PING PONG STATS** views.
   path end to end.
 
 ### Removed
+
+_Retired 2026-09-25 with the streamline to two unit types (see that entry above); kept as history._
 
 - **UART / serial console and all logging on the console build.** The telemetry
   console is now display-only — every `printk` / `LOG_*` call was removed from the
@@ -1052,14 +1095,8 @@ native SX126x LoRa driver this project uses. See the README's
 
 ### Known limitations / next
 
-- **RX / round-trip** beyond ping/pong, plus **RSSI/SNR** readout on the TX/RX
-  screens.
-- **ASCII keypad** (the keypad modal is data-driven and architected for a third
-  key table).
-- **Touch calibration is in-RAM only.** On the field console this is now
-  deliberate — a mandatory power-on step lasting the session (see above).
-  Elsewhere (and for ping/pong stats) persistence to settings/NVS or SD
-  remains unbuilt.
+- **Touch calibration is in-RAM only** on the TFT unit. That is deliberate:
+  it is a mandatory power-on step lasting the session (see above).
 - **TX records carry no frame counter.** `frame_ctr` is a *shared* frame
   number — the master owns it and the secondary adopts it verbatim from each
   beacon, so both units stamp the same value in a given frame, which is what
@@ -1118,8 +1155,6 @@ native SX126x LoRa driver this project uses. See the README's
 - **Field PER is unmeasured.** The 5-minute bench soak below closed at 0 % loss
   with ~45 dB of margin over SF5/BW500 sensitivity — that validates the stack,
   not the range. Loss behaviour at distance is still unknown.
-- **Transmit is synchronous** on a dedicated thread (no `lora_send_async` /
-  LBT / CAD result semantics).
 - **Front end.** The rev 2 shield now carries an OLED + microSD front end for
   the field variant (see "Rev 2 shield / field variant"; bench bring-up
   pending). The TFT breakout used by the two consoles is still jumper-wired
