@@ -1,8 +1,9 @@
 /*
  * ui_widgets - the console's display toolkit.
  *
- * Owns the low-level RGB565 blit primitives (moved out of console.c) plus the
- * reusable widgets: push-button, config value-row, and the modal keypad.
+ * Owns the low-level RGB565 blit primitives (moved out of the original
+ * telemetry console) plus the reusable widgets: push-button, config
+ * value-row, and the modal keypad.
  *
  * Single-owner drawing rule: every function here writes the panel via
  * display_write() and must only ever be called from the main/draw loop. Input

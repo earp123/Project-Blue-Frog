@@ -153,7 +153,8 @@ struct soak_log_status {
 	uint32_t dropped;	/* ring-full drops (producer side) */
 	uint32_t bytes;
 	int err;		/* last writer error, 0 if healthy */
-	const char *err_stage;	/* "disk" / "mount" / "open" when err is set */
+	const char *err_stage;	/* "disk" / "mount" / "open" / "write" / "close"
+				 * when err is set */
 	const char *path;
 };
 
@@ -185,6 +186,7 @@ enum sd_fsop_op {
 	SD_FSOP_MKDIR,		/* a = path */
 	SD_FSOP_RENAME,		/* a -> b (also moves across directories; a
 				 * missing destination drawer is created) */
+	SD_FSOP_SUMMARY,	/* a = directory path; see sd_fsop_submit_summary */
 };
 
 struct sd_dirent {
@@ -201,6 +203,34 @@ struct sd_dirent {
  */
 int sd_fsop_submit(enum sd_fsop_op op, const char *a, const char *b,
 		   struct sd_dirent *ents, int cap);
+
+/* One directory's log summary plus volume space (SD_FSOP_SUMMARY). */
+struct sd_summary {
+	uint32_t bin_count;		/* *.BIN files in the directory */
+	char newest[SD_FSOP_NAME_MAX];	/* last *.BIN in directory order; ""
+					 * if none */
+	uint32_t free_mib;		/* fs_statvfs; valid if vfs_err == 0 */
+	uint32_t total_mib;
+	int vfs_err;
+};
+
+/*
+ * Queue a summary of dir: count its *.BIN files, note the last one in
+ * directory order, and fs_statvfs the volume.
+ *
+ * This is not a LIST because LIST stops at the caller's buffer and sorts by
+ * name. FAT appends new entries at the end of the directory, so on a card
+ * with many logs a capped listing drops exactly the newest ones. This op walks
+ * the whole directory and needs no entry buffer. "Last in directory order" is
+ * the newest file unless something deleted entries earlier in the directory
+ * and a later file reused the gap. The field unit never deletes; the console's
+ * file browser can.
+ *
+ * Same one-deep slot and rules as sd_fsop_submit(): out is written on the
+ * writer thread and must not be read until sd_fsop_poll() reports completion
+ * (count = bin_count, saturated at INT_MAX).
+ */
+int sd_fsop_submit_summary(const char *dir, struct sd_summary *out);
 
 /* True once the op has finished; result (0 / -errno) and, for LIST, the
  * entry count are returned and the slot frees for the next op.

@@ -4,7 +4,7 @@
 
 #include <zephyr/kernel.h>
 
-#if defined(CONFIG_APP_CONSOLE) || defined(CONFIG_APP_TDMA_CONSOLE)
+#if defined(CONFIG_APP_TDMA_CONSOLE)
 
 #include "ui_widgets.h"
 
@@ -30,7 +30,7 @@ static const struct cfb_font *title_font; /* 20x32 */
 static uint16_t linebuf[320 * 32];
 
 /* ---------------------------------------------------------------------------
- * Font / text rendering (ported from the original console.c)
+ * Font / text rendering (ported from the original telemetry console)
  * ------------------------------------------------------------------------- */
 
 static const struct cfb_font *find_font(uint8_t want_width)
@@ -625,4 +625,4 @@ const char *keypad_text(void)
 	return kp_buf;
 }
 
-#endif /* CONFIG_APP_CONSOLE || CONFIG_APP_TDMA_CONSOLE */
+#endif /* CONFIG_APP_TDMA_CONSOLE */

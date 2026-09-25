@@ -12,28 +12,240 @@ For hardware wiring, build/flash instructions, and SDK setup, see
 
 On-device radio-evaluation tooling for the nRF5340 DK + Wio-SX1262 (SX1262),
 plus the first slice of the wireless-intercom firmware (TDMA radio layer).
-_Last updated: 2026-08-19._
+_Last updated: 2026-09-25._
 
 ### Firmware variants
 
-Five variants build from one source tree; exactly one `main()` is linked,
-chosen by the Kconfig choice in [`Kconfig`](Kconfig):
+Two variants, one per unit type on the bench, build from one source tree.
+Exactly one `main()` is linked, chosen by the Kconfig choice in
+[`Kconfig`](Kconfig) through the unit's companion conf. The README's
+"Building and flashing" has both build lines.
 
-- **LoRa send** (`CONFIG_APP_LORA_SEND`, default) — [`src/main.c`](src/main.c).
-  Minimal one-shot transmit plus a raw-SPI radio status dump. Radio-only bring-up.
-- **Telemetry console** (`CONFIG_APP_CONSOLE`) — [`src/console.c`](src/console.c)
-  and its modules. The full touch + DK-button device app described below
-  (native-driver radio path; kept as-is).
-- **Intercom TDMA test** (`CONFIG_APP_TDMA_TEST`) —
-  [`src/tdma_app/main.c`](src/tdma_app/main.c) +
-  [`src/tdma/`](src/tdma). See "Intercom TDMA radio layer" below.
-- **Intercom TDMA field console** (`CONFIG_APP_TDMA_CONSOLE`) —
-  [`src/tdma_console/main.c`](src/tdma_console/main.c) + the same
-  [`src/tdma/`](src/tdma) engine. See "TDMA field console" below.
-- **Soak test** (`CONFIG_APP_SOAK`) — [`src/soak/`](src/soak). Headless,
-  UART-CSV bench harness over the same [`src/tdma/`](src/tdma) engine, with a
-  nested `SOAK_TEST_*` choice picking the individual test. See "Soak test
-  harness" below.
+- **TFT unit** (`CONFIG_APP_TDMA_CONSOLE`) —
+  [`src/tdma_console/`](src/tdma_console) + the [`src/tdma/`](src/tdma)
+  engine, built with `boards/nrf5340dk_nrf5340_cpuapp_tft.{overlay,conf}`.
+  See "TDMA field console" below.
+- **Shield unit** (`CONFIG_APP_TDMA_FIELD`) —
+  [`src/tdma_field/`](src/tdma_field) + the same engine, built with
+  `boards/nrf5340dk_nrf5340_cpuapp_shield.{overlay,conf}`. See "Rev 2 shield /
+  field variant" below.
+
+Four other variants were retired on 2026-09-25: LoRa send, the telemetry
+console, the TDMA UART-shell test and the UART soak harness (see "Streamlined
+to two unit types"). Their sections below are kept as history.
+
+### Streamlined to two unit types (2026-09-25)
+
+The bench now runs two kinds of radio, and the tree builds exactly those:
+
+| Unit | Firmware | Files |
+|---|---|---|
+| TFT unit | `CONFIG_APP_TDMA_CONSOLE` | `boards/nrf5340dk_nrf5340_cpuapp_tft.overlay` + `.conf` |
+| Shield unit | `CONFIG_APP_TDMA_FIELD` | `boards/nrf5340dk_nrf5340_cpuapp_shield.overlay` + `.conf` |
+
+- **Removed:**
+  - LoRa send (`src/main.c`).
+  - The telemetry console: `src/console.c`, `radio_cfg`, `payload`,
+    `pingpong` and `boards/..._display.conf`.
+  - The TDMA UART-shell test (`src/tdma_app/`).
+  - The UART soak harness (`src/soak/`).
+
+  Their Kconfig entries went with them, including the TDMA test's
+  role/slot/autostart options and the soak-test choice. Everything stays in
+  git history.
+- **One overlay + one conf per unit, with matching names.** The TFT pair was
+  `display.overlay` + `tdma_console.conf`, and some builds also stacked the
+  old telemetry console's `display.conf` on top. It is now `_tft.overlay` +
+  `_tft.conf`.
+- **A mismatched build stops at CMake.** If the unit's conf and overlay
+  don't match, or are missing, the build fails with the two correct build
+  lines rather than failing later in the link.
+- **Shared code is built for both units.** The TFT-only `ui_widgets` and
+  `touch_cal` moved into `src/tdma_console/`. The SD and soak loggers stay
+  there too, and CMake builds them for both units.
+  `LORA_SX126X_NATIVE_SLEEP` is now `n` unconditionally, and `prj.conf` only
+  holds settings both units share.
+- **No firmware change:** pristine builds of both units produce images the
+  same size as before (TFT 103,064 B, shield 117,460 B).
+- **README rewritten** around the two units: build and flash lines, the
+  power-on unit pick, the rev 2 shield pins, and the SD hot-swap caveat.
+
+### Rev 2 shield / field variant (2026-09-24)
+
+The rev 2 shield carries the whole front end: SX1262 radio, a 0.96"
+SSD1306 128×64 OLED and a push-push microSD socket. The TFT breakout is not
+used. New variant `CONFIG_APP_TDMA_FIELD`; the TFT console is unchanged
+apart from the unit pick. Its overlay/conf pair was renamed `_tft` on
+2026-09-25.
+
+| Device | Bus | Pins (DK Arduino header) |
+|---|---|---|
+| Wio-SX1262 | spi2 | unchanged: SCK P1.05, MOSI P1.04, MISO P1.01, CS P1.07, RST P1.06, BUSY P1.09, DIO1 P1.08, RF-SW P1.00 |
+| microSD | spi4 | SCK **P1.14** (D12), MOSI P1.13 (D11), MISO **P1.15** (D13), CS P1.11 (D9), DET P1.12 (D10) |
+| SSD1306 128×64 | i2c1 @ 400 kHz | SDA P0.25 (A4), SCL P0.26 (A5), RST P0.07 (A3), addr 0x3C |
+| DK buttons / LEDs | gpio | board defaults; LEDs P0.28–31 are free again |
+
+- **Pins traced in the fabrication data.** The two facts the task flagged as
+  unverified were checked against the rev 2 board's ODB++ netlist
+  ([`Hardware/OLED-SD-SX1262-Shield_2026-08-16.zip`](Hardware/OLED-SD-SX1262-Shield_2026-08-16.zip)).
+  - **SD:** D12 → the socket's `SCLK` and D13 → `DO/DAT0`. SCK is P1.14 and
+    MISO is P1.15, the reverse of the DK's default `arduino_spi`.
+  - **OLED:** the header's SDA/SCL run to A4/A5 (P0.25/P0.26). The R3
+    header's dedicated SDA/SCL pins (P1.02/P1.03) are unconnected.
+  - **Radio:** D0–D7 carry the same nets as rev 1.
+
+  All three were then confirmed on the bench (table below).
+- **Netlist findings that affect bring-up:**
+  - **DET:** the socket's `CD1` pad has a 100 k pull-up (R3) and a
+    capacitor to GND. Its `CD2` pad is unconnected, but the switch still
+    pulls `CD1` low when a card is seated, so DET works as-is.
+  - **I2C pull-ups:** the shield has none on SDA/SCL. The overlay enables
+    the nRF's internal pull-ups (~13 k) as a fallback. That is too weak for
+    fast-mode rise times if the OLED module carries no pull-ups of its
+    own; in that case drop to `I2C_BITRATE_STANDARD`.
+  - **OLED header (JP1):** pin order is SDA, SCL, RST, GND, n/c, VCC.
+- **Overlay** [`boards/nrf5340dk_nrf5340_cpuapp_shield.overlay`](boards/nrf5340dk_nrf5340_cpuapp_shield.overlay),
+  passed via `EXTRA_DTC_OVERLAY_FILE`:
+  - `spi4` re-pinned, with the SD slot on CS 0. The `sdhc`/`mmc` values are
+    carried over from the display overlay: 4 MHz and `power-delay-ms =
+    <250>`, the 2026-07-31 enumeration fix.
+  - `i2c1` re-pinned, with the SSD1306 node from Zephyr's `ssd1306_128x64`
+    shield plus the reset line. It also sets `zephyr,concat-buf-size =
+    <1025>`. The SSD1306 driver sends each frame as a 1-byte control prefix
+    plus 1024 pixel bytes, and TWIM has to merge the two in a RAM buffer
+    that defaults to 16 bytes. With the default, the controller ACKed its
+    init but every frame write failed and the screen stayed blank (+1 KB
+    RAM).
+  - `zephyr,user` gains `sd-det-gpios`, which the app reads; the SD driver
+    does not.
+- **Conf** [`boards/nrf5340dk_nrf5340_cpuapp_shield.conf`](boards/nrf5340dk_nrf5340_cpuapp_shield.conf):
+  the TDMA console's SD/FAT block (exFAT, LBA64, `FS_FATFS_MOUNT_MKFS=n`),
+  CFB, gpio-keys, a 2 KB heap for CFB's frame, and no `MIPI_DBI`. **UART
+  logging stays on**, since this shield does not touch VCOM.
+- **Soak runner** copied from the TFT console as-is: `soak_start` /
+  `soak_finish` / `soak_data_step` and the `K_PRIO_COOP(6)` data thread.
+  Logs always go to the card root. `sd_log.c`/`soak_log.c` are shared, not
+  copied: CMake adds the two files by name, and their guards now accept
+  either variant.
+- **UI: a cycle menu.** One item per screen, drawn as large as it fits.
+  The first cut packed 8 rows of 8×8 text onto the panel, which was
+  unreadable on a 0.96" OLED. Each screen is now a caption line, one middle
+  item and a detail line. B1/B2 cycle, B3 (OK) acts, B4 goes back.
+  - **UNIT** at boot is mandatory: MASTER, SEC 1, SEC 2 or SEC 3 (see
+    "Unit pick" below). The selection starts on SEC 1.
+  - **HOME** cycles SOAK, TX PWR and SD CARD. The caption line shows the
+    unit. Under SOAK, the detail line shows the card state (`SD 2 logs`,
+    or `SD disk -116`), rescanned on every entry to HOME.
+  - **SOAK** cycles 5 MIN, 30 MIN, 2 HOURS and CONTINUOUS. While a run is
+    live, UP/DOWN cycle pages at 2 Hz: TIME, RX (miss/dup), TX (stale),
+    PHASE (ppm), LINK (RSSI/SNR), LOG (file and records, or `LOG FAIL` with
+    `<stage> <errno>`) and LAT (`N/51` ms). The caption shows run state and
+    unit (`RUN M`, `SYNC S2`). B4 stops a run.
+  - **TX PWR:** OK to edit, −9…+22 dBm, default **+0 dBm**.
+  - **SD CARD** pages: `.BIN` count with the newest log, free/total space,
+    and card detect (`CARD IN` / `NO CARD` with the raw level).
+
+  UART logs boot, role, TX power, every card scan, every DET change, and
+  a one-line summary of each run.
+- **Card summary is a new writer-thread op**, `sd_fsop_submit_summary()`,
+  rather than `SD_FSOP_LIST`. LIST stops at the caller's buffer and sorts
+  by name. FAT appends new entries at the end of the directory, so a
+  capped list drops exactly the newest logs. The new op walks the whole
+  directory, counts `*.BIN`, keeps the last one in directory order, and runs
+  `fs_statvfs`. A soak cannot start while a scan is in flight: the scan
+  shares the writer thread with the log's open.
+- **Fonts.** The caption and detail lines use CFB's 10×16 font, which fits
+  12 characters, and every fixed string is written to fit that. The middle
+  item takes the tallest font that fits, capped at 24 px so it stays clear
+  of the edge lines. [`src/tdma_field/font_unscii8.c`](src/tdma_field/font_unscii8.c)
+  adds an 8×8 font, unscii-8 (public domain), converted mechanically from
+  LVGL's copy in the NCS tree by
+  [`tools/gen_font_unscii8.py`](src/tdma_field/tools/gen_font_unscii8.py).
+  It is now only a fallback for a runtime value too long for 12 characters.
+- **Shared logger fix:** a write or close failure left `err_stage` blank, so
+  the screen showed a bare errno. Those paths now report `write` / `close`,
+  and each run starts with a clean stage. This affects the TFT console too.
+- Build (FLASH 117,292 B / RAM 45,756 B):
+  `west build -b nrf5340dk/nrf5340/cpuapp -p always -d build-shield --`
+  `-DEXTRA_DTC_OVERLAY_FILE=boards/nrf5340dk_nrf5340_cpuapp_shield.overlay`
+  `-DEXTRA_CONF_FILE=boards/nrf5340dk_nrf5340_cpuapp_shield.conf`
+
+**Unit pick (both consoles).** Until now the TX slot followed the role:
+master in slot 0, every secondary in slot 1. With three units, two
+secondaries would transmit together in slot 1. The master would see
+collisions, and the two secondaries would never hear each other. The
+power-on role pick is now a **unit** pick, one choice per slot: MASTER
+(slot 0) or SEC 1–3. It sets `tdma_config.slot_id`, the log's META slot and
+the TX records' slot. The engine already accepted any slot 0–3; only the
+master has to be in slot 0, because secondaries lock to its slot-0 beacon.
+Order among secondaries does not matter as long as each has its own slot.
+- **Field unit:** a cycle item (`UNIT 2/4`, `SEC 1`, `slot 1  OK`).
+- **TFT console:** four touch/button choices under SELECT UNIT; buttons
+  shrink from 90 to 48 px to fit.
+- Both still let two units pick the same slot; that is on the operator.
+- Three units stay under card #23's receive-buffer wrap. Each unit hears at
+  most two packets between its own transmissions, and 2 × 44 B from 0x80
+  ends at 0xD7. The spill onto the TX header needs a third, i.e. four units.
+
+**Bench bring-up (2026-09-24, one rev 2 unit as MASTER, UART on VCOM):**
+
+| Step | Pass | Result |
+|---|---|---|
+| OLED | splash, then ROLE | **Pass.** ACKs at 0x3C on P0.25/P0.26 at 400 kHz; no fallback needed. Needed the concat-buffer fix above. |
+| SD | card mounts, count + free shown | **Pass** with the fab-data pins (SCK P1.14 / MISO P1.15), 4 MHz. The swapped mapping fails `CMD0`. |
+| DET | raw level with / without a card | **Pass, active-low.** Raw 0 seated, raw 1 out, over two pull/reinsert cycles. |
+| Logging | a soak writes a complete file | **Pass.** `P0_5M_000`: 744 records, 0 dropped. `P0_5M_001`: 2,001 records, 0 dropped. 0 write errors. |
+| Radio | 5 min two-unit soak at +0 dBm: `slot=20000us` both cards, lock in single-digit seconds, PER 0.000 %, 0 missed / 0 dup, `dtx` ≈ 8292 µs | **Pass, with three units** (2026-09-25, below). |
+
+Two bench lessons:
+
+- **Early `CMD0` failures were an unseated card.** The push-push socket
+  makes no contact until it clicks. DET reads raw 1 until then, so check
+  DET before touching the SD pins.
+- **Swapping the card while mounted breaks logging until reboot.** DET is
+  read by the app only; the SD stack never re-initialises the card, so every
+  write fails with -5. A remount on a DET change (unmount,
+  `DISK_IOCTL_CTRL_DEINIT`, mount) would fix it; it is not built.
+
+### First three-unit soak (2026-09-25)
+
+The first run with more than two units: 5 min at +0 dBm and 20 ms slots,
+all three logged to SD, using the unit pick above.
+- **MASTER** (slot 0) and **SEC 1** were the two TFT consoles.
+- **SEC 2** was the rev 2 field unit, since its log is that card's third
+  file.
+- All three files carry `META slot=20000us` and the right role and slot.
+
+| Signal | Bar | MASTER | SEC 1 | SEC 2 |
+|---|---|---|---|---|
+| Lock | single-digit seconds | — | 1.35 s | 2.79 s |
+| RX from each peer | PER 0.000 %, 0 missed/dup | slot 1: 3,734 · slot 2: 3,715, both **0 / 0** | 0 / 0 outside a log hole (below) | slot 0: 3,719 · slot 1: 3,715, both **0 / 0** |
+| `evt_dt` median | 8292 ± tens of µs | 8,278 (8,221–8,328) | 8,299 (8,238–8,335) | 8,305 (8,248–8,343) |
+| `phase_err` p95 / worst | ≤ 50 / < 125 µs | — | 35 / 52 µs | 33 / 51 µs |
+| Frame spacing | 80 ms | 80,000 ± 14–22 µs | 80,000 ± 14–20 µs | 80,000 ± 19–21 µs |
+| `stale_retx` / `slot_timeouts` / `busy` / CRC | all 0 | all 0 | all 0 | all 0 |
+
+`ppm` means were +12.9 and −22.7, with σ 245–252. That matches the
+acceptance soak and card #24's phase-jitter reading.
+
+- **SEC 1's log has the 8 KB hole: a third occurrence.** Records
+  2168–2295 are file sectors 271–286: 128 records, 16 sectors,
+  sector-aligned, 40 zeroed and 88 stale. That is the same size and the
+  same zeroed/stale mix as the acceptance-soak hole. A naive decode reads
+  PER 1.1 % (83 "missed"). Both counter gaps (42 frames from slot 0, 41
+  from slot 2) span exactly the hole, and the master received all 3,734 of
+  SEC 1's transmissions. The 8 packets "from slot 1" in that file are
+  stale records inside the hole; a slot-1 unit cannot receive slot 1. See
+  Known limitations and card #25.
+- **Card #23 is visible, in the form it predicts for syncing.** The first
+  packet each secondary sends after lock arrives garbled at every receiver:
+  frame counter 5, payload bytes 0/2/3 = `0xA1 · 0x05 0x00`, a received
+  header's bytes. Everything after it is clean. Identical damage at every
+  receiver puts it in the transmitter's buffer before it sends. That fits
+  the receive pointer wrapping onto the staged TX payload while a secondary
+  only listens during SYNCING. The master never syncs and is unaffected.
+  With three units, each unit hears two packets per frame, so the
+  steady-state wrap #23 predicts for four units did not occur.
 
 ### Intercom TDMA radio layer (M0-M2 implementation)
 
@@ -42,7 +254,8 @@ intercom — a fixed 4-slot TDMA broadcast flood over the same SX1262 PHY
 (915.0 MHz, SF5 / BW 500 kHz / CR 4-5, 44-byte fixed packets, 12-symbol
 preamble, +22 dBm). Slot width 20 ms (one constant,
 `TDMA_SLOT_DURATION_US`); frame = 4 slots = 80 ms. Bring-up ran at 50 ms;
-the flip landed 2026-08-17 and its acceptance soak is still outstanding.
+the flip landed 2026-08-17, and its 30-minute two-unit acceptance soak passed
+on 2026-08-18 (see "Slot width 50 ms → 20 ms" below).
 
 - **L1** [`src/tdma/sx126x_cmd.c`](src/tdma/sx126x_cmd.c) — app-owned raw
   SX1262 opcode layer (datasheet-cited) with all BUSY gating in one choke
@@ -62,7 +275,8 @@ the flip landed 2026-08-17 and its acceptance soak is still outstanding.
   `tdma_start()` is the only entry into SYNCING, so a locked unit never
   re-enters acquisition and the lock threshold governs start-up alignment
   only.
-- **App** — Kconfig role/slot (`TDMA_ROLE_MASTER`/`TDMA_ROLE_SECONDARY`,
+- **App** (the UART-shell test variant, retired 2026-09-25) — Kconfig
+  role/slot (`TDMA_ROLE_MASTER`/`TDMA_ROLE_SECONDARY`,
   `TDMA_SLOT_ID`), telemetry print every 5 s over UART, and `tdma` shell
   commands (`tx`, `rx [s]`, `start`, `stop`, `stats`) for M0 manual bring-up.
 - Build: `west build -b nrf5340dk/nrf5340/cpuapp -p always -- -DCONFIG_APP_TDMA_TEST=y`
@@ -73,8 +287,9 @@ the flip landed 2026-08-17 and its acceptance soak is still outstanding.
 First "test container": the bench diagnostics sequence above, packaged as an
 on-device TFT applet for field soak testing —
 [`src/tdma_console/main.c`](src/tdma_console/main.c). Reuses the telemetry
-console's display toolkit ([`src/ui_widgets.c`](src/ui_widgets.c)) and touch
-calibration ([`src/touch_cal.c`](src/touch_cal.c)); the radio path is
+console's display toolkit ([`src/tdma_console/ui_widgets.c`](src/tdma_console/ui_widgets.c))
+and touch calibration ([`src/tdma_console/touch_cal.c`](src/tdma_console/touch_cal.c));
+the radio path is
 exclusively the TDMA L1/L2 shim (the old console's native-driver modules —
 `radio_cfg`/`payload`/`pingpong` — are not used). Display-only: no UART,
 logging, or shell.
@@ -106,13 +321,15 @@ logging, or shell.
   still pins `TDMA_SLOT_DURATION_US` at compile time; making it runtime is
   the planned next engine change for width evaluation).
 - Build:
-  `west build -b nrf5340dk/nrf5340/cpuapp -p always -d build-tdma-console --`
-  `-DEXTRA_DTC_OVERLAY_FILE=boards/nrf5340dk_nrf5340_cpuapp_display.overlay`
-  `-DEXTRA_CONF_FILE=boards/nrf5340dk_nrf5340_cpuapp_tdma_console.conf`
-  (same display/touch wiring as the telemetry console; the SD stack was
-  added to this build on 2026-07-31).
+  `west build -b nrf5340dk/nrf5340/cpuapp -p always -d build-tft --`
+  `-DEXTRA_DTC_OVERLAY_FILE=boards/nrf5340dk_nrf5340_cpuapp_tft.overlay`
+  `-DEXTRA_CONF_FILE=boards/nrf5340dk_nrf5340_cpuapp_tft.conf`
+  (the pair was `display.overlay` + `tdma_console.conf` until 2026-09-25;
+  the SD stack was added to this build on 2026-07-31).
 
 ### Soak test harness (2026-07-30)
+
+_Retired 2026-09-25 with the streamline to two unit types (see that entry above); kept as history._
 
 New [`src/soak/`](src/soak) subtree (`CONFIG_APP_SOAK`): individually flashable
 bench soak tests that stream machine-ingestible CSV over the DK's VCOM UART,
@@ -412,13 +629,45 @@ Fix, in [`src/tdma_console/main.c`](src/tdma_console/main.c):
 and `TDMA_SLOT_ACTIVE_US` to 18 ms, both derived. A straight constant flip:
 no runtime slot-width selector, which stays a separate card.
 
-**Acceptance soak: still not run.** Two short bench runs (2026-08-19) put
-the width on the air and cleared every criterion they are long enough to
-test, but the 30-minute soak below has not been run. Until it passes, 20 ms
-is the build's width, not a proven one.
+**Acceptance soak: passed** (Trello card #6, 2026-08-18). The run was
+30 min, both bench units at +0 dBm, SD-logged on both sides (master
+`P0_30M_000.BIN`, secondary `s_P0_30M_000.BIN`, both `META slot=20000us`).
+The logs are not kept in the repo; the figures below were decoded from them.
+It ran with the payload-staging fix below, which is committed as `3746f11`
+at 01:05 on 2026-08-19, so the session evidently ran past midnight. The
+proof is `stale_retx`, which is 0 throughout. Results against the pass
+criteria at the end of this entry, from the secondary's log unless noted
+(STATS once a second, 1740 samples after the first minute):
 
-Confirmed on hardware at 20 ms (~29 s, +0 dBm, two units, secondary logged
-to SD; sample counts in parentheses):
+| Signal | Bar | Measured |
+|---|---|---|
+| Lock | single-digit seconds | **1.66 s** |
+| `dtx` / `drx` | 8292 ± tens of µs, same value both roles | `evt_dt` median **8292** (8231–8355) secondary, **8288** master |
+| `phase_err` | median ≈ 0, p95 \|err\| ≤ 50 µs, worst < 125 µs | **+1 / 38 / 75 µs**, σ 17; no drift (half-run means +0.06 / +0.07) |
+| Link, master → secondary | PER 0.000 %, 0 missed/dup, 0 `seq` gaps | **22,483 received, 0 missed / 0 dup, 0 `seq` gaps** |
+| Link, secondary → master | same | master `rx_done` **22,480** = secondary `tx_done` 22,480; log: see below |
+| Counters | `stale_retx`, `busy_timeouts`, `slot_timeouts` all 0 | **all 0, both units** (22,500 / 22,480 transmissions) |
+| Frame spacing | 80 ms | RX timestamps 80,000 ± 23 µs (σ), both units |
+| `ppm` | mean within a few ppm of −6.9 | mean −1.7, standard error ≈ 6, so consistent; σ 265, see below |
+
+`rx_crc_err` totalled 1 (master) + 3 (secondary). Two things stand out:
+
+- **The master's log has a hole: the known one, again.** Records
+  29,344–29,472 start on a sector boundary and hold 112 zeroed records plus
+  stale sectors from an earlier run. Decoded naively, the master's file
+  reads PER 26 % (7,889 "missed"), because `frame_ctr` jumps into the stale
+  data and back. Outside the hole, `seq` and `frame_ctr` are continuous, and
+  the engine counters above show the link lost nothing. This is the second
+  occurrence of the 8 KB hole under Known limitations, now at 20 ms, and is
+  tracked as card #25.
+- **`ppm` σ is 265, not the ~170 predicted.** It matches the 304 seen in
+  the short runs below, so the spread is real, not noise. Card #24 has the
+  explanation: at this frame rate the per-beacon figure is phase jitter
+  ×12.5, not a rate estimate. The mean is still the signal.
+
+The short bench runs at 20 ms that preceded the soak (~29 s, +0 dBm, two
+units, secondary logged to SD; sample counts in parentheses) had cleared
+every criterion they were long enough to test:
 
 | Signal | Bar | Measured |
 |---|---|---|
@@ -435,7 +684,7 @@ to SD; sample counts in parentheses):
 width. The phase envelope (−33…+38 µs) is *tighter* than either 50 ms
 baseline, the direction the 2.5× beacon rate predicted.
 
-Two reasons these are not the acceptance soak:
+Two reasons those runs could not stand in for the acceptance soak:
 
 - **29 samples over 29 s**, against 575 over 11 min for the 50 ms baseline.
   A short run sees a narrower envelope purely from fewer draws, so the phase
@@ -726,6 +975,8 @@ proven at the 20 ms production slot width.
 
 ### HOME menu
 
+_Retired 2026-09-25 with the streamline to two unit types (see that entry above); kept as history._
+
 The console boots to a HOME screen. Navigate with the DK buttons
 (**B1 = UP, B2 = DOWN, B3 = OK, B4 = BACK**) or by touch. The footer shows the
 live applied-config summary.
@@ -765,18 +1016,20 @@ and **PING PONG STATS** views.
 
 ### Added (modules)
 
+_The telemetry console's modules were retired 2026-09-25; `ui_widgets` and `touch_cal` live on in `src/tdma_console/` as the TFT unit's toolkit._
+
 - **Staged RF config** — [`src/radio_cfg.c`](src/radio_cfg.c) /
   [`.h`](src/radio_cfg.h). Shadow + applied `lora_modem_config`, clamping
   setters/steppers, `radio_cfg_validate()` (datasheet limits), `radio_cfg_apply()`
   (the single commit point), dirty tracking, and value/summary formatters.
 - **Payload buffer** — [`src/payload.c`](src/payload.c) /
   [`.h`](src/payload.h). Byte buffer + length, canned presets, hex format/parse.
-- **UI toolkit + keypad** — [`src/ui_widgets.c`](src/ui_widgets.c) /
-  [`.h`](src/ui_widgets.h). RGB565 blit primitives (CFB glyph data only — see the
+- **UI toolkit + keypad** — [`src/tdma_console/ui_widgets.c`](src/tdma_console/ui_widgets.c) /
+  [`.h`](src/tdma_console/ui_widgets.h). RGB565 blit primitives (CFB glyph data only — see the
   CFB note in the README), hit-testing, button and config value-row widgets, and
   the reusable HEX/DEC keypad modal.
-- **Touch calibration** — [`src/touch_cal.c`](src/touch_cal.c) /
-  [`.h`](src/touch_cal.h). In-RAM affine transform + a 5-point least-squares
+- **Touch calibration** — [`src/tdma_console/touch_cal.c`](src/tdma_console/touch_cal.c) /
+  [`.h`](src/tdma_console/touch_cal.h). In-RAM affine transform + a 5-point least-squares
   solver (mean-centred, single-precision, FPU-optional).
 - **Ping/pong link test** — [`src/pingpong.c`](src/pingpong.c) /
   [`.h`](src/pingpong.h). A single dedicated RX thread that owns the radio while
@@ -788,6 +1041,8 @@ and **PING PONG STATS** views.
   loop calls `display_write()`).
 
 ### Test functions & modes
+
+_Retired 2026-09-25 with the streamline to two unit types (see that entry above); kept as history._
 
 - **One-shot TX + radio status dump** — [`src/main.c`](src/main.c) (LoRa-send
   variant). Transmits a 16-byte payload once and dumps the SX1262 IRQ status and
@@ -801,6 +1056,8 @@ and **PING PONG STATS** views.
   path end to end.
 
 ### Removed
+
+_Retired 2026-09-25 with the streamline to two unit types (see that entry above); kept as history._
 
 - **UART / serial console and all logging on the console build.** The telemetry
   console is now display-only — every `printk` / `LOG_*` call was removed from the
@@ -838,14 +1095,8 @@ native SX126x LoRa driver this project uses. See the README's
 
 ### Known limitations / next
 
-- **RX / round-trip** beyond ping/pong, plus **RSSI/SNR** readout on the TX/RX
-  screens.
-- **ASCII keypad** (the keypad modal is data-driven and architected for a third
-  key table).
-- **Touch calibration is in-RAM only.** On the field console this is now
-  deliberate — a mandatory power-on step lasting the session (see above).
-  Elsewhere (and for ping/pong stats) persistence to settings/NVS or SD
-  remains unbuilt.
+- **Touch calibration is in-RAM only** on the TFT unit. That is deliberate:
+  it is a mandatory power-on step lasting the session (see above).
 - **TX records carry no frame counter.** `frame_ctr` is a *shared* frame
   number — the master owns it and the secondary adopts it verbatim from each
   beacon, so both units stamp the same value in a given frame, which is what
@@ -863,18 +1114,21 @@ native SX126x LoRa driver this project uses. See the README's
   decoder use modular deltas and ignore backward jumps as a peer restart);
   absolute cross-file alignment past a wrap would need the decoder to unwrap
   into a monotonic index, which is not built.
-- **The 20 ms slot is unsoaked, and the 250 µs lock threshold behind it was
-  validated at 50 ms.** That threshold's ~5× margin comes from an 11 min
-  two-unit soak at the old width whose worst |`phase_err`| was 51 µs. Short
-  bench runs at 20 ms (2026-08-19, above) clear every criterion they can
-  test, but the acceptance soak for the flip has not been run yet, and even
-  when it passes
-  it will only cover two units: with four, a secondary still sees the beacon
-  once per frame but has three peers' slots between corrections, and neither
-  the phase envelope nor the acquisition transient has been measured there.
-  Because SYNCING → RUNNING is one-way, the failure mode to watch for is a
-  unit slow to lock or stuck in SYNCING — not one that drops out mid-run.
-- **One soak log came back with an 8 KB hole in it.** The master's file from
+- **The 20 ms slot is soaked for up to three units.** The 30-minute
+  two-unit acceptance soak passed (2026-08-18, above). Its worst
+  |`phase_err`| of 75 µs leaves the 250 µs lock threshold ~3× margin, and
+  the unit locked in 1.66 s. A 5-minute three-unit run passed too
+  (2026-09-25, above): locks in 1.35 s and 2.79 s, worst 52 µs. With four
+  units, a secondary still sees the beacon once per frame but has three
+  peers' slots between corrections, and neither the phase envelope nor the
+  acquisition transient has been measured there. Card #23 (garbled first
+  packet after lock) must land before the four-unit soak: #23 predicts the
+  third consecutive RX wraps onto the TX header every frame in a 4-slot
+  geometry, which would confound the result. Its first-packet form is now
+  confirmed on air (three-unit soak, above). Because SYNCING → RUNNING is
+  one-way, the failure mode to watch for is a unit slow to lock or stuck
+  in SYNCING — not one that drops out mid-run.
+- **Three soak logs have come back with an 8 KB hole in them.** The master's file from
   the 30 min 50 ms run (commit `337ec96`) contains 128 consecutive records —
   16 sectors, sector-aligned — of garbage plus one sector of stale data, with
   `seq` running 12743 → 12544…12551 → 12872. Decoded naively that reads as
@@ -886,10 +1140,27 @@ native SX126x LoRa driver this project uses. See the README's
   is a write-path or card fault, not a drop. It matters because at 20 ms the
   record rate roughly doubles: **check any one-sided loss for a hole before
   reading it as a radio result.**
+  It recurred in the master's file from the 20 ms acceptance soak
+  (`P0_30M_000.BIN`): again exactly 128
+  records, 16 sectors, sector-aligned (file sectors 3668–3683). Five of the
+  sectors are zeroed and eleven hold stale data from earlier card contents.
+  A naive decode reads PER 26 %, yet the engine counters show no loss:
+  master `rx_done` 22,480 = secondary `tx_done` 22,480. Both of those were
+  on the master's card. A third came back in SEC 1's log from the
+  three-unit soak (2026-09-25): file sectors 271–286, again 128 records
+  with 40 zeroed and 88 stale, the same mix as the second. The unit was a
+  secondary this time, so the fault follows a card or a unit, not the
+  role. Worth checking whether it was the same physical card. Tracked as
+  card #25 (master's SD card silently loses writes).
 - **Field PER is unmeasured.** The 5-minute bench soak below closed at 0 % loss
   with ~45 dB of margin over SF5/BW500 sensitivity — that validates the stack,
   not the range. Loss behaviour at distance is still unknown.
-- **Transmit is synchronous** on a dedicated thread (no `lora_send_async` /
-  LBT / CAD result semantics).
-- **Front end** (display/touch/SD) is still jumper-wired to the DK headers,
-  pending migration onto the shield.
+- **Front end.** The rev 2 shield now carries an OLED + microSD front end for
+  the field variant (see "Rev 2 shield / field variant"; bench bring-up
+  pending). The TFT breakout used by the two consoles is still jumper-wired
+  to the DK headers.
+- **Field variant follow-ons:** move the soak runner into a module the TFT
+  console and the field unit share; strip UART logging from the field
+  variant once it is proven; handle a card swap while mounted, either by a
+  remount on a DET change or with `cd-gpios` on the `sdhc` node if this
+  tree's `sdhc_spi` supports it (DET is confirmed active-low on P1.12).

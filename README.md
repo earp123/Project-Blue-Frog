@@ -1,139 +1,129 @@
 # nRF5340 LoRa Field-Test Device (SX1262)
 
-An open-source, dual-telemetry device for **long-distance LoRa radio testing**,
-built around the Nordic **nRF5340** and a Semtech **SX1262** sub-GHz radio.
+An open-source field-test device for **long-distance LoRa radio work**, built
+around the Nordic **nRF5340** and a Semtech **SX1262** sub-GHz radio. It
+currently hosts the radio layer of a sports-officials intercom: a fixed
+4-slot TDMA broadcast flood in which every unit transmits once per frame and
+hears everyone else.
 
-Each unit pairs the SX1262 radio link with a local touchscreen + SD-card
-console, so it acts as both a telemetry **endpoint** (transmit/receive frames
-over the air) and a local telemetry **instrument** (drive tests, observe radio
-state, and log results on-device). Build a pair and you have both ends of a real
-long-range link to characterise in the field.
+Each unit pairs the radio with a local display and an SD card, so it is both
+a link **endpoint** and an **instrument**: it runs timed soak tests, shows
+live link telemetry, and logs every packet to SD for offline decoding. Build
+two to four and you have a real multi-unit link to characterise in the field.
 
 <img width="390" height="292" alt="20260629_111703" src="https://github.com/user-attachments/assets/d1b14a37-bc8c-4a43-98fc-f3588b628d0b" /> <img width="422" height="316" alt="20260629_111739" src="https://github.com/user-attachments/assets/71130063-f5c5-46f6-81aa-70893a8e3935" />
 
-
-
-For a feature-by-feature breakdown of the current firmware — every HOME-menu
-item, the helper scripts, and the test modes — see
+For the design history, measured results and known limitations, see
 [CHANGELOG.md](CHANGELOG.md).
 
 ## Contents
 
-- [Project goal](#project-goal)
-- [Hardware so far](#hardware-so-far)
-- [Status](#status)
-- [Firmware variants](#firmware-variants)
+- [Unit types](#unit-types)
 - [Building and flashing](#building-and-flashing)
+- [Using a unit](#using-a-unit)
 - [Radio parameters](#radio-parameters)
-- [LoRa radio shield](#lora-radio-shield)
-- [Display / touch / SD front end](#display--touch--sd-front-end)
+- [LoRa radio shield (TFT unit)](#lora-radio-shield-tft-unit)
+- [Rev 2 shield (shield unit)](#rev-2-shield-shield-unit)
+- [TFT front end (TFT unit)](#tft-front-end-tft-unit)
 - [SDK setup (fresh from Nordic)](#sdk-setup-fresh-from-nordic)
 
-## Project goal
+## Unit types
 
-A dynamic, field-usable **toolbox for exercising the SX1262**: configurable RF
-parameters, on-device control via buttons/touch, live status on the TFT, and
-logging to SD — all without a laptop tethered in the field.
+The tree builds one firmware per unit type. Both run the same TDMA radio
+layer ([`src/tdma/`](src/tdma)) and the same SD soak logger, on an nRF5340
+DK.
 
-The hardware and firmware are being built out **in parallel**. The SX1262
-already lives on a custom Arduino-compatible shield; the display/touch/SD front
-end is currently jumper-wired to the DK headers and will be migrated onto the
-shield as the design matures. The end state is a single stacked shield on the
-nRF5340 DK that turns it into a self-contained LoRa field-test handset.
+| Unit | Hardware | Firmware | Overlay + conf |
+|---|---|---|---|
+| **TFT unit** | Radio shield (rev 1) on Port 1, plus the Hiletgo ILI9341 TFT breakout (touch + microSD) jumper-wired to Port 0 | `CONFIG_APP_TDMA_CONSOLE`, [`src/tdma_console/`](src/tdma_console) | `boards/nrf5340dk_nrf5340_cpuapp_tft.{overlay,conf}` |
+| **Shield unit** | Rev 2 shield: SX1262 + SSD1306 128×64 OLED + microSD in one stack | `CONFIG_APP_TDMA_FIELD`, [`src/tdma_field/`](src/tdma_field) | `boards/nrf5340dk_nrf5340_cpuapp_shield.{overlay,conf}` |
 
-## Hardware so far
+- **TFT unit:** touch + DK-button UI on the TFT. Display-only: no UART.
+- **Shield unit:** button-only cycle-menu UI on the OLED. UART logging is on
+  over the DK's VCOM.
 
-- **Host:** Nordic nRF5340 DK.
-- **Radio:** Semtech SX1262 (Seeed **Wio-SX1262** module) — **embedded on a
-  custom Arduino-compatible shield** that routes the radio's SPI + control
-  signals to the DK's Port 1 header section. A TXS0108E level shifter and a
-  33 µF decoupling cap on the radio supply are part of the shield (see
-  [LoRa radio shield](#lora-radio-shield)).
-- **Front end (display/touch/SD):** ILI9341 320×240 TFT, XPT2046 resistive
-  touch, and a microSD slot on a shared SPI bus. **Currently jumper-wired** to
-  the DK's Port 0 Arduino headers — not yet on a shield (see
-  [Display / touch / SD front end](#display--touch--sd-front-end)).
-- **Controls:** the DK's four on-board buttons drive the menu UI.
-
-## Status
-
-- **LoRa TX confirmed working** on the nRF5340 DK + Wio-SX1262.
-- **Display, touch, and buttons working**; SD path implemented (validated with a
-  card present).
-- **On-device radio evaluation tooling** (console variant): configure the RF
-  parameters (freq / SF / BW / CR / power / preamble / CRC / IQ / network), build
-  the TX payload via an on-screen hex keypad or canned presets, and fire SX1262
-  transmits — all from a touch + DK-button screen UI, with transmits on a
-  background thread so the UI stays live.
-- Next: RX / round-trip testing, RSSI/SNR readout, an ASCII keypad, and migrating
-  the front end onto the shield.
-
-## Firmware variants
-
-The project builds two firmware variants from one tree. Exactly one `main()`
-is linked, chosen by the Kconfig choice in `Kconfig`
-(`CONFIG_APP_LORA_SEND` / `CONFIG_APP_CONSOLE`):
-
-- **LoRa send** (default) — `src/main.c`. Minimal one-shot transmit plus a
-  radio IRQ / device-error dump over SPI. Useful for radio-only bring-up.
-- **Telemetry console** — `src/console.c` (screen router / main loop) with
-  `src/radio_cfg.c` (staged modem config), `src/payload.c` (TX payload +
-  presets), and `src/ui_widgets.c` (display primitives + reusable keypad
-  modal). The full device app: a touch + DK-button screen UI to configure the
-  radio, build payloads, and run SX1262 transmits.
-
-`prj.conf` holds the common + LoRa configuration. The front-end (display,
-touch, SD, fonts) Kconfig lives in the companion file
-`boards/nrf5340dk_nrf5340_cpuapp_display.conf` so the LoRa-only variant does
-not pull in the display stack / FATFS.
+The two types interoperate on air and can be mixed freely in one kit.
 
 ## Building and flashing
 
-**LoRa send** variant (board-named overlay is auto-applied):
+Each unit type needs **both** of its files, the overlay and the conf,
+passed together. A build with only one of them, or neither, stops at CMake
+with these two lines. Use `-p always` (pristine) when switching types.
 
 ```sh
-west build -b nrf5340dk/nrf5340/cpuapp
-west flash
+# TFT unit
+west build -b nrf5340dk/nrf5340/cpuapp -p always -d build-tft -- \
+  -DEXTRA_DTC_OVERLAY_FILE=boards/nrf5340dk_nrf5340_cpuapp_tft.overlay \
+  -DEXTRA_CONF_FILE=boards/nrf5340dk_nrf5340_cpuapp_tft.conf
+
+# Shield unit
+west build -b nrf5340dk/nrf5340/cpuapp -p always -d build-shield -- \
+  -DEXTRA_DTC_OVERLAY_FILE=boards/nrf5340dk_nrf5340_cpuapp_shield.overlay \
+  -DEXTRA_CONF_FILE=boards/nrf5340dk_nrf5340_cpuapp_shield.conf
 ```
 
-**Telemetry console** variant — add the front-end overlay *and* its companion
-config (both, together). `-p always` (pristine) is required when switching
-variants because the Kconfig choice and devicetree change:
+The board-named radio overlay (`nrf5340dk_nrf5340_cpuapp.overlay`) is applied
+automatically in both builds.
+
+Flash with the DK's J-Link serial number when more than one board is on USB
+(`nrfutil device list` shows them):
 
 ```sh
-west build -b nrf5340dk/nrf5340/cpuapp -p always -- \
-  -DEXTRA_DTC_OVERLAY_FILE="boards/nrf5340dk_nrf5340_cpuapp_display.overlay" \
-  -DEXTRA_CONF_FILE="boards/nrf5340dk_nrf5340_cpuapp_display.conf"
-west flash
+west flash -d build-shield --dev-id <serial>
 ```
 
-Both overlays end up applied for the console build: the board-named LoRa overlay
-is auto-detected and the front-end overlay is added via
-`EXTRA_DTC_OVERLAY_FILE`. The radio (spi2/Port 1) and front end (spi4/Port 0)
-never overlap.
+> [!NOTE]
+> A DK that arrives with readback protection (APPROTECT) refuses to attach.
+> `west flash --recover` fixes it once, and **erases all flash on both
+> cores**. These builds leave debug access open, so later flashes work
+> normally. `west flash` defaults to the `nrfutil` runner, which needs its
+> `device` command (`nrfutil install device`); `-r jlink` also works.
+
+## Using a unit
+
+Both types behave the same way:
+
+- **Power-on unit pick (mandatory).** Choose **MASTER** (slot 0) or **SEC 1**,
+  **SEC 2** or **SEC 3**. This sets the role and the TX slot together. The
+  master beacons the frame timing, and each secondary locks to it. Every
+  unit in a kit needs its own slot. The choice holds until reboot. The TFT
+  unit runs a touch calibration first.
+- **SOAK:** pick 5 min, 30 min, 2 h or continuous. Live pages show elapsed
+  time, TX/stale, RX with missed/duplicate frames, phase error and ppm,
+  RSSI/SNR, the log file, and the staging-latency gauge.
+- **TX power:** −9…+22 dBm, applied from the next packet. The TFT unit boots
+  at +22 dBm and the shield unit at +0 dBm.
+- **SD logging:** every soak writes `<PWR>_<DUR>_NNN.BIN` (e.g.
+  `P0_5M_000.BIN`) with one 64-byte record per packet. Decode with
+  [`src/tdma_console/tools/decode_soak_log.py`](src/tdma_console/tools/decode_soak_log.py).
+  Each file's header records the unit's role and slot.
+- **Buttons:** B1 = UP, B2 = DOWN, B3 = OK, B4 = BACK. On the shield unit, B4
+  also stops a running soak.
+
+> [!IMPORTANT]
+> **Reboot after swapping an SD card.** Card detect is read by the app only,
+> so a card changed while mounted is never re-initialised, and every write
+> then fails. The shield unit's socket is push-push: it makes no contact
+> until it clicks.
 
 ## Radio parameters
 
-The LoRa-send variant hard-codes these in `src/main.c`. The console variant
-uses them as the **power-on defaults** of its staged config (`src/radio_cfg.c`)
-and lets you change them on-device, committing via **APPLY** (see
-[Telemetry console behaviour](#telemetry-console-behaviour)). Console-editable
-ranges in parentheses:
+Fixed in [`src/tdma/tdma.h`](src/tdma/tdma.h); only TX power is adjustable
+at runtime.
 
-- Frequency: 915 MHz (902–928 MHz)
-- Bandwidth: 500 kHz (125 / 250 / 500 kHz)
-- Spreading factor: SF5 (SF5–SF12; LoRa-send selects via `LORA_SPREADING_FACTOR`)
-- Coding rate: 4/5 (4/5–4/8)
-- Preamble: 16 symbols (6–65535; the SX1262 minimum for SF5 and SF6 is 12)
-- TX power: +4 dBm (−9…+22 dBm)
-- Payload: 16 bytes (editable, up to 255)
+- Frequency: 915.0 MHz, single channel
+- LoRa SF5 / BW 500 kHz / CR 4/5, explicit header, CRC on
+- Preamble: 12 symbols (the SX1262 minimum for SF5)
+- Packet: 44 bytes (4-byte TDMA header + 40-byte payload), 7,760 µs on air
+- Frame: 4 slots × 20 ms = 80 ms. Master in slot 0, secondaries in 1–3.
 
 ---
 
-## LoRa radio shield
+## LoRa radio shield (TFT unit)
 
 The SX1262 (Wio-SX1262) is mounted on a custom Arduino-form-factor shield that
-routes its signals to the nRF5340 DK Port 1 header section.
+routes its signals to the nRF5340 DK Port 1 header section. The rev 2 shield
+keeps exactly the same radio pins.
 
 ### Wiring (nRF5340 DK → Wio-SX1262)
 
@@ -181,17 +171,41 @@ lora: sx1262@0 {
 ```
 
 The radio is selected through the `lora0` alias; `RF_SW` is exposed via the
-`zephyr,user` node's `rf-sw-gpios` property (P1.00).
+`zephyr,user` node's `rf-sw-gpios` property (P1.00). The native Zephyr driver
+only initialises the chip; the TDMA layer owns it after that.
 
 ---
 
-## Display / touch / SD front end
+## Rev 2 shield (shield unit)
+
+One Arduino-form-factor board carrying the Wio-SX1262 (same pins as above),
+a 0.96" SSD1306 OLED and a push-push microSD socket. Fabrication data:
+[`Hardware/OLED-SD-SX1262-Shield_2026-08-16.zip`](Hardware/OLED-SD-SX1262-Shield_2026-08-16.zip).
+All pins were traced in its netlist and confirmed on the bench.
+
+| Device | Bus | Pins (DK Arduino header) |
+|---|---|---|
+| microSD | spi4 | SCK **P1.14** (D12), MOSI P1.13 (D11), MISO **P1.15** (D13), CS P1.11 (D9), card-detect P1.12 (D10, active low) |
+| SSD1306 128×64 | i2c1 @ 400 kHz | SDA P0.25 (A4), SCL P0.26 (A5), RST P0.07 (A3), address 0x3C |
+
+- **SD SCK/MISO are the reverse of the DK's own `arduino_spi`.** That is how
+  the board is routed.
+- **The OLED is on A4/A5.** The R3 header's dedicated SDA/SCL pins are not
+  connected.
+- **No I2C pull-ups on the shield.** The overlay enables the nRF's internal
+  ones as a fallback.
+- **The I2C driver's concat buffer is raised to 1025 bytes** (a control byte
+  plus a full frame). With the 16-byte default, every frame write fails and
+  the screen stays blank.
+
+---
+
+## TFT front end (TFT unit)
 [https://a.co/d/047jULLv](url)
-The console front end — ILI9341 TFT, XPT2046 touch, microSD — shares one SPI
-bus (**spi4**, the DK's high-speed `arduino_spi` instance on Port 0), distinct
-from the radio's spi2 on Port 1. Each device has its own chip select. **These
-signals are currently jumper-wired to the DK Arduino headers** and are slated to
-move onto the shield.
+The TFT unit's front end — ILI9341 TFT, XPT2046 touch, microSD — shares one
+SPI bus (**spi4**, the DK's high-speed `arduino_spi` instance on Port 0),
+distinct from the radio's spi2 on Port 1. Each device has its own chip
+select. **These signals are jumper-wired to the DK Arduino headers.**
 
 ### Pin assignments
 
@@ -231,9 +245,6 @@ CS lines are indexed by each device's `reg` on the spi4 node: reg 0 = display
 > The four DK buttons (P0.23/24/08/09) are **not** modified — they still drive the
 > menu UI.
 
-Controls: the DK's four buttons (gpio-keys, P0.23/24/08/09 → `INPUT_KEY_0..3`)
-map to **B1=UP, B2=DOWN, B3=OK, B4=BACK**.
-
 ### Implementation notes / deviations
 
 - **Touch binding is** `xptek,xpt2046` (not `ti,tsc2046`) in this Zephyr. It
@@ -249,29 +260,14 @@ map to **B1=UP, B2=DOWN, B3=OK, B4=BACK**.
 - The display uses the **MIPI DBI** subsystem: a `zephyr,mipi-dbi-spi`
   controller wraps spi4 and owns the D/C and RESET sidebands; the
   `ilitek,ili9341` node sits under it.
-- **Config is stage-then-apply.** The menu edits an in-RAM `lora_modem_config`
-  shadow; `radio_cfg_apply()` is the single commit point (one `lora_config()`
-  call). `radio_cfg_validate()` holds the documented limits (902–928 MHz,
-  −9…+22 dBm, preamble ≥ 6, and ≥ 12 for SF5/SF6) and is where any further
-  SX126x SF/BW pairing constraints belong.
-- **Transmit is synchronous on a dedicated thread**, not `lora_send_async`.
-  The thread already keeps the UI non-blocking, so this avoids `CONFIG_POLL` /
-  `k_poll_signal` for no behavioural gain; switch to the async API if LBT/CAD
-  result semantics are wanted later.
-- **Drawing stays single-owner.** Input callbacks (touch / buttons) and the TX
-  thread only set atomics or signal a semaphore; the main loop does every
-  `display_write()`. Touch taps are debounced (one event per press, release
-  required) before the loop consumes them.
-- **Touch is calibrated by an on-device affine fit** (`src/touch_cal.c`). The
-  panel is rotated 90°, so raw XPT2046 coordinates are offset / swapped / inverted
-  relative to the display; a 6-parameter affine
-  (`screen = A·raw + B·raw + C` per axis) corrects all of it at once. The
-  **TOUCH CAL** screen collects five crosshair taps, least-squares-fits the
-  transform, and offers a verify step. The ISR latches the *raw* sample;
-  `touch_cal_apply()` runs in the main loop, so calibration capture sees raw
-  coordinates. The fit is in-RAM (re-run after each reflash; persistence to
-  settings/NVS is a follow-up). The DK buttons drive the entire UI — including
-  reaching TOUCH CAL — so uncalibrated touch is never a lock-out.
+- **Drawing stays single-owner.** Input callbacks only set atomics; the main
+  loop does every `display_write()`. Touch taps are debounced (one event per
+  press, release required) before the loop consumes them.
+- **Touch is calibrated by an on-device affine fit**
+  (`src/tdma_console/touch_cal.c`). Raw XPT2046 coordinates are offset /
+  swapped / inverted relative to the display; a 6-parameter affine corrects
+  all of it at once. Calibration is a mandatory power-on step: five crosshair
+  taps, a least-squares fit, then a verify step. The fit lives in RAM only.
 
 ---
 
@@ -284,9 +280,9 @@ builds against a clean SDK:
 
 - `external/zephyr-lora-driver/` — the newer Zephyr `drivers/lora/`
   subsystem (incl. the native SX126x driver), vendored verbatim.
-- `patches/` — two small compat patches: SPI macro arity
-  (`0001`) and the `regulator-ldo` / `force-ldro` binding properties
-  (`0002`).
+- `patches/` — small compat patches: SPI macro arity (`0001`), the
+  `regulator-ldo` / `force-ldro` binding properties (`0002`), and the newer
+  `lora.h` API the driver expects (`0003`).
 
 ### Onboarding (what to do with a fresh Nordic SDK)
 
@@ -302,22 +298,10 @@ builds against a clean SDK:
    ```
 
    This swaps the vendored `drivers/lora/` into the SDK (backing up the stock
-   one to `drivers/lora.stock.bak`) and applies the two patches.
+   one to `drivers/lora.stock.bak`) and applies the patches.
 
-3. Build (pristine) and flash:
-
-   ```sh
-   west build -b nrf5340dk/nrf5340/cpuapp -p always       # LoRa-send variant
-   west flash -r jlink
-   ```
-
-   For the telemetry console, add the front-end overlay + conf as shown in
+3. Build one of the two unit types and flash it, as shown in
    [Building and flashing](#building-and-flashing).
-
-> [!NOTE]
-> `west flash` defaults to the `nrfutil` runner; if its `device` plugin
-> is not installed, flashing fails. Use `west flash -r jlink` (or run
-> `nrfutil install device` once).
 
 **Symptoms if the SDK was not prepared:**
 

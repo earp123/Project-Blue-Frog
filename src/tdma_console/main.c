@@ -3,23 +3,24 @@
  *
  * Field-test container UI for the TDMA radio layer (src/tdma): run timed soak
  * tests of the continuous TX/RX frame exchange and watch link telemetry live
- * on the TFT. Reuses the telemetry console's display toolkit (ui_widgets) and
- * touch calibration (touch_cal); the radio path is exclusively the TDMA
- * L1/L2 shim — the native driver is init-only, exactly as in the TDMA test
- * variant. This file is only compiled for CONFIG_APP_TDMA_CONSOLE.
+ * on the TFT. Draws with the display toolkit (ui_widgets) and touch
+ * calibration (touch_cal) kept from the retired telemetry console; the
+ * radio path is exclusively the TDMA L1/L2 shim — the native driver is
+ * init-only. This file is only compiled for CONFIG_APP_TDMA_CONSOLE.
  *
- * Display-only build (no UART / log / shell). One firmware image serves both
- * units: the role is picked on the HOME screen and locks at the first soak
- * start (tdma_init() is once-only) — reboot to change it. Every PHY
- * parameter is a compile-time constant in tdma.h except TX power, which is
- * adjustable from HOME (applied by the engine before the next transmit).
+ * Display-only build (no UART / log / shell). One firmware image serves every
+ * unit: the unit (MASTER in slot 0, or SEC 1..3) is picked at power-on and
+ * locks at the first soak start (tdma_init() is once-only) — reboot to
+ * change it. Every PHY parameter is a compile-time constant in tdma.h except
+ * TX power, which is adjustable from HOME (applied by the engine before the
+ * next transmit).
  *
  * Power-on sequence, both steps mandatory and session-only: TOUCH CAL (the
  * transform is RAM-only in touch_cal, so every boot re-runs it) then SELECT
- * ROLE. Calibration comes first so the role can be chosen by touch. HOME is
+ * UNIT. Calibration comes first so the unit can be chosen by touch. HOME is
  * unreachable until both are done, so no soak can run uncalibrated or on an
- * unset role. Neither is reachable from HOME afterwards — reboot to redo
- * either; the selected role is shown in the HOME header.
+ * unset unit. Neither is reachable from HOME afterwards — reboot to redo
+ * either; the selected unit is shown in the HOME header.
  *
  * Screens: HOME -> {SOAK PICK -> SOAK, TX PWR keypad, FILES}. The soak
  * screen shows per-soak deltas of the engine telemetry plus frame-counter
@@ -56,7 +57,7 @@
 #include "soak_log.h"
 
 /* ---- Layout ----
- * Portrait, 240x320 (see the rotation note in the display overlay). Rows use
+ * Portrait, 240x320 (see the rotation note in the TFT overlay). Rows use
  * fixed heights rather than dividing the body: portrait leaves 272 px of body,
  * and splitting that between two menu rows would produce 130 px-tall buttons.
  * Text is 10 px/char, so a full-width line is 23 characters at MARG.
@@ -70,8 +71,8 @@
 #define FLIP_H	 34
 #define PICK_H	 38	/* soak-pick rows (log-dir + durations + BACK) */
 #define PICK_GAP  8
-#define ROLE_H	 90	/* role-select buttons */
-#define ROLE_GAP 14
+#define ROLE_H	 48	/* unit-select buttons (one per slot) */
+#define ROLE_GAP  8
 #define BR_ROW_H 22	/* file-browser list row */
 #define ACT_H	 44	/* stacked action buttons (file act / move) */
 #define ACT_GAP	  8
@@ -117,11 +118,11 @@ static enum screen_id screen = SCR_HOME;
 static bool cal_required = true;
 
 /*
- * Role selection is the second half of the power-on sequence, run once
- * calibration is accepted: with a working transform the choice can be made by
- * touch. Like the calibration pass there is no way out but choosing — HOME is
- * unreachable until this clears, so no soak can start on an unset role. The
- * HOME row still re-toggles the role afterwards, up until the engine locks it.
+ * Unit selection (role + TX slot) is the second half of the power-on
+ * sequence, run once calibration is accepted: with a working transform the
+ * choice can be made by touch. Like the calibration pass there is no way out
+ * but choosing — HOME is unreachable until this clears, so no soak can start
+ * on an unset unit. role_sel indexes the slot: 0 = MASTER, 1-3 = SEC n.
  */
 static bool role_required = true;
 static int role_sel;
@@ -159,11 +160,17 @@ static int home_sel;
 static int pick_sel;
 static char home_msg[28] = "";
 
-/* ---- Engine / role state ---- */
+/* ---- Engine / unit state ----
+ * The unit is picked at power-on as one choice: its TX slot, with the role
+ * following from it. Slot 0 is the master, which beacons the frame timing;
+ * slots 1-3 are secondaries. Picking them together means a master can never
+ * sit outside slot 0. Two units must still not pick the same slot.
+ */
 static enum tdma_role role = TDMA_ROLE_SECONDARY; /* fail-safe default: two
 						   * unset units just listen
 						   * instead of colliding. */
-static bool engine_inited;	/* role locks once true */
+static uint8_t my_slot = 1;	/* SEC 1 until picked */
+static bool engine_inited;	/* unit locks once true */
 static int tx_power_dbm = TDMA_TX_POWER_DBM;
 
 /* ---- Soak test state ----
@@ -439,9 +446,19 @@ static void draw_footer_summary(void)
 	draw_footer_text(s);
 }
 
+/* A unit by slot: "MASTER" for slot 0, "SEC 1".."SEC 3" otherwise. */
+static const char *unit_name(uint8_t slot)
+{
+	static const char *const name[TDMA_SLOT_COUNT] = {
+		"MASTER", "SEC 1", "SEC 2", "SEC 3",
+	};
+
+	return name[slot % TDMA_SLOT_COUNT];
+}
+
 static const char *role_str(void)
 {
-	return (role == TDMA_ROLE_MASTER) ? "MASTER" : "SECONDARY";
+	return unit_name(my_slot);
 }
 
 /* h:mm:ss, always sortable at a glance in the field (hours wrap at 99). */
@@ -769,10 +786,10 @@ static void soak_start(int64_t duration_ms)
 	if (!engine_inited) {
 		struct tdma_config cfg = {
 			.role = role,
-			/* Two-unit field kit: master beacons in slot 0, the
-			 * secondary answers in slot 1.
+			/* Picked at power-on: the master beacons in slot 0,
+			 * each secondary in its own slot 1-3.
 			 */
-			.slot_id = (role == TDMA_ROLE_MASTER) ? 0 : 1,
+			.slot_id = my_slot,
 			.slot_duration_us = TDMA_SLOT_DURATION_US,
 		};
 
@@ -796,7 +813,7 @@ static void soak_start(int64_t duration_ms)
 	/* Logging is best-effort: a missing or failed card must never stop a
 	 * radio test. The failure is surfaced on the soak screen instead.
 	 */
-	(void)soak_log_start(role, (role == TDMA_ROLE_MASTER) ? 0 : 1,
+	(void)soak_log_start(role, my_slot,
 			     (int8_t)tx_power_dbm, (uint32_t)duration_ms,
 			     drawer_name[log_dir_idx]);
 
@@ -937,7 +954,7 @@ static void soak_data_step(void)
 	 * every pass instead would overwrite most payloads before their slot.
 	 */
 	if (soak.tx_armed && t->tx_done != soak.tx_done_at_arm) {
-		soak_log_tx(soak.tx_payload, (role == TDMA_ROLE_MASTER) ? 0 : 1,
+		soak_log_tx(soak.tx_payload, my_slot,
 			    t->sync_state);
 		soak.tx_armed = false;
 	}
@@ -1174,14 +1191,15 @@ static void draw_calibrate(void)
 }
 
 /* ---------------------------------------------------------------------------
- * ROLE PICK (power-on, immediately after calibration)
+ * UNIT PICK (power-on, immediately after calibration): one button per TX
+ * slot, MASTER being slot 0.
  * ------------------------------------------------------------------------- */
 #define ROLE_BLURB_LINES 2
 
 static void role_btn_rect(int i, int *x, int *y, int *w, int *h)
 {
 	int blurb = body_top() + ROLE_BLURB_LINES * (ui_body_h() + 2) + 6;
-	int stack = 2 * ROLE_H + ROLE_GAP;
+	int stack = TDMA_SLOT_COUNT * ROLE_H + (TDMA_SLOT_COUNT - 1) * ROLE_GAP;
 	int top = blurb + (body_bot() - blurb - stack) / 2;
 
 	*x = MARG;
@@ -1195,18 +1213,17 @@ static void draw_role_pick(void)
 	int y = body_top();
 	int sp = ui_body_h() + 2;
 
-	draw_header("SELECT ROLE");
+	draw_header("SELECT UNIT");
 
-	ui_text(MARG, y, "One unit MASTER, the", COLOR_WHITE, COLOR_BLACK);
+	ui_text(MARG, y, "One MASTER per kit,", COLOR_WHITE, COLOR_BLACK);
 	y += sp;
-	ui_text(MARG, y, "other SECONDARY.", COLOR_WHITE, COLOR_BLACK);
+	ui_text(MARG, y, "one slot per unit.", COLOR_WHITE, COLOR_BLACK);
 
-	for (int i = 0; i < 2; i++) {
+	for (int i = 0; i < TDMA_SLOT_COUNT; i++) {
 		int bx, by, bw, bh;
 
 		role_btn_rect(i, &bx, &by, &bw, &bh);
-		ui_button(bx, by, bw, bh,
-			  i == 0 ? "MASTER" : "SECONDARY", role_sel == i);
+		ui_button(bx, by, bw, bh, unit_name((uint8_t)i), role_sel == i);
 	}
 
 	draw_footer_summary();
@@ -1214,17 +1231,18 @@ static void draw_role_pick(void)
 
 static void role_pick_start(void)
 {
-	/* Start on the current role, which defaults to SECONDARY: pressing OK
+	/* Start on the current unit, which defaults to SEC 1: pressing OK
 	 * without moving therefore takes the fail-safe option rather than
 	 * making a second master.
 	 */
-	role_sel = (role == TDMA_ROLE_MASTER) ? 0 : 1;
+	role_sel = my_slot;
 	screen = SCR_ROLE_PICK;
 }
 
 static void role_activate(int i)
 {
-	role = (i == 0) ? TDMA_ROLE_MASTER : TDMA_ROLE_SECONDARY;
+	my_slot = (uint8_t)i;
+	role = (my_slot == 0) ? TDMA_ROLE_MASTER : TDMA_ROLE_SECONDARY;
 	role_required = false;
 	screen = SCR_HOME;
 }
@@ -1736,11 +1754,14 @@ static void handle_nav(enum nav_action a)
 		break;
 
 	case SCR_ROLE_PICK:
-		/* No BACK: both options are valid, so there is nothing to
+		/* No BACK: every option is valid, so there is nothing to
 		 * cancel to — one of them must be chosen.
 		 */
-		if (a == NAV_UP || a == NAV_DOWN) {
-			role_sel = (role_sel + 1) % 2;
+		if (a == NAV_UP) {
+			role_sel = (role_sel + TDMA_SLOT_COUNT - 1) %
+				   TDMA_SLOT_COUNT;
+		} else if (a == NAV_DOWN) {
+			role_sel = (role_sel + 1) % TDMA_SLOT_COUNT;
 		} else if (a == NAV_OK) {
 			role_activate(role_sel);
 		}
@@ -1882,7 +1903,7 @@ static void handle_tap(int x, int y, int rx, int ry)
 		break;
 
 	case SCR_ROLE_PICK:
-		for (int i = 0; i < 2; i++) {
+		for (int i = 0; i < TDMA_SLOT_COUNT; i++) {
 			int bx, by, bw, bh;
 
 			role_btn_rect(i, &bx, &by, &bw, &bh);
