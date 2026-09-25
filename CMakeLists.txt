@@ -28,12 +28,15 @@ if(NOT unit_front_end)
     "(see README.md, \"Building and flashing\").")
 endif()
 
-# Shared by both units: the L1/L2 TDMA radio layer, and the SD card + soak
-# loggers, which do not depend on the display.
+# Shared by both units: the L1/L2 TDMA radio layer, the SD card + soak
+# loggers and the tone payload source, none of which depend on the display.
+# tone_src is referenced only under CONFIG_SOAK_PAYLOAD_TONE; without it the
+# linker drops the code, so ramp builds link none of it.
 FILE(GLOB tdma_sources src/tdma/*.c)
 target_sources(app PRIVATE ${tdma_sources}
   src/tdma_console/sd_log.c
-  src/tdma_console/soak_log.c)
+  src/tdma_console/soak_log.c
+  src/tdma_console/tone_src.c)
 target_include_directories(app PRIVATE src/tdma src/tdma_console)
 # Driver-internal header, needed once at init to detach the native driver's
 # DIO1 gpio_callback (docs/tdma_layering.md). The installed driver *is* the

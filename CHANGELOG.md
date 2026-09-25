@@ -34,6 +34,59 @@ Four other variants were retired on 2026-09-25: LoRa send, the telemetry
 console, the TDMA UART-shell test and the UART soak harness (see "Streamlined
 to two unit types"). Their sections below are kept as history.
 
+### Tone payload option + audio reconstruction (2026-09-25)
+
+A soak can now carry audio: build with `CONFIG_SOAK_PAYLOAD_TONE=y`, and any
+unit's log turns into a WAV of what its peers sent, so a lost frame is an
+audible gap. Task and design:
+[`docs/tone_payload_test.md`](docs/tone_payload_test.md).
+
+- **Bench-verified: three units, 5 min, +0 dBm.** Logs are in `soaks/`.
+  - PER is 0.000 % on every unit, and every peer stream reconstructs with
+    0 gaps and 0 slips. Each mix peaks at exactly its two peers' tones.
+  - Each secondary's decoder reports 4 "dups". These are the `frame_ctr`
+    echo caught on air: the master's run ended first, and the secondaries
+    kept sending fresh audio under its frozen counter. The content shows
+    they are new chunks.
+  - The tone also pins down card #23's garbled first packet: it is the
+    previous received packet, shifted into the TX payload at buffer offset
+    `0x04` (see Known limitations).
+
+- **The WAV is not real time.** 40 B per 80 ms frame is 4 kbps per unit: at
+  8 kHz / 8-bit that is 5 ms of audio per frame, so the WAV is the run
+  compressed 16x. A 5 min soak is 18.75 s of audio.
+- **Tone source** (`src/tdma_console/tone_src.{c,h}`, built for both units).
+  Slot *s* sends 330 Hz × (*s* + 1), 40 samples per frame. It keeps no
+  state: chunk *n* is the audio for the unit's *n*-th TX slot of the run,
+  keyed to the engine's `tx_done`. A refused submit is retried with the same
+  bytes, and a missed frame's audio is dropped, never delayed. The rule
+  throughout is that a bad packet costs its own frame and nothing more.
+- **No engine change.** The one-deep stage buffer looks oldest-wins, but the
+  engine drains it into the radio at every RX-slot entry and each drain
+  overwrites the last. So the newest chunk submitted before the last RX
+  slot ahead of our TX slot is the one sent.
+- **META is self-describing.** The four spare bytes of `struct soak_meta`
+  now hold `payload_mode`, `tone_fs_khz` and `tone_f0_hz`. Older v2 files
+  have zeros there and read as ramp, so there is no `SOAK_LOG_VERSION` bump.
+  A ramp build still writes the same META record; its image differs from
+  before only in `soak_log_start()` (+32 B for the larger struct copy) and
+  links no tone code. Tone images: TFT 103,384 B, shield 117,780 B.
+- **Decoder:** prints `payload=ramp|tone`, and skips the ramp integrity
+  check for tone logs, where every packet would otherwise read as 40 bad
+  bytes. Parsing moved into `iter_records()` so other tools can import it.
+  Output on existing logs is otherwise unchanged.
+- **New `tools/reconstruct_tone.py`** (needs numpy). It places each chunk by
+  arrival time (`t_us`), not `frame_ctr`: secondaries only echo the master's
+  counter, so one missed beacon would make a counter-based tool throw away a
+  good packet. Duplicates are byte-identical repeats. Gaps are silence,
+  split into radio vs log loss. It checks each chunk's content against the
+  tone to count *slips* (audio late or out of order), and prints the mix's
+  spectral peaks.
+- **The tool screens out the 8 KB hole.** It trusts only long runs of
+  constant `seq − index`. On the real logs it discards exactly the 128 hole
+  records, and arrival-time placement agrees with `frame_ctr` at every
+  boundary.
+
 ### Streamlined to two unit types (2026-09-25)
 
 The bench now runs two kinds of radio, and the tree builds exactly those:
@@ -1125,7 +1178,12 @@ native SX126x LoRa driver this project uses. See the README's
   packet after lock) must land before the four-unit soak: #23 predicts the
   third consecutive RX wraps onto the TX header every frame in a 4-slot
   geometry, which would confound the result. Its first-packet form is now
-  confirmed on air (three-unit soak, above). Because SYNCING → RUNNING is
+  confirmed on air (three-unit soak, above). The tone soak (2026-09-25)
+  shows its full shape. The first packet's payload is byte-exact the
+  previous received packet: its 4-byte header, then its payload bytes 0–35.
+  So that RX landed at buffer offset `0x04`, where
+  `0x80 + 3 × 44 = 0x104` wraps to. A ramp could not show this, because a
+  ramp shifted by 4 bytes is still a ramp. Because SYNCING → RUNNING is
   one-way, the failure mode to watch for is a unit slow to lock or stuck
   in SYNCING — not one that drops out mid-run.
 - **Three soak logs have come back with an 8 KB hole in them.** The master's file from

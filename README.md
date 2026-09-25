@@ -65,6 +65,12 @@ west build -b nrf5340dk/nrf5340/cpuapp -p always -d build-shield -- \
 The board-named radio overlay (`nrf5340dk_nrf5340_cpuapp.overlay`) is applied
 automatically in both builds.
 
+For a **tone soak**, which carries a per-slot audio tone instead of the test
+ramp, add `-DCONFIG_SOAK_PAYLOAD_TONE=y` after the two files. Build every unit
+in the run that way, then turn any unit's log into a WAV with
+[`src/tdma_console/tools/reconstruct_tone.py`](src/tdma_console/tools/reconstruct_tone.py)
+(see [`docs/tone_payload_test.md`](docs/tone_payload_test.md)).
+
 Flash with the DK's J-Link serial number when more than one board is on USB
 (`nrfutil device list` shows them):
 

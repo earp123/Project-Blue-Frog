@@ -12,18 +12,27 @@ Usage:
 
 Pair two units' logs by matching RX payload content against the peer's TX
 payloads; frame_ctr gives continuity within one unit's own view.
+
+Logs from a CONFIG_SOAK_PAYLOAD_TONE build carry a tone instead of the ramp;
+the ramp check is skipped for them. Turn those into audio with
+reconstruct_tone.py, which imports iter_records() / parse_meta() from here.
 """
 
 import argparse
 import csv
 import struct
 import sys
-from collections import Counter
+from collections import Counter, namedtuple
 
 REC_SIZE = 64
 REC_FMT = "<BBBBIHhb3sII40s"
-META_FMT = "<IHBBIIIIBBHbBBBI"
+META_FMT = "<IHBBIIIIBBHbBBBIBBH"
 MAGIC = 0x4B414F53  # "SOAK"
+PAYLOAD_RAMP, PAYLOAD_TONE = 0, 1	# META payload_mode (zero in pre-tone v2 files)
+
+# One on-disk record, unpacked. index is the record's position in the file.
+Rec = namedtuple("Rec", "index type slot_id sync flags t_us frame_ctr rssi snr"
+                        " seq uptime_ms payload")
 
 SOAK_LOG_VERSION = 2	# newest format this decoder writes assumptions for
 REC_META, REC_RX, REC_TX, REC_STATS = 1, 2, 3, 4
@@ -49,10 +58,21 @@ CSV_FIELDS = ["seq", "type", "uptime_ms", "t_us", "slot_id", "sync",
               "frame_ctr", "rssi", "snr"] + ALL_STATS_FIELDS + ["payload"]
 
 
+def iter_records(blob):
+    """Yield every whole 64-byte record in blob as a Rec, in file order."""
+    for i in range(len(blob) // REC_SIZE):
+        (rtype, slot_id, sync, flags, t_us, frame_ctr, rssi, snr, _rsvd,
+         seq, uptime_ms, payload) = struct.unpack_from(REC_FMT, blob,
+                                                       i * REC_SIZE)
+        yield Rec(i, rtype, slot_id, sync, flags, t_us, frame_ctr, rssi, snr,
+                  seq, uptime_ms, payload)
+
+
 def parse_meta(payload):
     (magic, version, role, slot_id, freq_hz, slot_us, frame_us, toa_us,
      sf, cr, bw_khz, tx_power, slot_count, payload_len, preamble,
-     uptime_ms) = struct.unpack(META_FMT, payload[:struct.calcsize(META_FMT)])
+     uptime_ms, payload_mode, tone_fs_khz, tone_f0_hz) = struct.unpack(
+         META_FMT, payload[:struct.calcsize(META_FMT)])
     if magic != MAGIC:
         return None
     return {
@@ -69,7 +89,19 @@ def parse_meta(payload):
         "payload_len": payload_len,
         "preamble_syms": preamble,
         "uptime_ms": uptime_ms,
+        "payload_mode": payload_mode,
+        "tone_fs_khz": tone_fs_khz,
+        "tone_f0_hz": tone_f0_hz,
     }
+
+
+def payload_desc(meta):
+    if meta["payload_mode"] == PAYLOAD_TONE:
+        return "payload=tone fs=%dkHz f0=%dHz" % (meta["tone_fs_khz"],
+                                                   meta["tone_f0_hz"])
+    if meta["payload_mode"] == PAYLOAD_RAMP:
+        return "payload=ramp"
+    return "payload=unknown(%d)" % meta["payload_mode"]
 
 
 def payload_errors(payload, n):
@@ -123,11 +155,11 @@ def main():
     ctr_by_slot = {}
     missed = dup = 0
     bad_bytes_tot = bad_bits_tot = 0
+    ramp = True	# until a META record says otherwise
 
-    for i in range(total):
-        rec = blob[i * REC_SIZE:(i + 1) * REC_SIZE]
-        (rtype, slot_id, sync, flags, t_us, frame_ctr, rssi, snr, _rsvd,
-         seq, uptime_ms, payload) = struct.unpack(REC_FMT, rec)
+    for rec in iter_records(blob):
+        (_, rtype, slot_id, sync, flags, t_us, frame_ctr, rssi, snr,
+         seq, uptime_ms, payload) = rec
 
         counts[rtype] += 1
 
@@ -143,6 +175,7 @@ def main():
 
         if rtype == REC_META:
             meta = parse_meta(payload)
+            ramp = meta is None or meta["payload_mode"] == PAYLOAD_RAMP
             rows.append(row)
             continue
 
@@ -181,9 +214,12 @@ def main():
                     missed += delta - 1
             ctr_by_slot[slot_id] = frame_ctr
 
-            bb, bt = payload_errors(payload, n)
-            bad_bytes_tot += bb
-            bad_bits_tot += bt
+            # The ramp check only means something for ramp payloads; a
+            # tone packet would read as 40 bad bytes.
+            if ramp:
+                bb, bt = payload_errors(payload, n)
+                bad_bytes_tot += bb
+                bad_bits_tot += bt
         elif not (flags & F_NO_CTR):
             row.update(frame_ctr=frame_ctr)
 
@@ -194,9 +230,10 @@ def main():
     # ---- report ----
     print("file:     %s (%d records)" % (args.logfile, total))
     if meta:
-        print("meta:     role=%s slot=%d %s %+ddBm freq=%d (fmt v%d)" % (
+        print("meta:     role=%s slot=%d %s %+ddBm freq=%d (fmt v%d) %s" % (
             meta["role"], meta["slot_id"], meta["phy"],
-            meta["tx_power_dbm"], meta["freq_hz"], meta["version"]))
+            meta["tx_power_dbm"], meta["freq_hz"], meta["version"],
+            payload_desc(meta)))
         print("timing:   slot=%dus frame=%dus toa=%dus slots=%d" % (
             meta["slot_us"], meta["frame_us"], meta["toa_us"],
             meta["slot_count"]))
@@ -218,8 +255,12 @@ def main():
         per = (100.0 * missed / expected) if expected else 0.0
         print("continuity: received=%d missed=%d dup=%d  PER=%.3f%%" % (
             recvd, missed, dup, per))
-        print("payload:  %d bad bytes / %d bad bits across %d packets" % (
-            bad_bytes_tot, bad_bits_tot, recvd))
+        if ramp:
+            print("payload:  %d bad bytes / %d bad bits across %d packets" % (
+                bad_bytes_tot, bad_bits_tot, recvd))
+        else:
+            print("payload:  not a ramp, integrity check skipped"
+                  " (tone: see reconstruct_tone.py)")
 
     if last_stats:
         # Engine counters are absolute and are NOT reset by tdma_start(), so a

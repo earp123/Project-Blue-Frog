@@ -126,7 +126,18 @@ struct soak_stats {
 BUILD_ASSERT(sizeof(struct soak_stats) <= TDMA_PAYLOAD_LEN,
 	     "soak_stats must fit the record payload");
 
-/* META payload overlay (little-endian, written into soak_rec.payload). */
+/* What this unit put in its own TX payloads (META payload_mode). */
+enum soak_payload_mode {
+	SOAK_PAYLOAD_RAMP = 0,	/* payload[i] = base + i; all pre-tone logs */
+	SOAK_PAYLOAD_TONE = 1,	/* tone_src chunks (CONFIG_SOAK_PAYLOAD_TONE) */
+};
+
+/*
+ * META payload overlay (little-endian, written into soak_rec.payload).
+ *
+ * The last four bytes were spare (zero) in v2 files before the tone payload,
+ * which decode as payload_mode RAMP, so adding them needed no version bump.
+ */
 struct soak_meta {
 	uint32_t magic;
 	uint16_t version;
@@ -144,7 +155,13 @@ struct soak_meta {
 	uint8_t  payload_len;
 	uint8_t  preamble_syms;
 	uint32_t uptime_ms;
+	uint8_t  payload_mode;	/* enum soak_payload_mode */
+	uint8_t  tone_fs_khz;	/* TONE: sample rate */
+	uint16_t tone_f0_hz;	/* TONE: slot s plays f0 * (s + 1) */
 } __packed;
+
+BUILD_ASSERT(sizeof(struct soak_meta) <= TDMA_PAYLOAD_LEN,
+	     "soak_meta must fit the record payload");
 
 struct soak_log_status {
 	bool active;

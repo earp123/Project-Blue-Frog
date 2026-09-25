@@ -10,6 +10,7 @@
 
 #include "soak_log.h"
 #include "sd_log.h"
+#include "tone_src.h"
 
 #include <zephyr/fs/fs.h>
 #include <zephyr/sys/util.h>
@@ -168,6 +169,14 @@ int soak_log_start(enum tdma_role role, uint8_t slot_id, int8_t tx_power_dbm,
 	m.payload_len = TDMA_PAYLOAD_LEN;
 	m.preamble_syms = TDMA_PREAMBLE_SYMS;
 	m.uptime_ms = (uint32_t)k_uptime_get();
+	/* Left zero (= RAMP) otherwise, so a ramp build writes the same
+	 * record as before the tone option.
+	 */
+	if (IS_ENABLED(CONFIG_SOAK_PAYLOAD_TONE)) {
+		m.payload_mode = SOAK_PAYLOAD_TONE;
+		m.tone_fs_khz = TONE_FS_HZ / 1000;
+		m.tone_f0_hz = TONE_F0_HZ;
+	}
 
 	r.type = SOAK_REC_META;
 	r.slot_id = slot_id;

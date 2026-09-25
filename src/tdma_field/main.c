@@ -49,6 +49,7 @@
 
 #include "tdma.h"
 #include "soak_log.h"
+#include "tone_src.h"
 
 LOG_MODULE_REGISTER(tdma_field, LOG_LEVEL_INF);
 
@@ -808,7 +809,15 @@ static void soak_data_step(void)
 	}
 
 	if (!soak.tx_armed) {
-		fill_pattern(soak.tx_payload, soak.seq);
+		if (IS_ENABLED(CONFIG_SOAK_PAYLOAD_TONE)) {
+			/* The audio for the TX slot this chunk will ride; see
+			 * the console's copy.
+			 */
+			tone_src_fill(soak.tx_payload, my_slot,
+				      t->tx_done - soak.snap.tx_done);
+		} else {
+			fill_pattern(soak.tx_payload, soak.seq);
+		}
 		if (tdma_tx_submit(soak.tx_payload) == 0) {
 			soak.tx_armed = true;
 			soak.tx_done_at_arm = t->tx_done;

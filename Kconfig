@@ -43,6 +43,18 @@ config APP_TDMA_FIELD
 
 endchoice
 
+config SOAK_PAYLOAD_TONE
+	bool "Soak payload: per-slot PCM tone instead of the ramp"
+	help
+	  Fill each soak transmission with 40 samples of an 8 kHz, 8-bit tone
+	  at 330 Hz * (slot + 1) in place of the payload[i] = base + i ramp.
+	  Chunk n is the audio for the unit's n-th TX slot of the run, so a
+	  missed frame's audio is dropped, never delayed. The log's META
+	  record says which payload a unit sent. Rebuild every unit in the
+	  run with the same setting, then turn any unit's log into a WAV of
+	  its peers with tools/reconstruct_tone.py. See
+	  docs/tone_payload_test.md.
+
 # The TDMA engine keeps the radio awake for its whole life (PLL kept locked
 # in FS between slots; the TCXO warm-up cost is paid once at init). The
 # driver's sleep-when-idle behaviour would also detach/re-attach its DIO1
