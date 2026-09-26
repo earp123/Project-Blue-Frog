@@ -7,10 +7,10 @@
 #include <zephyr/kernel.h>
 #include <zephyr/init.h>
 #include <zephyr/sys/byteorder.h>
-#include <nrfx_clock.h>
-#include <stdlib.h>
 #include <zephyr/sys/util.h>
+#include <nrfx_clock.h>
 #include <errno.h>
+#include <stdlib.h>
 #include <string.h>
 
 #include <codec2.h>
@@ -27,9 +27,15 @@
 #define FRAMES_PER_CHUNK	4
 #define FRAME_SAMPLES		(C2_ENC_CHUNK_SAMPLES / FRAMES_PER_CHUNK)
 #define FRAME_BYTES		8
+#define FRAME_US		20000	/* one Codec 2 3200 frame of audio */
 
 BUILD_ASSERT(FRAMES_PER_CHUNK * FRAME_BYTES == CLIP_CHUNK,
 	     "four Codec 2 3200 frames fill the clip payload");
+BUILD_ASSERT(FRAMES_PER_CHUNK * FRAME_US == TDMA_FRAME_DURATION_US,
+	     "a chunk is one TDMA frame of audio");
+
+/* The engine's pickup deadline, less its measured wake (stage_lead_sweep). */
+#define PICKUP_DEADLINE_US	(TDMA_PRE_TX_PICKUP_US - 50)
 
 static K_SEM_DEFINE(enc_go, 0, 1);
 static K_SEM_DEFINE(enc_ready, 0, 1);	/* codec created (or not) */
@@ -42,22 +48,18 @@ static atomic_t running;
 static atomic_t run_id;		/* bumped by start/stop: a stale wait aborts */
 static atomic_t alive;		/* the thread holds the codec for a run */
 
-/* One-deep output slot, published under the lock. */
-static struct k_spinlock slot_lock;
-static struct {
-	bool valid;
-	uint32_t boundary;
-	uint32_t enc_us;
-	uint8_t payload[TDMA_PAYLOAD_LEN];
-} slot;
+/* Last staged chunk, for the data thread's TX record. */
+static struct k_spinlock rec_lock;
+static struct c2_enc_tx rec;
+static bool rec_new;
 
 static struct c2_enc_stats stats;
 
 /*
  * Codec 2 built with __EMBEDDED__ allocates through these (debug_alloc.h).
  * The libc heap (CONFIG_COMMON_LIBC_MALLOC_ARENA_SIZE) serves them and the
- * few plain malloc() calls in the codec; only c2_enc_start() and the
- * encoder thread's teardown allocate or free.
+ * few plain malloc() calls in the codec; only codec creation at a run's start
+ * and teardown at its end allocate or free.
  */
 void *codec2_malloc(size_t size)
 {
@@ -93,11 +95,11 @@ int c2_enc_start(uint32_t phase)
 
 	c2_enc_stop();
 
-	k_spinlock_key_t key = k_spin_lock(&slot_lock);
+	k_spinlock_key_t key = k_spin_lock(&rec_lock);
 
-	slot.valid = false;
+	rec_new = false;
 	memset(&stats, 0, sizeof(stats));
-	k_spin_unlock(&slot_lock, key);
+	k_spin_unlock(&rec_lock, key);
 
 	phase_us = phase;
 	atomic_inc(&run_id);
@@ -133,67 +135,194 @@ void c2_enc_stop(void)
 	}
 }
 
-bool c2_enc_take(uint32_t boundary_us, uint8_t out[TDMA_PAYLOAD_LEN],
-		 uint32_t *enc_us)
+bool c2_enc_staged(struct c2_enc_tx *out)
 {
 	bool got = false;
-	k_spinlock_key_t key = k_spin_lock(&slot_lock);
+	k_spinlock_key_t key = k_spin_lock(&rec_lock);
 
-	/* Same boundary within half a slot: a secondary's sync correction
-	 * may move it a few us between encode and stage.
-	 */
-	int32_t d = (int32_t)(slot.boundary - boundary_us);
-
-	if (slot.valid) {
-		if (d > -(int32_t)TDMA_SLOT_DURATION_US / 2 &&
-		    d < (int32_t)TDMA_SLOT_DURATION_US / 2) {
-			memcpy(out, slot.payload, TDMA_PAYLOAD_LEN);
-			*enc_us = slot.enc_us;
-			slot.valid = false;
-			got = true;
-		} else if (d < 0) {
-			/* Its boundary has gone by: too late to send. */
-			slot.valid = false;
-			stats.late++;
-		}
+	if (rec_new) {
+		*out = rec;
+		rec_new = false;
+		got = true;
 	}
-	k_spin_unlock(&slot_lock, key);
+	k_spin_unlock(&rec_lock, key);
 	return got;
 }
 
 void c2_enc_get_stats(struct c2_enc_stats *out)
 {
-	k_spinlock_key_t key = k_spin_lock(&slot_lock);
+	k_spinlock_key_t key = k_spin_lock(&rec_lock);
 
 	*out = stats;
-	k_spin_unlock(&slot_lock, key);
+	k_spin_unlock(&rec_lock, key);
 }
 
-/* Encode chunk n (the PCM loops) into out: header + four frames. */
-static void encode_chunk(uint32_t n, uint8_t out[TDMA_PAYLOAD_LEN])
+/* Encode frame k of chunk n (the PCM loops) into out. */
+static void encode_frame(uint32_t n, int k, uint8_t *out)
 {
 	uint32_t len;
 	const uint8_t *pcm = clip_src_data(&len);
 	uint32_t chunks = len / C2_ENC_CHUNK_PCM_BYTES;
-	const uint8_t *src = pcm + (n % chunks) * C2_ENC_CHUNK_PCM_BYTES;
+	const uint8_t *src = pcm + (n % chunks) * C2_ENC_CHUNK_PCM_BYTES +
+			     k * FRAME_SAMPLES * 2;
 
-	/* The clip test header (clip_src.h). clip_id is the PCM's CRC: the
-	 * host ties it to its own encoding of the same PCM.
-	 */
+	for (int i = 0; i < FRAME_SAMPLES; i++) {
+		frame_pcm[i] = (int16_t)sys_get_le16(&src[i * 2]);
+	}
+	codec2_encode(codec, out, frame_pcm);
+}
+
+/* The clip test header (clip_src.h). clip_id is the PCM's CRC: the host ties
+ * it to its own encoding of the same PCM.
+ */
+static void put_header(uint32_t n, uint8_t out[TDMA_PAYLOAD_LEN])
+{
 	out[0] = CLIP_MAGIC;
 	out[1] = CLIP_CODEC_3200;
 	sys_put_le16((uint16_t)n, &out[2]);
 	sys_put_le16((uint16_t)clip_src_crc(), &out[4]);
 	out[6] = 0;
 	out[7] = 0;
+}
 
-	for (int f = 0; f < FRAMES_PER_CHUNK; f++) {
-		for (int i = 0; i < FRAME_SAMPLES; i++) {
-			frame_pcm[i] = (int16_t)sys_get_le16(
-				&src[(f * FRAME_SAMPLES + i) * 2]);
+/* Sleep until slot-clock time t; returns how far past t we woke. */
+static uint32_t sleep_until(uint32_t t)
+{
+	int32_t wait = (int32_t)(t - tdma_now_us());
+
+	if (wait > 0) {
+		k_sleep(K_USEC(wait));
+	}
+
+	int32_t late = (int32_t)(tdma_now_us() - t);
+
+	return late > 0 ? (uint32_t)late : 0;
+}
+
+/*
+ * Follow the engine's boundary: the chunk after b is due one frame later,
+ * give or take a secondary's sync corrections, which tdma_next_tx_us()
+ * already includes.
+ */
+static uint32_t next_boundary(uint32_t b)
+{
+	uint32_t want = b + TDMA_FRAME_DURATION_US;
+	uint32_t ref = tdma_next_tx_us();
+
+	for (int i = 0; i < 2; i++, ref += TDMA_FRAME_DURATION_US) {
+		int32_t d = (int32_t)(ref - want);
+
+		if (d > -(int32_t)TDMA_SLOT_DURATION_US &&
+		    d < (int32_t)TDMA_SLOT_DURATION_US) {
+			return ref;
 		}
-		codec2_encode(codec, &out[CLIP_HDR_LEN + f * FRAME_BYTES],
-			      frame_pcm);
+	}
+	return want;
+}
+
+static void run(atomic_val_t id)
+{
+	bool anchored = false;
+	uint32_t b = 0;
+	uint32_t b0 = 0;
+	uint8_t out[TDMA_PAYLOAD_LEN];
+
+	while (atomic_get(&running) && atomic_get(&run_id) == id) {
+		/* Frame timing means nothing until the engine is RUNNING (a
+		 * secondary snaps its phase on lock).
+		 */
+		if (tdma_get_telemetry()->sync_state != TDMA_SYNC_RUNNING) {
+			k_sleep(K_MSEC(10));
+			anchored = false;
+			continue;
+		}
+
+		if (!anchored) {
+			/* The first boundary whose first frame is still to
+			 * be captured.
+			 */
+			uint32_t now = tdma_now_us();
+
+			b = tdma_next_tx_us();
+			while ((int32_t)(b - phase_us -
+					 (FRAMES_PER_CHUNK - 1) * FRAME_US -
+					 now) < 0) {
+				b += TDMA_FRAME_DURATION_US;
+			}
+			b0 = b;
+			anchored = true;
+		}
+
+		/* Time-keyed: whole frames since the first boundary. */
+		uint32_t n = (uint32_t)(((b - b0) +
+					 TDMA_FRAME_DURATION_US / 2) /
+					TDMA_FRAME_DURATION_US);
+		uint32_t captured = 0;
+
+		put_header(n, out);
+		for (int k = 0; k < FRAMES_PER_CHUNK; k++) {
+			/* Frame k is complete (FRAMES_PER_CHUNK - 1 - k)
+			 * frames before the chunk is.
+			 */
+			captured = b - phase_us -
+				   (FRAMES_PER_CHUNK - 1 - k) * FRAME_US;
+
+			uint32_t late = sleep_until(captured);
+
+			if (atomic_get(&run_id) != id) {
+				return;
+			}
+			stats.start_late_max_us =
+				MAX(stats.start_late_max_us, late);
+
+			uint32_t t0 = tdma_now_us();
+
+			encode_frame(n, k, &out[CLIP_HDR_LEN + k * FRAME_BYTES]);
+			stats.frame_enc_max_us = MAX(stats.frame_enc_max_us,
+						     tdma_now_us() - t0);
+		}
+
+		/* The chunk is complete and encoded: straight to the engine. */
+		uint32_t done = tdma_get_telemetry()->tx_done;
+		uint32_t stage = tdma_now_us();
+		int rc = tdma_tx_submit(out);
+		int32_t lead = (int32_t)(b - stage);
+		k_spinlock_key_t key = k_spin_lock(&rec_lock);
+
+		if (rc == 0) {
+			if (rec_new) {
+				stats.unlogged++;
+			}
+			memcpy(rec.payload, out, sizeof(out));
+			rec.stage_us = stage;
+			rec.lead_us = lead > 0 ? (uint32_t)lead : 0;
+			rec.ready_us = stage - captured;
+			rec.tx_done = done;
+			rec_new = true;
+			stats.staged++;
+			if (lead < PICKUP_DEADLINE_US) {
+				stats.late++;
+			}
+			stats.ready_max_us = MAX(stats.ready_max_us,
+						 stage - captured);
+		} else {
+			stats.busy++;
+		}
+		k_spin_unlock(&rec_lock, key);
+
+		/* Stack headroom (painted stacks, INIT_STACKS): a scan of the
+		 * whole stack, so not every chunk.
+		 */
+		if ((n % 16U) == 0U) {
+			size_t unused;
+
+			if (k_thread_stack_space_get(k_current_get(),
+						     &unused) == 0) {
+				stats.stack_unused = (uint32_t)unused;
+			}
+		}
+
+		b = next_boundary(b);
 	}
 }
 
@@ -213,98 +342,7 @@ static void enc_thread_fn(void *p1, void *p2, void *p3)
 			continue;
 		}
 
-		atomic_val_t id = atomic_get(&run_id);
-		bool anchored = false;
-		uint32_t b0 = 0;
-		uint32_t last_b = 0;
-
-		while (atomic_get(&running) && atomic_get(&run_id) == id) {
-			/* Frame timing means nothing until the engine is
-			 * RUNNING (a secondary snaps its phase on lock).
-			 */
-			if (tdma_get_telemetry()->sync_state !=
-			    TDMA_SYNC_RUNNING) {
-				k_sleep(K_MSEC(10));
-				continue;
-			}
-
-			uint32_t b = tdma_next_tx_us();
-			uint32_t now = tdma_now_us();
-
-			if (anchored && (int32_t)(b - last_b) <
-					(int32_t)TDMA_SLOT_DURATION_US) {
-				/* This boundary's chunk is done: sleep past
-				 * the boundary, then look at the next one.
-				 */
-				k_sleep(K_USEC((int32_t)(b - now) + 100));
-				continue;
-			}
-
-			int32_t wait = (int32_t)(b - phase_us - now);
-
-			if (wait > 0) {
-				/* Not captured yet: sleep until it is, then
-				 * re-read the boundary (sync may move it).
-				 */
-				k_sleep(K_USEC(wait));
-				continue;
-			}
-			if (anchored) {
-				/* How long after availability we got here. */
-				stats.start_late_max_us =
-					MAX(stats.start_late_max_us,
-					    (uint32_t)-wait);
-			}
-
-			if (!anchored) {
-				anchored = true;
-				b0 = b;
-			}
-			/* Time-keyed: whole frames since the first boundary,
-			 * so a skipped frame skips its chunk.
-			 */
-			uint32_t n = (uint32_t)(((b - b0) +
-						 TDMA_FRAME_DURATION_US / 2) /
-						TDMA_FRAME_DURATION_US);
-			if (last_b != 0 &&
-			    (b - last_b) > TDMA_FRAME_DURATION_US * 3 / 2) {
-				stats.skipped += (b - last_b) /
-						 TDMA_FRAME_DURATION_US - 1;
-			}
-			last_b = b;
-
-			uint8_t out[TDMA_PAYLOAD_LEN];
-			uint32_t t0 = tdma_now_us();
-
-			encode_chunk(n, out);
-
-			uint32_t enc = tdma_now_us() - t0;
-			k_spinlock_key_t key = k_spin_lock(&slot_lock);
-
-			slot.boundary = b;
-			slot.enc_us = enc;
-			memcpy(slot.payload, out, sizeof(out));
-			if (slot.valid) {
-				stats.late++;	/* previous one never taken */
-			}
-			slot.valid = true;
-			stats.encoded++;
-			stats.enc_last_us = enc;
-			stats.enc_max_us = MAX(stats.enc_max_us, enc);
-			k_spin_unlock(&slot_lock, key);
-
-			/* Stack headroom (painted stacks, INIT_STACKS): a
-			 * scan of the 16 KB, so not every chunk.
-			 */
-			if ((n % 16U) == 0U) {
-				size_t unused;
-
-				if (k_thread_stack_space_get(k_current_get(),
-							     &unused) == 0) {
-					stats.stack_unused = (uint32_t)unused;
-				}
-			}
-		}
+		run(atomic_get(&run_id));
 
 		codec2_destroy(codec);
 		codec = NULL;

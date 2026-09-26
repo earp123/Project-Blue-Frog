@@ -28,19 +28,21 @@ _Last updated: 2026-09-26._
   - Codec 2 3200 frames cross the link byte for byte.
   - Each unit now encodes its own speech on the device: ~27 ms per 80 ms
     chunk at 128 MHz, 96–97 % bit-exact with the reference codec.
-  - First sample to peer DIO1 is ~124 ms, before decode and playout.
+  - Encoding is pipelined per 20 ms frame. First sample to peer DIO1 is
+    ~100 ms, before decode and playout.
 - **Next, in order of payoff:**
-  1. Encode each 20 ms frame as it is captured and stage it straight from
-     the encoder: ~12 ms of phase instead of 36, ~100 ms first sample to
-     peer.
-  2. Decode and playout on the receiving unit.
-  3. Settle Codec 2's LGPL licensing for the product. It is test-only
+  1. Decode and playout on the receiving unit. The plan is an I2S amp or
+     DAC breakout on a 3.3 V DK, with the audio clock (HFCLKAUDIO) locked
+     to the frame. The Audio DKs' 1.8 V I/O makes them a later option.
+  2. Settle Codec 2's LGPL licensing for the product. It is test-only
      today, behind `CONFIG_SOAK_C2_ENCODE`.
-  4. The four-unit soak (card #23 first).
+  3. The four-unit soak (card #23 first).
 - **Open questions:**
   - One acquisition in 400 had not locked at 3 s after the sync fix. It
     was not re-checked, so it is unknown whether it was slow or stuck.
   - PESQ has not been run: the package needs a host C compiler.
+  - The encoder on the shield unit sometimes wakes 4–6 ms late (so far
+    only on frames with slack).
 
 ### Firmware variants
 
@@ -61,6 +63,26 @@ Exactly one `main()` is linked, chosen by the Kconfig choice in
 Four other variants were retired on 2026-09-25: LoRa send, the telemetry
 console, the TDMA UART-shell test and the UART soak harness (see "Streamlined
 to two unit types"). Their sections below are kept as history.
+
+### Per-frame encode pipeline: ~100 ms first sample to peer (2026-09-26)
+
+The encoder encodes each 20 ms frame as it is captured and stages the chunk
+itself, so after a chunk is complete only one frame's encode remains.
+Details: [`docs/c2_encode_test.md`](docs/c2_encode_test.md) ("Follow-up").
+
+- **Capture-to-stage: 7.7 ms worst** (29 ms plus a 2 ms poll before).
+  Clean at a phase of 10 ms and above; 12 ms leaves ~2 ms of margin, making
+  first sample to peer DIO1 ~100 ms (was ~124 ms). Encoder output and
+  over-the-air integrity are unchanged.
+- **Runner:** in PCM mode the data thread no longer stages; it logs what
+  the encoder staged (`c2_enc_staged()`). The TX record's `SOAK_F_TX_ENC`
+  field now holds last frame captured → staged. Without RTT, `soak_data_fn`
+  has the same instructions as `9d9a1a8`, with only data offsets and RAM
+  addresses moved.
+- **The RTT reply buffer grew to 256 B** for the longer encode-build
+  `status` line.
+- **Open:** occasional 4–6 ms late wakes of the encoder on the shield
+  unit, so far only on frames with slack.
 
 ### On-device Codec 2 encode test (2026-09-26)
 

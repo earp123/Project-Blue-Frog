@@ -6,8 +6,12 @@ the frames behind the clip test header; every TX record logs the chunk, the
 encode time and the staging lead. Given every unit's capture of one run and
 the PCM clips, this reports per unit:
 
-  - encode time per 80 ms chunk (wall clock on the device, preemption by the
-    radio and data threads included): min / median / p99 / max;
+  - capture-to-stage time per chunk: from the chunk's last 20 ms frame being
+    captured to the chunk being staged, i.e. that frame's encode plus
+    wake-up (wall clock on the device, preemption by the radio and data
+    threads included). The other three frames were encoded as they were
+    captured (c2_enc.h). Logs from before the per-frame pipeline hold the
+    whole chunk's encode time here instead;
   - staging lead against the engine's pickup deadline (TDMA_PRE_TX_PICKUP_US
     less its ~50 us wake), and how many frames went out stale;
   - correctness: the device's frames against pycodec2 encoding the same PCM
@@ -134,7 +138,7 @@ def main():
               "stale re-sends %s" % (len(sent), sent[0], sent[-1],
                                      u.tx_done, u.stale))
         if enc:
-            print("  encode time per chunk: %s" % pcts(enc))
+            print("  last frame captured -> staged: %s" % pcts(enc))
         if lead:
             short = sum(1 for x in lead if x < DEADLINE_US)
             print("  staging lead: %s; %d below the %.2f ms deadline" % (

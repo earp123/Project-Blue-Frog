@@ -21,6 +21,7 @@
 
 #include <zephyr/sys/util.h>
 #include <stdint.h>
+#include <string.h>
 
 #include "tdma.h"
 #include "soak_log.h"
@@ -87,17 +88,34 @@ static inline uint32_t payload_pcm_chunks(void)
 }
 
 /*
- * PCM mode: the encoder's chunk for this unit's next TX boundary, if it is
- * done (c2_enc_take()). Always false in other builds.
+ * PCM mode: the chunk the encoder has staged since last asked, if any, for
+ * the TX record: payload, stage time, lead, capture-to-stage time and the
+ * engine's tx_done at staging (c2_enc_staged()). The encoder hands chunks
+ * to the engine itself, so the runner only logs them. Always false in other
+ * builds.
  */
 static inline bool payload_take_pcm(uint8_t out[TDMA_PAYLOAD_LEN],
-				    uint32_t *enc_us)
+				    uint32_t *stage_us, uint32_t *lead_us,
+				    uint32_t *ready_us, uint32_t *tx_done)
 {
 #ifdef CONFIG_SOAK_C2_ENCODE
-	return c2_enc_take(tdma_next_tx_us(), out, enc_us);
+	struct c2_enc_tx rec;
+
+	if (!c2_enc_staged(&rec)) {
+		return false;
+	}
+	memcpy(out, rec.payload, TDMA_PAYLOAD_LEN);
+	*stage_us = rec.stage_us;
+	*lead_us = rec.lead_us;
+	*ready_us = rec.ready_us;
+	*tx_done = rec.tx_done;
+	return true;
 #else
 	ARG_UNUSED(out);
-	ARG_UNUSED(enc_us);
+	ARG_UNUSED(stage_us);
+	ARG_UNUSED(lead_us);
+	ARG_UNUSED(ready_us);
+	ARG_UNUSED(tx_done);
 	return false;
 #endif
 }

@@ -126,7 +126,7 @@ bool rtt_link_write_rec(const void *rec, uint32_t len)
  */
 static void reply(const char *fmt, ...)
 {
-	char buf[160];
+	char buf[256];	/* the encode build's status line is ~150 chars */
 	va_list ap;
 	int n;
 
@@ -369,19 +369,21 @@ static void do_status(const struct rtt_link_ops *ops)
 	struct c2_enc_stats es;
 
 	c2_enc_get_stats(&es);
-	/* enc = encoded/late/skipped/max us/worst wake after availability/
-	 * encoder stack never used (bytes)
+	/* enc = staged/late (past the pickup deadline)/busy (stage occupied)/
+	 * worst frame encode us/worst last-frame-captured -> staged us/worst
+	 * wake after a capture us/encoder stack never used (bytes)/staged
+	 * but overwritten before the runner logged it
 	 */
 	reply("ok status %s sync=%s soak=%s mode=%s clip=%u/%08x lead=%u "
-	      "rtt_drop=%u pretx=%u/%u/%d/%d phase=%u enc=%u/%u/%u/%u/%u/%u",
-	      unit,
-	      sync_name(t->sync_state),
+	      "rtt_drop=%u pretx=%u/%u/%d/%d phase=%u enc=%u/%u/%u/%u/%u/%u/%u/%u",
+	      unit, sync_name(t->sync_state),
 	      u.soak_running ? "run" : "idle", mode_name[rtt_link_mode()],
 	      clip_src_chunks(), clip_src_crc(), rtt_link_lead_us(),
 	      ls.rtt_dropped, t->pre_tx_pickups, t->pre_tx_staged,
 	      (int)t->pre_tx_margin_min_us, (int)t->pre_tx_margin_last_us,
-	      rtt_link_phase_us(), es.encoded, es.late, es.skipped,
-	      es.enc_max_us, es.start_late_max_us, es.stack_unused);
+	      rtt_link_phase_us(), es.staged, es.late, es.busy,
+	      es.frame_enc_max_us, es.ready_max_us, es.start_late_max_us,
+	      es.stack_unused, es.unlogged);
 #else
 	reply("ok status %s sync=%s soak=%s mode=%s clip=%u/%08x lead=%u "
 	      "rtt_drop=%u pretx=%u/%u/%d/%d", unit, sync_name(t->sync_state),

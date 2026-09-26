@@ -1,6 +1,7 @@
 # On-device Codec 2 encode test
 
-**Status:** done, 2026-09-26. **Follows:**
+**Status:** done, 2026-09-26; per-frame pipeline follow-up the same day
+(end of this page: phase 36 -> 12 ms, ~124 -> ~100 ms). **Follows:**
 [`rtt_link_c2_transport.md`](rtt_link_c2_transport.md), which proved the
 link carries Codec 2 frames intact, and
 [`stage_lead_sweep.md`](stage_lead_sweep.md), which set the staging deadline
@@ -114,6 +115,51 @@ playout: 80 ms (a chunk is 80 ms of audio) + 36 ms (phase) + ~8.2 ms (air)
   `FDV_ARM_MATH`).
 - **CPU budget:** ~35 % of the app core for encode alone. Decode and
   playout on the receive side come on top.
+
+## Follow-up: per-frame pipeline (2026-09-26)
+
+Built. The encoder no longer waits for the whole chunk:
+
+- **Encode as captured:** frame *k* (0–3) of the chunk for boundary *B* is
+  captured at *B* − phase − (3 − *k*) × 20 ms, and encoded the moment it is.
+  Once the chunk is complete, only the last frame's encode remains.
+- **Stage from the encoder:** the encoder builds the payload and calls
+  `tdma_tx_submit()` itself (the stage buffer is spinlocked, any thread).
+  It publishes what it staged, with `tx_done` at that moment, for the data
+  thread to log as the TX record. The data thread no longer polls for
+  chunks, which removes up to 2 ms.
+- **What is logged changed:** the TX record's `SOAK_F_TX_ENC` field now
+  holds *last frame captured → staged* (that frame's encode plus wake-up).
+  `status` shows `enc=staged/late/busy/frame max/capture-to-stage
+  max/wake max/stack/unlogged`.
+
+**Results**, same three units and clips, 1 min per setting:
+
+| Phase | MASTER | SEC 1 | SEC 2 |
+|---|---|---|---|
+| 36 → 11 ms | clean | clean | clean |
+| 10 ms | clean, min lead 2.80 | clean, 2.71 | clean, 2.63 |
+| 9.5 ms | at the edge (2.46) | 126 stale | 84 stale |
+| 9 ms | every chunk past the deadline | every chunk | every chunk |
+
+- **Capture-to-stage is 6.4–7.7 ms** (worst 7.7 ms) at every setting:
+  one frame's encode, against 29 ms plus a poll before.
+- **Edge ~10 ms** (7.7 + 2.45). **12 ms leaves ~2 ms of margin**: first
+  sample to peer DIO1 is 80 + 12 + 8.2 = **~100 ms**, down from ~124 ms.
+  Confirmed on the committed firmware: clean on all three units.
+- **At 9 ms every chunk rides one frame late** (+80 ms), yet only 1–2 are
+  stale re-sends. Consistently late costs latency, not loss (as in
+  [`stage_lead_sweep.md`](stage_lead_sweep.md)). The staging-lead check
+  catches it and the stale count does not.
+- **Correctness is unchanged:** the same bit-exact counts against
+  `pycodec2` (the codec sees the same frames in the same order), and every
+  chunk matches over the air.
+- **Observation, not yet explained:** the shield (master) encoder
+  occasionally woke 4–6 ms late (`status` wake max) at 11, 10.5 and 9.5 ms.
+  Capture-to-stage stayed ≤ 7 ms, so those late wakes hit frames 0–2, which
+  have 20 ms of slack, not the last frame. The shield logs over UART and
+  drives an I2C OLED; neither should outrank a priority-0 thread. Worth a
+  look before trimming margin further.
 
 ## Reproduce
 

@@ -79,8 +79,12 @@ enum soak_rec_type {
 /* flags bits */
 #define SOAK_F_NO_CTR	BIT(0)	/* frame_ctr not meaningful (TX records) */
 #define SOAK_F_TX_T	BIT(1)	/* TX record: t_us holds the stage time */
-#define SOAK_F_TX_ENC	BIT(3)	/* TX record: rsvd[0..2] hold the chunk's
-				 * encode time, us, little-endian (PCM) */
+#define SOAK_F_TX_ENC	BIT(3)	/* TX record (PCM): rsvd[0..2] hold the time
+				 * from the chunk's last frame being captured
+				 * to it being staged, us, little-endian:
+				 * that frame's encode plus wake-up (c2_enc.h).
+				 * Logs before 2026-09-26's per-frame pipeline
+				 * hold the whole chunk's encode time. */
 #define SOAK_F_TX_LEAD	BIT(2)	/* TX record: frame_ctr holds the stage lead,
 				 * us before the TX boundary (0xFFFF = more) */
 
@@ -306,8 +310,8 @@ void soak_log_tx(const uint8_t payload[TDMA_PAYLOAD_LEN], uint8_t slot_id,
  * record of the same chunk, it gives stage-to-DIO1 latency
  * (tools/reconstruct_c2.py --tx). lead_us, how long before its TX boundary
  * the payload was staged, goes in frame_ctr (SOAK_F_TX_LEAD). A non-zero
- * enc_us (PCM mode: the chunk's on-device encode time) goes in rsvd
- * (SOAK_F_TX_ENC).
+ * enc_us (PCM mode: capture of the chunk's last frame to staging) goes in
+ * rsvd (SOAK_F_TX_ENC).
  * soak_log_tx() leaves t_us 0.
  */
 void soak_log_tx_at(const uint8_t payload[TDMA_PAYLOAD_LEN], uint8_t slot_id,

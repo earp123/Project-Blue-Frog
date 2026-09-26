@@ -1075,30 +1075,39 @@ static void soak_data_step(void)
 		 * the rest.
 		 */
 		uint32_t enc_us = 0;
+		uint32_t stage_us = 0;
+		uint32_t done_at = 0;
 		bool have = true;
+		bool staged = false;
 
 		if (PAYLOAD_PCM_LINKED &&
 		    soak.payload_mode == SOAK_PAYLOAD_PCM) {
-			/* The encoder's chunk for our next boundary, once
-			 * it is done; until then stage nothing.
+			/* The encoder stages its chunks itself, the moment
+			 * the last frame is encoded; here we only pick up
+			 * what it staged, for the TX record.
 			 */
-			have = payload_take_pcm(soak.tx_payload, &enc_us);
+			have = payload_take_pcm(soak.tx_payload, &stage_us,
+						&lead_us, &enc_us, &done_at);
+			staged = true;
 		} else {
 			payload_fill(soak.tx_payload, soak.payload_mode,
 				     my_slot, t->tx_done - soak.snap.tx_done,
 				     soak.seq);
+			stage_us = IS_ENABLED(CONFIG_SOAK_RTT) ?
+					   tdma_now_us() : 0;
 		}
-		uint32_t stage_us = IS_ENABLED(CONFIG_SOAK_RTT) ?
-					    tdma_now_us() : 0;
 
-		if (have && tdma_tx_submit(soak.tx_payload) == 0) {
+		if (have && (staged || tdma_tx_submit(soak.tx_payload) == 0)) {
 			if (IS_ENABLED(CONFIG_SOAK_RTT)) {
 				soak.tx_stage_us = stage_us;
 				soak.tx_lead_us = lead_us;
 				soak.tx_enc_us = enc_us;
 			}
 			soak.tx_armed = true;
-			soak.tx_done_at_arm = t->tx_done;
+			/* PCM: tx_done when the encoder staged it. Otherwise
+			 * now, as always (read after the submit).
+			 */
+			soak.tx_done_at_arm = staged ? done_at : t->tx_done;
 			soak.seq++;
 		}
 	}
