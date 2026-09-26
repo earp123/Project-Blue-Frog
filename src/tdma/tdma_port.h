@@ -30,6 +30,7 @@
 #define TDMA_RADIO_STACK_SIZE	2048
 
 extern struct k_sem tdma_slot_tick_sem;
+extern struct k_sem tdma_pre_tx_sem;
 extern struct k_sem tdma_dio1_sem;
 extern struct k_sem tdma_spi_bus_sem;
 
@@ -46,6 +47,16 @@ void tdma_port_schedule_stop(void);
 uint32_t tdma_port_now(void);		 /* current slot-clock time, us */
 uint32_t tdma_port_dio1_timestamp(void); /* slot-clock time of last DIO1 edge */
 uint32_t tdma_port_last_boundary(void);	 /* slot-clock time of last slot tick */
+uint32_t tdma_port_next_boundary(void);	 /* ... of the next one, corrections
+					  * posted so far included */
+
+/*
+ * One-shot pre-TX alarm (a second compare channel on the slot timer) at
+ * absolute slot-clock time at_us. Its callback only gives tdma_pre_tx_sem;
+ * the radio thread runs tdma_core_on_pre_tx() for it, after any pending
+ * DIO1 and before the next slot tick. Radio thread only.
+ */
+int tdma_port_arm_pre_tx(uint32_t at_us);
 uint32_t tdma_port_dio1_edges(void);	 /* diagnostic: raw DIO1 edge count */
 
 /*
@@ -77,6 +88,7 @@ int tdma_port_manual_submit(struct tdma_manual_req *req);
 
 /* Engine handlers, implemented by tdma_core, called from the radio thread. */
 void tdma_core_on_slot_tick(void);
+void tdma_core_on_pre_tx(void);
 void tdma_core_on_dio1(void);
 void tdma_core_on_manual(struct tdma_manual_req *req);
 

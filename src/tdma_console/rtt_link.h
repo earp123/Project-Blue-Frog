@@ -18,7 +18,8 @@
  * Commands, one "\n"-terminated line each, one reply line each:
  *
  *   status                  ok status role= slot= sync= soak= mode=
- *                           clip=<chunks>/<crc32> rtt_drop=
+ *                           clip=<chunks>/<crc32> lead= rtt_drop=
+ *                           pretx=<pickups>/<staged>/<min>/<last margin us>
  *   mode ramp|tone|clip     payload source for the next soak start
  *   clip <nbytes> <crc32>   followed by exactly nbytes raw bytes: load the
  *                           clip buffer (clip_src.h); refused while a soak

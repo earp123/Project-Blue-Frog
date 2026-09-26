@@ -57,6 +57,9 @@ static struct {
 	/* Manual M0 ops: one frame counter for hand-fired packets. */
 	uint16_t manual_ctr;
 
+	/* This frame's TX boundary, for the pre-TX pickup's margin. */
+	uint32_t pre_tx_boundary;
+
 	/* Slot-clock time of slot 0 of the current frame, republished by the
 	 * radio thread at every slot tick. One word, so any thread reads a
 	 * consistent value (tdma_next_tx_us()).
@@ -154,8 +157,19 @@ void tdma_core_sync_feed(uint32_t rx_timestamp_us, uint16_t frame_ctr)
 	eng.sync_prev_ctr = frame_ctr;
 	eng.sync_have_prev = true;
 
-	local_slot0 = tdma_port_last_boundary() -
-		      (uint32_t)eng.cur_slot * eng.cfg.slot_duration_us;
+	/*
+	 * This unit's slot 0, from the anchor the radio thread writes together
+	 * with cur_slot at each slot tick. Not tdma_port_last_boundary() -
+	 * cur_slot * slot: the alarm ISR moves last_boundary the instant a
+	 * boundary passes, but cur_slot only advances when the radio thread
+	 * gets to that tick, after this beacon's ~1.4 ms drain. A boundary
+	 * inside the drain paired the new boundary with the old slot index, a
+	 * 20 ms error. On the first beacon that snapped the unit a slot out;
+	 * the loop then walked it into the window, where the error flipped
+	 * sign every frame and the clamped steps cancelled, stuck in SYNCING
+	 * for good. 8 of 100 acquisitions on the bench, 2026-09-26.
+	 */
+	local_slot0 = (uint32_t)atomic_get(&eng.frame_start_us);
 	master_slot0 = rx_timestamp_us - TDMA_TOA_US - TDMA_TX_START_LATENCY_US;
 
 	/* Wrap-safe difference, reduced to [-frame/2, frame/2). */
@@ -246,6 +260,17 @@ void tdma_core_on_slot_tick(void)
 				  (uint32_t)eng.cur_slot *
 				  eng.cfg.slot_duration_us));
 
+	/* Slot before ours: arm the pre-TX pickup against the boundary the
+	 * port has already scheduled, sync corrections included (one posted
+	 * from now on moves the boundary after it, not this one).
+	 */
+	if (eng.state == TDMA_SYNC_RUNNING &&
+	    (uint8_t)((eng.cur_slot + 1) % TDMA_SLOT_COUNT) == eng.cfg.slot_id) {
+		eng.pre_tx_boundary = tdma_port_next_boundary();
+		(void)tdma_port_arm_pre_tx(eng.pre_tx_boundary -
+					   TDMA_PRE_TX_PICKUP_US);
+	}
+
 	/* Secondaries transmit only once RUNNING; while SYNCING every slot
 	 * listens so an unaligned schedule cannot collide with anyone. A TX
 	 * slot before the first header write also listens instead.
@@ -279,6 +304,30 @@ void tdma_core_on_slot_tick(void)
 
 			rx_slot_slack_work();
 		}
+	}
+}
+
+void tdma_core_on_pre_tx(void)
+{
+	uint8_t payload[TDMA_PAYLOAD_LEN];
+	int32_t margin;
+
+	if (eng.state != TDMA_SYNC_RUNNING) {
+		return;
+	}
+
+	eng.telem.pre_tx_pickups++;
+	if (tdma_buf_take_staged(payload)) {
+		if (l1_check(tdma_radio_stage_payload(payload)) == 0) {
+			eng.payload_fresh = true;
+			eng.telem.pre_tx_staged++;
+		}
+	}
+
+	margin = (int32_t)(eng.pre_tx_boundary - tdma_port_now());
+	eng.telem.pre_tx_margin_last_us = margin;
+	if (margin < eng.telem.pre_tx_margin_min_us) {
+		eng.telem.pre_tx_margin_min_us = margin;
 	}
 }
 
@@ -488,6 +537,7 @@ int tdma_start(void)
 	eng.payload_fresh = false;
 	eng.hdr_written = false;
 	eng.beacon_seen = false;
+	eng.telem.pre_tx_margin_min_us = INT32_MAX;	/* per run */
 	eng.lock_streak = 0;
 	eng.sync_have_prev = false;
 

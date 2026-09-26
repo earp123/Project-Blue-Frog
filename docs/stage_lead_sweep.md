@@ -1,6 +1,7 @@
 # Staging lead sweep: when must a payload reach the engine?
 
-**Status:** done, 2026-09-25. **Why:** the Codec 2 transport test measured
+**Status:** done, 2026-09-25; pre-TX pickup follow-up 2026-09-26 (end of
+this page). **Why:** the Codec 2 transport test measured
 78.7 ms from staging a payload to the peer's DIO1, almost a whole frame,
 because the soak runner stages the next chunk right after its own TxDone.
 Before the audio path is designed around a figure, find where the engine's
@@ -114,3 +115,56 @@ to ~10 ms. Two ways to do it:
 
 Either way the sweep, the TX-record lead and `lead_sweep.py` measure the
 result unchanged.
+
+## Follow-up: pre-TX pickup (2026-09-26)
+
+Option 2 is built. The engine arms a second one-shot compare on the slot
+timer (`tdma_port_arm_pre_tx()`, TIMER2 channel 1) at the slot tick before
+its own. The target is the port's already-scheduled next boundary minus
+`TDMA_PRE_TX_PICKUP_US` (2.5 ms), so sync corrections are already in it. The
+alarm ISR only gives a semaphore. The radio thread runs
+`tdma_core_on_pre_tx()`, which writes the newest staged payload into the
+chip, after any pending DIO1 and before a pending slot tick. The TX-slot
+entry path is unchanged, so `TDMA_TX_START_LATENCY_US` still holds; the
+unchanged sync phase error (within 42 us) confirms it. The earlier
+pickups stay in place, and the pre-TX one is always the last.
+
+Same sweep method, settings 6, 4, 3.5, 3, 2.75, 2.5 and 2.25 ms, about
+31,000 chunks, captures in `soaks/rtt/pretx_lead/`:
+
+| Unit | Missed at leads | On time at every lead above |
+|---|---|---|
+| MASTER (0) | 0.18 to 2.45 ms | **2.45 ms** |
+| SEC 1 (1) | 0.16 to 2.46 ms | **2.46 ms** |
+| SEC 2 (2) | 0.19 to 2.46 ms | **2.46 ms** |
+
+- **One deadline for every unit,** whatever its preceding slot holds. The
+  heard / not-heard split no longer matters.
+- **Stage-to-DIO1 is 10.7-11.4 ms** just above the deadline, against 29 ms
+  with the old guaranteed pickup and 78.7 ms staging at once.
+- **The pickup finishes at least 1.69 ms before the boundary** when it
+  writes a payload (2.45 ms when it has nothing to write), so it never
+  delays the TX entry. The write and wake take ~0.8 ms, mostly the 40 B
+  `WriteBuffer` at 500 kHz. That leaves room to cut
+  `TDMA_PRE_TX_PICKUP_US` toward ~1.2 ms (or raise the SPI clock) if the
+  audio path wants the last millisecond; the `pretx=` margin in
+  `rtt_link.py status` is the check.
+- **Design target:** stage by 2.45 ms plus the producer's own jitter, e.g.
+  3.5 ms, for ~11.5 ms stage-to-DIO1.
+
+### Sync fix found on the way
+
+The first run of this sweep showed secondaries stuck in SYNCING for whole
+runs. The cause was an existing race in `tdma_core_sync_feed()`, not the
+pre-TX change. It paired `tdma_port_last_boundary()`, which the alarm ISR
+updates at once, with `cur_slot`, which the radio thread only advances after
+the beacon's ~1.4 ms drain. A boundary inside that window gave a 20 ms error.
+On a first beacon that snapped the unit a slot out, and the proportional
+loop then parked it where the error flipped sign every frame.
+
+A start/stop stress (secondaries checked 3 s after each start) reproduced
+it in 8 of 100 acquisitions. `sync_feed` now takes this unit's slot 0 from
+the frame anchor the radio thread writes together with `cur_slot`. After the
+fix, 1 of 400 acquisitions had not locked at 3 s: in the first 100-start
+batch, which did not re-check. The next 100 starts, which re-checked at
+8 s, all locked within 3 s.

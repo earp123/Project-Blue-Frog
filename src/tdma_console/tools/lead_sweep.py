@@ -81,6 +81,13 @@ def run(args):
         subprocess.run([sys.executable, tool, "--all", "capture", "-o",
                         out + os.sep, "--soak", str(args.minutes)],
                        check=True)
+        # The engine's per-run pre-TX margin (status "pretx=") is only
+        # readable until the next soak starts: keep it with the captures.
+        with open(os.path.join(out, "status.txt"), "w") as f:
+            for sn in serials:
+                r = subprocess.run([sys.executable, tool, "--sn", str(sn),
+                                    "status"], capture_output=True, text=True)
+                f.write("%d %s" % (sn, r.stdout))
 
 
 def stale_retx(recs):
@@ -184,6 +191,10 @@ def analyse(args):
         setting = os.path.basename(d)
         for s, rows in analyse_step(paths):
             pooled[s.slot] += rows
+            if not rows:
+                print("%-8s %-5d no chunks with a stage lead (never "
+                      "RUNNING?)" % (setting, s.slot))
+                continue
             leads = np.array([r[0] for r in rows])
             on = [r for r in rows if r[1]]
             late = [r for r in rows if r[1] is False]
@@ -195,6 +206,16 @@ def analyse(args):
                 setting, s.slot, len(rows), fmt(leads.min()),
                 fmt(np.median(leads)), fmt(leads.max()), len(on), len(late),
                 len(lost), s.stale, ms(np.median(lat))))
+        st = os.path.join(d, "status.txt")
+        if os.path.exists(st):
+            for line in open(st):
+                f = dict(t.split("=", 1) for t in line.split() if "=" in t)
+                if "pretx" in f:
+                    n, staged, mn, last = f["pretx"].split("/")
+                    print("%-8s %-5s pre-TX pickups %s, %s with a payload, "
+                          "min margin to the boundary %.2f ms" % (
+                              setting, f.get("slot", "?"), n, staged,
+                              ms(int(mn))))
 
     print()
     print("Per unit, pooled over every set: where chunks start missing their "

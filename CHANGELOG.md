@@ -34,6 +34,41 @@ Four other variants were retired on 2026-09-25: LoRa send, the telemetry
 console, the TDMA UART-shell test and the UART soak harness (see "Streamlined
 to two unit types"). Their sections below are kept as history.
 
+### Pre-TX payload pickup + sync acquisition fix (2026-09-26)
+
+The engine now takes the staged payload on its own alarm 2.5 ms before each
+unit's TX boundary. That makes the staging deadline the same for every unit
+and cuts stage-to-DIO1 from 29 ms to ~11 ms. Details and data:
+[`docs/stage_lead_sweep.md`](docs/stage_lead_sweep.md) ("Follow-up").
+
+- **Pre-TX pickup** (`TDMA_PRE_TX_PICKUP_US` = 2500).
+  - The port gained a second one-shot compare on TIMER2 (channel 1),
+    `tdma_port_arm_pre_tx()`, and `tdma_port_next_boundary()`.
+  - The engine arms the alarm at the slot tick before its own, against the
+    already-corrected next boundary. `tdma_core_on_pre_tx()` then writes the
+    newest staged payload on the radio thread, after any DIO1 and before a
+    pending tick.
+  - The ISR only gives a semaphore, the TX-slot entry is unchanged, and
+    `TDMA_TX_START_LATENCY_US` still holds.
+  - New telemetry: `pre_tx_pickups`, `pre_tx_staged` and the per-run
+    `pre_tx_margin_min_us`, shown as `pretx=` in `rtt_link.py status`.
+- **Bench, three units, ~31,000 chunks:**
+  - On time at every lead above 2.45 ms on all three units, heard preceding
+    slot or not.
+  - Stage-to-DIO1 is 10.7-11.4 ms.
+  - With a payload to write, the pickup finishes at least 1.69 ms before
+    the boundary.
+  - Sync stayed within 42 us with PER ~0.
+- **Sync acquisition fix.** `tdma_core_sync_feed()` paired the boundary the
+  alarm ISR had just moved with a `cur_slot` the radio thread had not yet
+  advanced. That gave a 20 ms error when a slot boundary fell inside a
+  beacon's ~1.4 ms drain. On a first beacon it could park a secondary in
+  SYNCING for good: 8 of 100 starts in a stress test. `sync_feed` now uses
+  the frame anchor written together with `cur_slot`. Afterwards, 1 of 400
+  starts had not locked at 3 s (not re-checked); the 100 starts that were
+  re-checked all locked within 3 s. This was very likely the "stuck in
+  SYNCING" failure mode Known limitations warned about.
+
 ### Staging lead sweep: the engine's real payload deadline (2026-09-25)
 
 Where a payload must reach the engine to make its frame, and what that does
@@ -1300,10 +1335,10 @@ native SX126x LoRa driver this project uses. See the README's
   `rtt_link.py capture` before the soak; the 8 KB up buffer covers only a
   ~2.5 s late start.
 - **By default the runner stages right after TxDone (78.7 ms
-  stage-to-DIO1).** `lead` fixes that for tests. The guaranteed engine
-  deadline is 19.6 ms before the boundary (staging lead sweep, above), so
-  live audio should stage by then plus margin until the engine takes the
-  payload closer to TX.
+  stage-to-DIO1).** `lead` fixes that for tests. With the pre-TX pickup,
+  the engine's deadline is 2.45 ms before the boundary for every unit, so
+  live audio should stage by then plus the producer's jitter (e.g. 3.5 ms,
+  ~11.5 ms stage-to-DIO1).
 - **Latency needs three units.**
   `reconstruct_c2.py --tx` measures the offset between two units' slot
   clocks by common view of a third unit, so a two-unit run reports

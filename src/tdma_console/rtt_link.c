@@ -346,12 +346,17 @@ static void do_status(const struct rtt_link_ops *ops)
 		snprintf(unit, sizeof(unit), "role=- slot=-");
 	}
 
+	const struct tdma_telemetry *t = tdma_get_telemetry();
+
+	/* pretx = pickups/with a payload/min and last margin (us) before the
+	 * TX boundary; the minimum is this run's (tdma.h).
+	 */
 	reply("ok status %s sync=%s soak=%s mode=%s clip=%u/%08x lead=%u "
-	      "rtt_drop=%u", unit,
-	      sync_name(tdma_get_telemetry()->sync_state),
+	      "rtt_drop=%u pretx=%u/%u/%d/%d", unit, sync_name(t->sync_state),
 	      u.soak_running ? "run" : "idle", mode_name[rtt_link_mode()],
 	      clip_src_chunks(), clip_src_crc(), rtt_link_lead_us(),
-	      ls.rtt_dropped);
+	      ls.rtt_dropped, t->pre_tx_pickups, t->pre_tx_staged,
+	      (int)t->pre_tx_margin_min_us, (int)t->pre_tx_margin_last_us);
 }
 
 static void do_soak(const struct rtt_link_ops *ops)

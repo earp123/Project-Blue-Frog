@@ -27,10 +27,12 @@ LOG_MODULE_REGISTER(tdma_port, CONFIG_LOG_DEFAULT_LEVEL);
 BUILD_ASSERT(DT_NODE_HAS_STATUS_OKAY(SLOT_TIMER_NODE),
 	     "timer2 must be enabled in the overlay for the TDMA slot clock");
 #define TDMA_ALARM_CHAN 0
+#define TDMA_PRE_TX_CHAN 1	/* TIMER2 has 6 CCs: 4 alarm channels */
 
 static const struct device *const slot_timer = DEVICE_DT_GET(SLOT_TIMER_NODE);
 
 K_SEM_DEFINE(tdma_slot_tick_sem, 0, K_SEM_MAX_LIMIT);
+K_SEM_DEFINE(tdma_pre_tx_sem, 0, K_SEM_MAX_LIMIT);
 K_SEM_DEFINE(tdma_dio1_sem, 0, K_SEM_MAX_LIMIT);
 K_SEM_DEFINE(tdma_spi_bus_sem, 0, 1);
 
@@ -38,6 +40,7 @@ K_MSGQ_DEFINE(tdma_rx_msgq, sizeof(struct tdma_rx_msg), TDMA_RX_MSGQ_DEPTH, 4);
 
 static atomic_t dio1_timestamp;
 static atomic_t last_boundary;
+static atomic_t next_boundary;	/* mirror of next_target for other threads */
 static atomic_t phase_adj_us;
 static atomic_t dio1_edges;	/* diagnostic: raw DIO1 edge count */
 
@@ -67,6 +70,11 @@ uint32_t tdma_port_last_boundary(void)
 	return (uint32_t)atomic_get(&last_boundary);
 }
 
+uint32_t tdma_port_next_boundary(void)
+{
+	return (uint32_t)atomic_get(&next_boundary);
+}
+
 void tdma_port_add_phase_adj(int32_t adj_us)
 {
 	atomic_add(&phase_adj_us, adj_us);
@@ -90,6 +98,7 @@ uint32_t tdma_port_dio1_edges(void)
 }
 
 static struct counter_alarm_cfg alarm_cfg;
+static struct counter_alarm_cfg pre_tx_cfg;
 
 /*
  * Slot boundary alarm. Re-arms itself from an accumulating absolute tick
@@ -102,11 +111,26 @@ static void slot_alarm_cb(const struct device *dev, uint8_t chan,
 {
 	atomic_set(&last_boundary, (atomic_val_t)next_target);
 	next_target += slot_ticks + (uint32_t)atomic_clear(&phase_adj_us);
+	atomic_set(&next_boundary, (atomic_val_t)next_target);
 
 	alarm_cfg.ticks = next_target;
 	counter_set_channel_alarm(dev, TDMA_ALARM_CHAN, &alarm_cfg);
 
 	k_sem_give(&tdma_slot_tick_sem);
+}
+
+/* Pre-TX pickup: flag only, like the slot alarm. */
+static void pre_tx_alarm_cb(const struct device *dev, uint8_t chan,
+			    uint32_t ticks, void *user_data)
+{
+	k_sem_give(&tdma_pre_tx_sem);
+}
+
+int tdma_port_arm_pre_tx(uint32_t at_us)
+{
+	pre_tx_cfg.ticks = at_us;
+	return counter_set_channel_alarm(slot_timer, TDMA_PRE_TX_CHAN,
+					 &pre_tx_cfg);
 }
 
 /*
@@ -177,6 +201,19 @@ int tdma_port_init(void)
 	alarm_cfg.callback = slot_alarm_cb;
 	alarm_cfg.user_data = NULL;
 
+	/* Late means the pickup point has passed: fire at once, and the
+	 * engine's margin telemetry shows it.
+	 */
+	pre_tx_cfg.flags = COUNTER_ALARM_CFG_ABSOLUTE |
+			   COUNTER_ALARM_CFG_EXPIRE_WHEN_LATE;
+	pre_tx_cfg.callback = pre_tx_alarm_cb;
+	pre_tx_cfg.user_data = NULL;
+
+	if (counter_get_num_of_channels(slot_timer) <= TDMA_PRE_TX_CHAN) {
+		LOG_ERR("slot timer has no second alarm channel");
+		return -ENOTSUP;
+	}
+
 	return counter_start(slot_timer);
 }
 
@@ -199,9 +236,11 @@ int tdma_port_schedule_start(void)
 	slot_ticks = TDMA_SLOT_DURATION_US;
 
 	k_sem_reset(&tdma_slot_tick_sem);
+	k_sem_reset(&tdma_pre_tx_sem);
 	atomic_set(&phase_adj_us, 0);
 
 	next_target = tdma_port_now() + slot_ticks;
+	atomic_set(&next_boundary, (atomic_val_t)next_target);
 	alarm_cfg.ticks = next_target;
 
 	return counter_set_channel_alarm(slot_timer, TDMA_ALARM_CHAN, &alarm_cfg);
@@ -210,6 +249,7 @@ int tdma_port_schedule_start(void)
 void tdma_port_schedule_stop(void)
 {
 	counter_cancel_channel_alarm(slot_timer, TDMA_ALARM_CHAN);
+	counter_cancel_channel_alarm(slot_timer, TDMA_PRE_TX_CHAN);
 }
 
 int tdma_port_manual_submit(struct tdma_manual_req *req)
@@ -241,13 +281,16 @@ static void radio_thread_fn(void *p1, void *p2, void *p3)
 	k_sem_take(&tdma_spi_bus_sem, K_FOREVER);
 	LOG_INF("radio thread owns the SPI bus");
 
-	struct k_poll_event events[3] = {
+	struct k_poll_event events[4] = {
 		K_POLL_EVENT_STATIC_INITIALIZER(K_POLL_TYPE_SEM_AVAILABLE,
 						K_POLL_MODE_NOTIFY_ONLY,
 						&tdma_dio1_sem, 0),
 		K_POLL_EVENT_STATIC_INITIALIZER(K_POLL_TYPE_SEM_AVAILABLE,
 						K_POLL_MODE_NOTIFY_ONLY,
 						&tdma_slot_tick_sem, 0),
+		K_POLL_EVENT_STATIC_INITIALIZER(K_POLL_TYPE_SEM_AVAILABLE,
+						K_POLL_MODE_NOTIFY_ONLY,
+						&tdma_pre_tx_sem, 0),
 		K_POLL_EVENT_STATIC_INITIALIZER(K_POLL_TYPE_MSGQ_DATA_AVAILABLE,
 						K_POLL_MODE_NOTIFY_ONLY,
 						&manual_msgq, 0),
@@ -261,6 +304,13 @@ static void radio_thread_fn(void *p1, void *p2, void *p3)
 		 */
 		if (k_sem_take(&tdma_dio1_sem, K_NO_WAIT) == 0) {
 			tdma_core_on_dio1();
+		}
+
+		/* The pre-TX pickup belongs before the boundary it precedes,
+		 * so it runs ahead of a slot tick that is also pending.
+		 */
+		if (k_sem_take(&tdma_pre_tx_sem, K_NO_WAIT) == 0) {
+			tdma_core_on_pre_tx();
 		}
 
 		if (k_sem_take(&tdma_slot_tick_sem, K_NO_WAIT) == 0) {

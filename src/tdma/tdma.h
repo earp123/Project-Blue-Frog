@@ -93,6 +93,18 @@
 #define TDMA_TX_START_LATENCY_US 532
 
 /*
+ * Pre-TX pickup: how long before its own TX boundary a unit takes the
+ * newest staged payload into the chip (tdma_core_on_pre_tx(), on a second
+ * slot-timer alarm). A payload submitted before this point makes the frame.
+ * It must cover the alarm-to-radio-thread wake plus one 40 B WriteBuffer
+ * (~0.7 ms at the 500 kHz bus) with room to spare, so the TX slot entry
+ * is never delayed; telemetry.pre_tx_margin_min_us is the check. Before
+ * this pickup existed the last guaranteed one was the preceding slot's
+ * RX-slot entry, a full slot ahead (docs/stage_lead_sweep.md).
+ */
+#define TDMA_PRE_TX_PICKUP_US	2500
+
+/*
  * There is deliberately no RX guard lead. An earlier revision biased the
  * secondary's boundary 1.5 ms ahead of the master's TX so a per-slot SetRx
  * could complete before the preamble arrived. That bias applied to the whole
@@ -198,6 +210,18 @@ struct tdma_telemetry {
 	 */
 	uint32_t dt_by_slot[TDMA_SLOT_COUNT];
 	uint32_t tx_evt_dt_us;
+
+	/*
+	 * Pre-TX pickup (TDMA_PRE_TX_PICKUP_US). margin = TX boundary minus
+	 * the time the pickup finished, the room left before the TX slot
+	 * entry; the minimum is per run (reset by tdma_start(), INT32_MAX
+	 * until the first pickup), the counters are not. A margin <= 0 means the
+	 * pickup ran late and the entry may have waited for it.
+	 */
+	uint32_t pre_tx_pickups;
+	uint32_t pre_tx_staged;		/* pickups that found a payload */
+	int32_t pre_tx_margin_min_us;
+	int32_t pre_tx_margin_last_us;
 };
 
 int tdma_init(const struct tdma_config *cfg);
@@ -221,11 +245,11 @@ uint32_t tdma_now_us(void);
  * includes past sync corrections (a secondary's next correction may still
  * move it by up to TDMA_SYNC_STEP_CLAMP_US).
  *
- * For pacing payloads: the engine takes a staged payload at every RX-slot
- * entry and after every RxDone, and sends the newest one taken before the
- * boundary. The last pickup that always happens is the entry of the slot
- * before ours, one slot duration ahead of this time; the RxDone pickup in
- * that slot happens only when a packet from it is heard.
+ * For pacing payloads: the engine takes the newest staged payload
+ * TDMA_PRE_TX_PICKUP_US before this time, every frame, whatever the
+ * neighbouring slots hold. A payload submitted by then goes out at this
+ * boundary. (It also takes one at every RX-slot entry and after every
+ * RxDone, but the pre-TX pickup is always the last.)
  */
 uint32_t tdma_next_tx_us(void);
 
