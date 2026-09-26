@@ -16,6 +16,7 @@
 
 #include "rtt_link.h"
 #include "soak_log.h"
+#include "payload_src.h"
 
 #define CH_SOAK		1	/* up: record stream */
 #define CH_CTL		1	/* down: commands */
@@ -39,6 +40,32 @@ static uint8_t ctl_buf[1024];
 static char line[LINE_MAX];
 static size_t line_len;
 static bool line_overflow;
+
+/*
+ * Clip upload in progress (writer thread). The bytes after a "clip" line are
+ * consumed whatever happens, so a refused upload is never misread as
+ * commands; bin_err says why it will be refused. An upload that stalls for
+ * CLIP_STALL_MS is abandoned.
+ */
+#define CLIP_STALL_MS	2000
+static uint32_t bin_left;
+static uint32_t bin_len;
+static uint32_t bin_crc;
+static const char *bin_err;	/* NULL = loading into clip_src */
+static int64_t bin_last_ms;
+
+static atomic_t next_mode = ATOMIC_INIT(PAYLOAD_DEFAULT_MODE);
+
+static const char *const mode_name[] = {
+	[SOAK_PAYLOAD_RAMP] = "ramp",
+	[SOAK_PAYLOAD_TONE] = "tone",
+	[SOAK_PAYLOAD_CLIP] = "clip",
+};
+
+enum soak_payload_mode rtt_link_mode(void)
+{
+	return (enum soak_payload_mode)atomic_get(&next_mode);
+}
 
 /*
  * One-deep slot for commands the runner must carry out. The writer thread
@@ -141,6 +168,50 @@ static int tokenize(char *s, char *tok[], int max)
 	return n;
 }
 
+static void clip_finish(void)
+{
+	if (bin_err == NULL && clip_src_load_end() != 0) {
+		bin_err = "crc";
+	}
+	if (bin_err != NULL) {
+		reply("err clip %s", bin_err);
+	} else {
+		reply("ok clip %u %08x chunks=%u", bin_len, bin_crc,
+		      clip_src_chunks());
+	}
+}
+
+/* "clip <nbytes> <crc32hex>": the bytes follow on the same channel. */
+static void clip_begin(const char *len_s, const char *crc_s)
+{
+	struct soak_log_status ls;
+	char *end;
+	unsigned long crc;
+
+	crc = strtoul(crc_s, &end, 16);
+	if (!parse_u32(len_s, &bin_len) || *crc_s == '\0' || *end != '\0' ||
+	    crc > UINT32_MAX) {
+		reply("err cmd");
+		return;
+	}
+	bin_crc = (uint32_t)crc;
+	bin_err = NULL;
+
+	/* A running soak's TX path reads the buffer unlocked. */
+	soak_log_get_status(&ls);
+	if (ls.active) {
+		bin_err = "busy";
+	} else if (clip_src_load_begin(bin_len, bin_crc) != 0) {
+		bin_err = "size";
+	}
+
+	bin_left = bin_len;
+	bin_last_ms = k_uptime_get();
+	if (bin_left == 0) {
+		clip_finish();
+	}
+}
+
 static void handle_line(char *s)
 {
 	char *tok[4];
@@ -151,7 +222,18 @@ static void handle_line(char *s)
 		return;		/* blank line: ignore */
 	}
 
-	if (strcmp(tok[0], "status") == 0 && n == 1) {
+	if (strcmp(tok[0], "mode") == 0 && n == 2) {
+		for (int m = 0; m < (int)ARRAY_SIZE(mode_name); m++) {
+			if (strcmp(tok[1], mode_name[m]) == 0) {
+				atomic_set(&next_mode, m);
+				reply("ok mode %s", mode_name[m]);
+				return;
+			}
+		}
+		reply("err cmd");
+	} else if (strcmp(tok[0], "clip") == 0 && n == 3) {
+		clip_begin(tok[1], tok[2]);
+	} else if (strcmp(tok[0], "status") == 0 && n == 1) {
 		park(RUN_STATUS, 0, false);
 	} else if (strcmp(tok[0], "soak") == 0 && (n == 2 || n == 3) &&
 		   parse_u32(tok[1], &minutes) && minutes <= SOAK_MAX_MIN &&
@@ -171,6 +253,25 @@ void rtt_link_poll(void)
 
 	while ((got = SEGGER_RTT_Read(CH_CTL, in, sizeof(in))) > 0) {
 		for (unsigned int i = 0; i < got; i++) {
+			if (bin_left > 0) {
+				/* Clip bytes, possibly right behind their
+				 * line in the same read.
+				 */
+				uint32_t take = MIN(got - i, bin_left);
+
+				if (bin_err == NULL) {
+					clip_src_load_bytes(
+						(const uint8_t *)&in[i], take);
+				}
+				bin_left -= take;
+				bin_last_ms = k_uptime_get();
+				i += take - 1;
+				if (bin_left == 0) {
+					clip_finish();
+				}
+				continue;
+			}
+
 			char c = in[i];
 
 			if (c == '\r') {
@@ -194,6 +295,12 @@ void rtt_link_poll(void)
 			line_len = 0;
 			line_overflow = false;
 		}
+	}
+
+	if (bin_left > 0 && k_uptime_get() - bin_last_ms > CLIP_STALL_MS) {
+		/* The host gave up mid-upload; the clip stays invalid. */
+		bin_left = 0;
+		reply("err clip timeout");
 	}
 }
 
@@ -225,21 +332,26 @@ static void do_status(const struct rtt_link_ops *ops)
 		snprintf(unit, sizeof(unit), "role=- slot=-");
 	}
 
-	/* The payload source is still the build's; the mode command and the
-	 * clip buffer are the next step of the task.
-	 */
-	reply("ok status %s sync=%s soak=%s mode=%s clip=0/00000000 "
+	reply("ok status %s sync=%s soak=%s mode=%s clip=%u/%08x "
 	      "rtt_drop=%u", unit,
 	      sync_name(tdma_get_telemetry()->sync_state),
-	      u.soak_running ? "run" : "idle",
-	      IS_ENABLED(CONFIG_SOAK_PAYLOAD_TONE) ? "tone" : "ramp",
-	      ls.rtt_dropped);
+	      u.soak_running ? "run" : "idle", mode_name[rtt_link_mode()],
+	      clip_src_chunks(), clip_src_crc(), ls.rtt_dropped);
 }
 
 static void do_soak(const struct rtt_link_ops *ops)
 {
-	int rc = ops->soak_start(slot.minutes, slot.sd);
+	struct rtt_link_unit u;
+	int rc;
 
+	/* The runner refuses this too; checked here for the specific reply. */
+	ops->get_unit(&u);
+	if (u.picked && !u.soak_running && !payload_ready(rtt_link_mode())) {
+		reply("err soak noclip");
+		return;
+	}
+
+	rc = ops->soak_start(slot.minutes, slot.sd);
 	if (rc == 0) {
 		reply("ok soak");
 	} else if (rc == -EBUSY) {

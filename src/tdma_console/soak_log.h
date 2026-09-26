@@ -135,7 +135,8 @@ BUILD_ASSERT(sizeof(struct soak_stats) <= TDMA_PAYLOAD_LEN,
 /* What this unit put in its own TX payloads (META payload_mode). */
 enum soak_payload_mode {
 	SOAK_PAYLOAD_RAMP = 0,	/* payload[i] = base + i; all pre-tone logs */
-	SOAK_PAYLOAD_TONE = 1,	/* tone_src chunks (CONFIG_SOAK_PAYLOAD_TONE) */
+	SOAK_PAYLOAD_TONE = 1,	/* tone_src chunks */
+	SOAK_PAYLOAD_CLIP = 2,	/* clip_src chunks: test header + Codec 2 */
 };
 
 /*
@@ -143,6 +144,15 @@ enum soak_payload_mode {
  *
  * The last four bytes were spare (zero) in v2 files before the tone payload,
  * which decode as payload_mode RAMP, so adding them needed no version bump.
+ * p8 / p16 were tone_fs_khz / tone_f0_hz until the clip mode; same bytes,
+ * same meaning for TONE, so no bump either:
+ *
+ *   payload_mode   p8              p16
+ *   RAMP           0               0
+ *   TONE           fs kHz (8)      f0 Hz (330)
+ *   CLIP           codec (0=3200)  clip chunk count
+ *
+ * The clip's CRC does not fit here; every clip chunk's header carries it.
  */
 struct soak_meta {
 	uint32_t magic;
@@ -162,8 +172,8 @@ struct soak_meta {
 	uint8_t  preamble_syms;
 	uint32_t uptime_ms;
 	uint8_t  payload_mode;	/* enum soak_payload_mode */
-	uint8_t  tone_fs_khz;	/* TONE: sample rate */
-	uint16_t tone_f0_hz;	/* TONE: slot s plays f0 * (s + 1) */
+	uint8_t  p8;		/* per mode, see above */
+	uint16_t p16;		/* per mode, see above */
 } __packed;
 
 BUILD_ASSERT(sizeof(struct soak_meta) <= TDMA_PAYLOAD_LEN,
@@ -186,6 +196,7 @@ struct soak_log_status {
 
 /*
  * Start a run: queue the META record and, if sd is set, open a session file.
+ * mode is the payload source the runner latched for this run (META).
  * Returns 0 or -EBUSY (the previous run is still closing). Card trouble is
  * reported through soak_log_get_status(), never here — the caller carries on
  * with the soak regardless and simply shows the failure. With sd clear and
@@ -198,7 +209,8 @@ struct soak_log_status {
  * missing drawer is created when the file opens.
  */
 int soak_log_start(enum tdma_role role, uint8_t slot_id, int8_t tx_power_dbm,
-		   uint32_t duration_ms, const char *dir, bool sd);
+		   uint32_t duration_ms, const char *dir, bool sd,
+		   enum soak_payload_mode mode);
 
 /* ---- Card file operations (browser back end) --------------------------- *
  * All card I/O runs on the writer thread — the FatFs LFN working buffer is

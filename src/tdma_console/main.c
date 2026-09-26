@@ -61,7 +61,7 @@
 #include "touch_cal.h"
 #include "tdma.h"
 #include "soak_log.h"
-#include "tone_src.h"
+#include "payload_src.h"
 #ifdef CONFIG_SOAK_RTT
 #include "rtt_link.h"
 #endif
@@ -267,6 +267,11 @@ static struct {
 	 * the cooperative data thread.
 	 */
 	bool expired;
+
+	/* Payload source, latched at soak start (payload_src.h). Last, so no
+	 * other field moves.
+	 */
+	enum soak_payload_mode payload_mode;
 } soak;
 
 static int64_t soak_last_draw_ms;
@@ -795,16 +800,17 @@ static void draw_soak(void)
 /* ---------------------------------------------------------------------------
  * Soak control + stats feed (main loop only)
  * ------------------------------------------------------------------------- */
-static void fill_pattern(uint8_t payload[TDMA_PAYLOAD_LEN], uint8_t seq)
-{
-	for (int i = 0; i < TDMA_PAYLOAD_LEN; i++) {
-		payload[i] = (uint8_t)(seq + i);
-	}
-}
-
 static void soak_start(int64_t duration_ms, bool sd)
 {
+	enum soak_payload_mode mode = payload_next_mode();
 	int rc;
+
+	/* A clip soak needs a clip; refuse before touching the engine. */
+	if (!payload_ready(mode)) {
+		snprintf(home_msg, sizeof(home_msg), "no clip");
+		screen = SCR_HOME;
+		return;
+	}
 
 	if (!engine_inited) {
 		struct tdma_config cfg = {
@@ -827,10 +833,12 @@ static void soak_start(int64_t duration_ms, bool sd)
 
 	/* The data thread reads this struct on its own tick; clear and
 	 * republish it under the lock rather than racing a memset against it.
+	 * The payload source is latched here for the whole run.
 	 */
 	k_mutex_lock(&soak_lock, K_FOREVER);
 	memset(&soak, 0, sizeof(soak));
 	soak.snap = *tdma_get_telemetry();
+	soak.payload_mode = mode;
 	k_mutex_unlock(&soak_lock);
 
 	/* Logging is best-effort: a missing or failed card must never stop a
@@ -838,7 +846,7 @@ static void soak_start(int64_t duration_ms, bool sd)
 	 */
 	(void)soak_log_start(role, my_slot,
 			     (int8_t)tx_power_dbm, (uint32_t)duration_ms,
-			     drawer_name[log_dir_idx], sd);
+			     drawer_name[log_dir_idx], sd, mode);
 
 	rc = tdma_start();
 	if (rc < 0) {
@@ -1023,17 +1031,13 @@ static void soak_data_step(void)
 	}
 
 	if (!soak.tx_armed) {
-		if (IS_ENABLED(CONFIG_SOAK_PAYLOAD_TONE)) {
-			/* The audio for the TX slot this chunk will ride. Keyed
-			 * to tx_done, not to submits: a refused submit is
-			 * retried with the same bytes, and a missed frame's
-			 * audio is dropped rather than delaying the rest.
-			 */
-			tone_src_fill(soak.tx_payload, my_slot,
-				      t->tx_done - soak.snap.tx_done);
-		} else {
-			fill_pattern(soak.tx_payload, soak.seq);
-		}
+		/* Tone and clip chunks are keyed to tx_done, not to
+		 * submits: a refused submit is retried with the same bytes,
+		 * and a missed frame's payload is dropped rather than delaying
+		 * the rest.
+		 */
+		payload_fill(soak.tx_payload, soak.payload_mode, my_slot,
+			     t->tx_done - soak.snap.tx_done, soak.seq);
 		if (tdma_tx_submit(soak.tx_payload) == 0) {
 			soak.tx_armed = true;
 			soak.tx_done_at_arm = t->tx_done;

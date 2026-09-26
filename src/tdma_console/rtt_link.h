@@ -8,19 +8,32 @@
  *
  *   up 1   "soak"  8 KB    the raw 64 B soak_rec stream, identical to the card
  *   up 2   "ctl"   512 B   one text reply per command line
- *   down 1 "ctl"   1 KB    text commands from tools/rtt_link.py
+ *   down 1 "ctl"   1 KB    text commands from tools/rtt_link.py, plus clip
+ *                          bytes after a "clip" line
  *
  * Both up channels are NO_BLOCK_SKIP: a record goes in whole or not at all,
  * so a slow or absent host can never corrupt the stream. It drops, and the
  * drop is counted (soak_log_status.rtt_dropped). Channel 0 is left alone.
  *
+ * Commands, one "\n"-terminated line each, one reply line each:
+ *
+ *   status                  ok status role= slot= sync= soak= mode=
+ *                           clip=<chunks>/<crc32> rtt_drop=
+ *   mode ramp|tone|clip     payload source for the next soak start
+ *   clip <nbytes> <crc32>   followed by exactly nbytes raw bytes: load the
+ *                           clip buffer (clip_src.h); refused while a soak
+ *                           runs, or if the size or CRC is wrong
+ *   soak <minutes> [sd]     start a soak (0 = continuous); sd adds the card
+ *   stop                    stop the running soak
+ *
  * Threads. The soak_log writer thread owns the record stream and polls the
- * command channel on its 10 ms idle tick. A command that touches the runner
- * (status, soak, stop) is parked in a one-deep slot and carried out by the
- * unit's UI loop through rtt_link_service(), because starting and stopping a
- * soak is the UI loop's job: soak_finish() waits on the writer thread, so it
- * can never run there. Replies go out from whichever thread executes the
- * command. Nothing here is reachable from the radio.
+ * command channel on its 10 ms idle tick; mode and clip are handled there.
+ * A command that touches the runner (status, soak, stop) is parked in a
+ * one-deep slot and carried out by the unit's UI loop through
+ * rtt_link_service(), because starting and stopping a soak is the UI loop's
+ * job: soak_finish() waits on the writer thread, so it can never run there.
+ * Replies go out from whichever thread executes the command. Nothing here is
+ * reachable from the radio.
  *
  * SPDX-License-Identifier: Apache-2.0
  */
@@ -32,6 +45,7 @@
 #include <stdint.h>
 
 #include "tdma.h"
+#include "soak_log.h"
 
 /* What the runner reports for "status". */
 struct rtt_link_unit {
@@ -67,5 +81,10 @@ void rtt_link_poll(void);
 
 /* Carry out a parked runner command, if any. The unit's UI loop only. */
 void rtt_link_service(const struct rtt_link_ops *ops);
+
+/* Payload source for the next soak: the "mode" command, else the Kconfig
+ * default. Runners use payload_next_mode() (payload_src.h).
+ */
+enum soak_payload_mode rtt_link_mode(void);
 
 #endif /* RTT_LINK_H_ */

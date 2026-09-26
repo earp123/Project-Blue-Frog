@@ -30,15 +30,19 @@ endif()
 
 # Shared by both units: the L1/L2 TDMA radio layer, the SD card + soak
 # loggers and the tone payload source, none of which depend on the display.
-# tone_src is referenced only under CONFIG_SOAK_PAYLOAD_TONE; without it the
-# linker drops the code, so ramp builds link none of it.
+# tone_src is referenced only when the tone can be sent (CONFIG_SOAK_RTT or
+# CONFIG_SOAK_PAYLOAD_TONE, see payload_src.h); otherwise the linker drops
+# the code, so ramp builds link none of it.
 FILE(GLOB tdma_sources src/tdma/*.c)
 target_sources(app PRIVATE ${tdma_sources}
   src/tdma_console/sd_log.c
   src/tdma_console/soak_log.c
   src/tdma_console/tone_src.c)
-# The RTT bench port (CONFIG_SOAK_RTT), shared the same way.
-target_sources_ifdef(CONFIG_SOAK_RTT app PRIVATE src/tdma_console/rtt_link.c)
+# The RTT bench port (CONFIG_SOAK_RTT), shared the same way, and the Codec 2
+# clip source it uploads into (the clip mode depends on it).
+target_sources_ifdef(CONFIG_SOAK_RTT app PRIVATE
+  src/tdma_console/rtt_link.c
+  src/tdma_console/clip_src.c)
 target_include_directories(app PRIVATE src/tdma src/tdma_console)
 # Driver-internal header, needed once at init to detach the native driver's
 # DIO1 gpio_callback (docs/tdma_layering.md). The installed driver *is* the

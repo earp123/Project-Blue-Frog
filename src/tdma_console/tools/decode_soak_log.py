@@ -13,9 +13,12 @@ Usage:
 Pair two units' logs by matching RX payload content against the peer's TX
 payloads; frame_ctr gives continuity within one unit's own view.
 
-Logs from a CONFIG_SOAK_PAYLOAD_TONE build carry a tone instead of the ramp;
-the ramp check is skipped for them. Turn those into audio with
-reconstruct_tone.py, which imports iter_records() / parse_meta() from here.
+Tone logs (payload mode 1) carry a tone instead of the ramp, and clip logs
+(mode 2) a Codec 2 clip behind a test header; the ramp check is skipped for
+both. Turn tone logs into audio with reconstruct_tone.py and score clip logs
+with reconstruct_c2.py; both import iter_records() / parse_meta() from here.
+RTT captures (rtt_link.py capture) are the same record stream and decode the
+same way.
 """
 
 import argparse
@@ -28,7 +31,10 @@ REC_SIZE = 64
 REC_FMT = "<BBBBIHhb3sII40s"
 META_FMT = "<IHBBIIIIBBHbBBBIBBH"
 MAGIC = 0x4B414F53  # "SOAK"
-PAYLOAD_RAMP, PAYLOAD_TONE = 0, 1	# META payload_mode (zero in pre-tone v2 files)
+# META payload_mode (zero in pre-tone v2 files). p8 / p16 mean, per mode:
+# ramp 0 / 0, tone fs kHz / f0 Hz, clip codec / clip chunk count.
+PAYLOAD_RAMP, PAYLOAD_TONE, PAYLOAD_CLIP = 0, 1, 2
+CODEC_NAME = {0: "3200"}	# Codec 2 mode enum in the clip header
 
 # One on-disk record, unpacked. index is the record's position in the file.
 Rec = namedtuple("Rec", "index type slot_id sync flags t_us frame_ctr rssi snr"
@@ -71,11 +77,11 @@ def iter_records(blob):
 def parse_meta(payload):
     (magic, version, role, slot_id, freq_hz, slot_us, frame_us, toa_us,
      sf, cr, bw_khz, tx_power, slot_count, payload_len, preamble,
-     uptime_ms, payload_mode, tone_fs_khz, tone_f0_hz) = struct.unpack(
+     uptime_ms, payload_mode, p8, p16) = struct.unpack(
          META_FMT, payload[:struct.calcsize(META_FMT)])
     if magic != MAGIC:
         return None
-    return {
+    meta = {
         "version": version,
         "role": "master" if role == 0 else "secondary",
         "slot_id": slot_id,
@@ -90,15 +96,24 @@ def parse_meta(payload):
         "preamble_syms": preamble,
         "uptime_ms": uptime_ms,
         "payload_mode": payload_mode,
-        "tone_fs_khz": tone_fs_khz,
-        "tone_f0_hz": tone_f0_hz,
+        "p8": p8,
+        "p16": p16,
     }
+    if payload_mode == PAYLOAD_TONE:
+        meta["tone_fs_khz"], meta["tone_f0_hz"] = p8, p16
+    elif payload_mode == PAYLOAD_CLIP:
+        meta["clip_codec"], meta["clip_chunks"] = p8, p16
+    return meta
 
 
 def payload_desc(meta):
     if meta["payload_mode"] == PAYLOAD_TONE:
         return "payload=tone fs=%dkHz f0=%dHz" % (meta["tone_fs_khz"],
                                                    meta["tone_f0_hz"])
+    if meta["payload_mode"] == PAYLOAD_CLIP:
+        return "payload=clip codec=%s chunks=%d" % (
+            CODEC_NAME.get(meta["clip_codec"], "?%d" % meta["clip_codec"]),
+            meta["clip_chunks"])
     if meta["payload_mode"] == PAYLOAD_RAMP:
         return "payload=ramp"
     return "payload=unknown(%d)" % meta["payload_mode"]
@@ -260,7 +275,7 @@ def main():
                 bad_bytes_tot, bad_bits_tot, recvd))
         else:
             print("payload:  not a ramp, integrity check skipped"
-                  " (tone: see reconstruct_tone.py)")
+                  " (tone: reconstruct_tone.py, clip: reconstruct_c2.py)")
 
     if last_stats:
         # Engine counters are absolute and are NOT reset by tdma_start(), so a

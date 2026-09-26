@@ -10,7 +10,7 @@
 
 #include "soak_log.h"
 #include "sd_log.h"
-#include "tone_src.h"
+#include "payload_src.h"
 #ifdef CONFIG_SOAK_RTT
 #include "rtt_link.h"
 #endif
@@ -125,7 +125,8 @@ static void fmt_duration(char *out, size_t n, uint32_t ms)
 }
 
 int soak_log_start(enum tdma_role role, uint8_t slot_id, int8_t tx_power_dbm,
-		   uint32_t duration_ms, const char *dir, bool sd)
+		   uint32_t duration_ms, const char *dir, bool sd,
+		   enum soak_payload_mode mode)
 {
 	struct soak_rec r = { 0 };
 	struct soak_meta m = { 0 };
@@ -177,13 +178,17 @@ int soak_log_start(enum tdma_role role, uint8_t slot_id, int8_t tx_power_dbm,
 	m.payload_len = TDMA_PAYLOAD_LEN;
 	m.preamble_syms = TDMA_PREAMBLE_SYMS;
 	m.uptime_ms = (uint32_t)k_uptime_get();
-	/* Left zero (= RAMP) otherwise, so a ramp build writes the same
+	/* Left zero (= RAMP) otherwise, so a ramp run writes the same
 	 * record as before the tone option.
 	 */
-	if (IS_ENABLED(CONFIG_SOAK_PAYLOAD_TONE)) {
+	if (PAYLOAD_TONE_LINKED && mode == SOAK_PAYLOAD_TONE) {
 		m.payload_mode = SOAK_PAYLOAD_TONE;
-		m.tone_fs_khz = TONE_FS_HZ / 1000;
-		m.tone_f0_hz = TONE_F0_HZ;
+		m.p8 = TONE_FS_HZ / 1000;
+		m.p16 = TONE_F0_HZ;
+	} else if (PAYLOAD_CLIP_LINKED && mode == SOAK_PAYLOAD_CLIP) {
+		m.payload_mode = SOAK_PAYLOAD_CLIP;
+		m.p8 = CLIP_CODEC_3200;
+		m.p16 = (uint16_t)clip_src_chunks();
 	}
 
 	r.type = SOAK_REC_META;
