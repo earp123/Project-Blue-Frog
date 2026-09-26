@@ -60,6 +60,31 @@ static inline bool payload_ready(enum soak_payload_mode mode)
 }
 
 /*
+ * Whether to stage the next payload now. lead_us 0 stages at once, which is
+ * what the runner has always done: right after its own TxDone, so a payload
+ * waits most of a frame. Otherwise it waits until lead_us before this
+ * unit's next TX boundary (tdma_next_tx_us()). *lead_out gets the lead
+ * actually achieved, logged in the TX record. Without RTT this is always
+ * true and costs nothing.
+ */
+static inline bool payload_stage_due(uint32_t lead_us, uint32_t *lead_out)
+{
+#ifdef CONFIG_SOAK_RTT
+	uint32_t now = tdma_now_us();
+	uint32_t lead = tdma_next_tx_us() - now;
+
+	if (lead_us != 0 && lead > lead_us) {
+		return false;
+	}
+	*lead_out = lead;
+#else
+	ARG_UNUSED(lead_us);
+	ARG_UNUSED(lead_out);
+#endif
+	return true;
+}
+
+/*
  * Fill one staged payload. n is the unit's TX-slot index in the run (keyed
  * to tx_done, see tone_src.h); seq is the ramp base, which advances once per
  * staged frame as it always has.

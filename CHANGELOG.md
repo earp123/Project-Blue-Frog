@@ -34,6 +34,38 @@ Four other variants were retired on 2026-09-25: LoRa send, the telemetry
 console, the TDMA UART-shell test and the UART soak harness (see "Streamlined
 to two unit types"). Their sections below are kept as history.
 
+### Staging lead sweep: the engine's real payload deadline (2026-09-25)
+
+Where a payload must reach the engine to make its frame, and what that does
+to latency. Write-up: [`docs/stage_lead_sweep.md`](docs/stage_lead_sweep.md).
+
+- **Guaranteed deadline: 19.6 ms before a unit's TX boundary.** It is the
+  RX-slot entry of the slot before ours, less ~0.4 ms of `SetRx`, and holds
+  for every unit whatever its neighbours do. The master (whose preceding
+  slot 3 is empty) shows it as a sharp cliff.
+- **The bench-only deadline: 10.3 ms.** It applies only in frames where the
+  preceding slot's packet is heard (its RxDone at 11.7 ms, plus ~1.4 ms to
+  drain it). Frames where it wasn't heard missed at 15.7–18.7 ms. Don't
+  design to it: in the field every lost preceding packet is a miss.
+- **Stage-to-DIO1 is the lead + ~8.2 ms:** 29.2 ms at a 22 ms lead, against
+  78.7 ms when the runner stages right after TxDone.
+- **Consistently late costs +80 ms and no loss; intermittently late loses
+  chunks and re-sends the previous one.** Jitter across the deadline is the
+  failure to avoid.
+- **Engine:** new public `tdma_next_tx_us()`, the next TX boundary in
+  slot-clock time, from a frame anchor published at every slot tick.
+- **Runner** (RTT builds only; the TX path without RTT is still
+  instruction-identical to `9d9a1a8`): the `lead <us>` command stages each
+  chunk that long before the boundary, and the TX record logs the lead
+  achieved (`SOAK_F_TX_LEAD`).
+- **Tools:** `rtt_link.py lead`, and `tools/lead_sweep.py` to run a sweep
+  and classify every chunk as on time, late or lost against its lead.
+  `reconstruct_c2.latency_by_chunk()` gives per-chunk latency.
+- **Next, engine work:** take the payload at a point just before our own TX
+  (in the TX-slot entry, or on a pre-TX alarm). That would cut the
+  guaranteed lead from one slot to ~1–2 ms and stage-to-DIO1 to ~10 ms, the
+  same for every unit.
+
 ### RTT bench link + Codec 2 transport test (2026-09-25)
 
 The card is now optional on the bench. Each unit streams its soak records to
@@ -1267,11 +1299,11 @@ native SX126x LoRa driver this project uses. See the README's
   harmlessly whenever a soak runs with no host reading. Start
   `rtt_link.py capture` before the soak; the 8 KB up buffer covers only a
   ~2.5 s late start.
-- **RTT stage-to-DIO1 is almost a frame (78.7 ms).** The runner stages
-  the next chunk right after its own TxDone, so a payload waits almost a
-  whole frame before its slot. That is fine for a soak. For live audio,
-  the encode test should stage each chunk just before the last RX slot
-  ahead of its TX slot.
+- **By default the runner stages right after TxDone (78.7 ms
+  stage-to-DIO1).** `lead` fixes that for tests. The guaranteed engine
+  deadline is 19.6 ms before the boundary (staging lead sweep, above), so
+  live audio should stage by then plus margin until the engine takes the
+  payload closer to TX.
 - **Latency needs three units.**
   `reconstruct_c2.py --tx` measures the offset between two units' slot
   clocks by common view of a third unit, so a two-unit run reports

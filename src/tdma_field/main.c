@@ -216,6 +216,8 @@ static struct {
 	 * in its TX record for the latency pairing.
 	 */
 	uint32_t tx_stage_us;
+	uint32_t tx_lead_us;	/* and how long before its TX boundary */
+	uint32_t lead_us;	/* staging lead, latched at start (0 = at once) */
 } soak;
 
 static int64_t soak_last_draw_ms;
@@ -679,6 +681,9 @@ static void soak_start(int64_t duration_ms, bool sd)
 	memset(&soak, 0, sizeof(soak));
 	soak.snap = *tdma_get_telemetry();
 	soak.payload_mode = mode;
+#ifdef CONFIG_SOAK_RTT
+	soak.lead_us = rtt_link_lead_us();
+#endif
 	k_mutex_unlock(&soak_lock);
 
 	/* Logging is best-effort: a missing or failed card must never stop a
@@ -827,7 +832,8 @@ static void soak_data_step(void)
 	if (soak.tx_armed && t->tx_done != soak.tx_done_at_arm) {
 		if (IS_ENABLED(CONFIG_SOAK_RTT)) {
 			soak_log_tx_at(soak.tx_payload, my_slot,
-				       t->sync_state, soak.tx_stage_us);
+				       t->sync_state, soak.tx_stage_us,
+				       soak.tx_lead_us);
 		} else {
 			soak_log_tx(soak.tx_payload, my_slot,
 				    t->sync_state);
@@ -835,7 +841,9 @@ static void soak_data_step(void)
 		soak.tx_armed = false;
 	}
 
-	if (!soak.tx_armed) {
+	uint32_t lead_us = 0;
+
+	if (!soak.tx_armed && payload_stage_due(soak.lead_us, &lead_us)) {
 		/* Keyed to tx_done; see the console's copy. */
 		payload_fill(soak.tx_payload, soak.payload_mode, my_slot,
 			     t->tx_done - soak.snap.tx_done, soak.seq);
@@ -845,6 +853,7 @@ static void soak_data_step(void)
 		if (tdma_tx_submit(soak.tx_payload) == 0) {
 			if (IS_ENABLED(CONFIG_SOAK_RTT)) {
 				soak.tx_stage_us = stage_us;
+				soak.tx_lead_us = lead_us;
 			}
 			soak.tx_armed = true;
 			soak.tx_done_at_arm = t->tx_done;

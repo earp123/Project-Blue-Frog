@@ -23,6 +23,9 @@
  *   clip <nbytes> <crc32>   followed by exactly nbytes raw bytes: load the
  *                           clip buffer (clip_src.h); refused while a soak
  *                           runs, or if the size or CRC is wrong
+ *   lead <us>               stage each payload this long before the unit's
+ *                           TX boundary, from the next soak (0 = at once,
+ *                           right after TxDone; the default)
  *   soak <minutes> [sd]     start a soak (0 = continuous); sd adds the card
  *   stop                    stop the running soak
  *
@@ -86,5 +89,8 @@ void rtt_link_service(const struct rtt_link_ops *ops);
  * default. Runners use payload_next_mode() (payload_src.h).
  */
 enum soak_payload_mode rtt_link_mode(void);
+
+/* Staging lead for the next soak, us ("lead" command; 0 = at once). */
+uint32_t rtt_link_lead_us(void);
 
 #endif /* RTT_LINK_H_ */

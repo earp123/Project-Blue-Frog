@@ -256,7 +256,7 @@ void soak_log_tx(const uint8_t payload[TDMA_PAYLOAD_LEN], uint8_t slot_id,
 }
 
 void soak_log_tx_at(const uint8_t payload[TDMA_PAYLOAD_LEN], uint8_t slot_id,
-		    uint8_t sync_state, uint32_t stage_us)
+		    uint8_t sync_state, uint32_t stage_us, uint32_t lead_us)
 {
 	struct soak_rec r = { 0 };
 
@@ -264,7 +264,8 @@ void soak_log_tx_at(const uint8_t payload[TDMA_PAYLOAD_LEN], uint8_t slot_id,
 	r.slot_id = slot_id;
 	r.sync_state = sync_state;
 	r.t_us = stage_us;
-	r.flags = SOAK_F_NO_CTR | SOAK_F_TX_T;
+	r.frame_ctr = (uint16_t)MIN(lead_us, 0xFFFFU);
+	r.flags = SOAK_F_NO_CTR | SOAK_F_TX_T | SOAK_F_TX_LEAD;
 	memcpy(r.payload, payload, TDMA_PAYLOAD_LEN);
 
 	submit(&r);

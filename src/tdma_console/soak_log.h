@@ -79,6 +79,8 @@ enum soak_rec_type {
 /* flags bits */
 #define SOAK_F_NO_CTR	BIT(0)	/* frame_ctr not meaningful (TX records) */
 #define SOAK_F_TX_T	BIT(1)	/* TX record: t_us holds the stage time */
+#define SOAK_F_TX_LEAD	BIT(2)	/* TX record: frame_ctr holds the stage lead,
+				 * us before the TX boundary (0xFFFF = more) */
 
 /*
  * The one on-disk record. Every field is naturally aligned at its offset, so
@@ -298,10 +300,12 @@ void soak_log_tx(const uint8_t payload[TDMA_PAYLOAD_LEN], uint8_t slot_id,
  * The same, with the slot-clock time the payload was staged at
  * (tdma_now_us()) in t_us and SOAK_F_TX_T set. Paired with a peer's RX
  * record of the same chunk, it gives stage-to-DIO1 latency
- * (tools/reconstruct_c2.py --tx). soak_log_tx() leaves t_us 0.
+ * (tools/reconstruct_c2.py --tx). lead_us, how long before its TX boundary
+ * the payload was staged, goes in frame_ctr (SOAK_F_TX_LEAD).
+ * soak_log_tx() leaves t_us 0.
  */
 void soak_log_tx_at(const uint8_t payload[TDMA_PAYLOAD_LEN], uint8_t slot_id,
-		    uint8_t sync_state, uint32_t stage_us);
+		    uint8_t sync_state, uint32_t stage_us, uint32_t lead_us);
 
 void soak_log_stats(const struct tdma_telemetry *t);
 

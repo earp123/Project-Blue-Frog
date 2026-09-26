@@ -56,11 +56,32 @@ static struct {
 
 	/* Manual M0 ops: one frame counter for hand-fired packets. */
 	uint16_t manual_ctr;
+
+	/* Slot-clock time of slot 0 of the current frame, republished by the
+	 * radio thread at every slot tick. One word, so any thread reads a
+	 * consistent value (tdma_next_tx_us()).
+	 */
+	atomic_t frame_start_us;
 } eng;
 
 uint32_t tdma_now_us(void)
 {
 	return tdma_port_now();
+}
+
+uint32_t tdma_next_tx_us(void)
+{
+	uint32_t now = tdma_port_now();
+	uint32_t t = (uint32_t)atomic_get(&eng.frame_start_us) +
+		     (uint32_t)eng.cfg.slot_id * eng.cfg.slot_duration_us;
+
+	/* The anchor may be up to a frame old (it moves at slot 0), and the
+	 * boundary may have just passed; step whole frames past now.
+	 */
+	while ((int32_t)(t - now) <= 0) {
+		t += TDMA_FRAME_DURATION_US;
+	}
+	return t;
 }
 
 const struct tdma_telemetry *tdma_get_telemetry(void)
@@ -220,6 +241,10 @@ void tdma_core_on_slot_tick(void)
 	if (eng.cur_slot == 0 && eng.cfg.role == TDMA_ROLE_MASTER) {
 		eng.frame_ctr++;
 	}
+	atomic_set(&eng.frame_start_us,
+		   (atomic_val_t)(tdma_port_last_boundary() -
+				  (uint32_t)eng.cur_slot *
+				  eng.cfg.slot_duration_us));
 
 	/* Secondaries transmit only once RUNNING; while SYNCING every slot
 	 * listens so an unaligned schedule cannot collide with anyone. A TX

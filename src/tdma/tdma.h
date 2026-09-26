@@ -215,6 +215,21 @@ const struct tdma_telemetry *tdma_get_telemetry(void);
 uint32_t tdma_now_us(void);
 
 /*
+ * Slot-clock time of this unit's next TX slot boundary, strictly after now.
+ * Callable from any thread while the engine runs; derived from a frame
+ * anchor the radio thread republishes at every slot tick, so it already
+ * includes past sync corrections (a secondary's next correction may still
+ * move it by up to TDMA_SYNC_STEP_CLAMP_US).
+ *
+ * For pacing payloads: the engine takes a staged payload at every RX-slot
+ * entry and after every RxDone, and sends the newest one taken before the
+ * boundary. The last pickup that always happens is the entry of the slot
+ * before ours, one slot duration ahead of this time; the RxDone pickup in
+ * that slot happens only when a packet from it is heard.
+ */
+uint32_t tdma_next_tx_us(void);
+
+/*
  * Request a TX power change (-9..+22 dBm; -EINVAL outside that). Callable
  * from any thread at any time, including before tdma_init(): the value is
  * latched and SetTxParams is issued on the radio thread immediately before

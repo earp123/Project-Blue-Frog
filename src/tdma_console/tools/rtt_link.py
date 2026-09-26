@@ -15,6 +15,7 @@ Usage:
     rtt_link.py --sn N soak 5 [--sd]          # 0 = continuous
     rtt_link.py --sn N stop
     rtt_link.py --sn N mode ramp|tone|clip
+    rtt_link.py --sn N lead 20000             # stage 20 ms before TX; 0 = at once
     rtt_link.py --sn N clip clip_F.c2         # "clip <n> <crc>" + the bytes
     rtt_link.py --sn N capture -o m.bin [--minutes M] [--soak M [--sd]]
     rtt_link.py --all capture -o soaks/rtt/ [--soak M]
@@ -264,6 +265,8 @@ def run_one(args):
             line = "stop"
         elif args.cmd == "mode":
             line = f"mode {args.mode}"
+        elif args.cmd == "lead":
+            line = f"lead {args.us}"
         elif args.cmd == "clip":
             return cmd_clip(link, args)
         elif args.cmd == "capture":
@@ -318,6 +321,10 @@ def main(argv=None):
     sub.add_parser("stop")
     p = sub.add_parser("mode")
     p.add_argument("mode", choices=["ramp", "tone", "clip"])
+    p = sub.add_parser("lead")
+    p.add_argument("us", type=int,
+                   help="stage each payload this many us before the unit's "
+                        "TX boundary, from the next soak (0 = at once)")
     p = sub.add_parser("clip")
     p.add_argument("file", help="Codec 2 clip, a multiple of 32 B")
     p = sub.add_parser("capture")

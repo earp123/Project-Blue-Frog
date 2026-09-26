@@ -55,6 +55,15 @@ static const char *bin_err;	/* NULL = loading into clip_src */
 static int64_t bin_last_ms;
 
 static atomic_t next_mode = ATOMIC_INIT(PAYLOAD_DEFAULT_MODE);
+static atomic_t next_lead_us;
+
+/* Longest staging lead: a frame; anything longer is just "at once". */
+#define LEAD_MAX_US	TDMA_FRAME_DURATION_US
+
+uint32_t rtt_link_lead_us(void)
+{
+	return (uint32_t)atomic_get(&next_lead_us);
+}
 
 static const char *const mode_name[] = {
 	[SOAK_PAYLOAD_RAMP] = "ramp",
@@ -217,6 +226,7 @@ static void handle_line(char *s)
 	char *tok[4];
 	int n = tokenize(s, tok, ARRAY_SIZE(tok));
 	uint32_t minutes;
+	uint32_t lead;
 
 	if (n == 0) {
 		return;		/* blank line: ignore */
@@ -231,6 +241,10 @@ static void handle_line(char *s)
 			}
 		}
 		reply("err cmd");
+	} else if (strcmp(tok[0], "lead") == 0 && n == 2 &&
+		   parse_u32(tok[1], &lead) && lead <= LEAD_MAX_US) {
+		atomic_set(&next_lead_us, (atomic_val_t)lead);
+		reply("ok lead %u", lead);
 	} else if (strcmp(tok[0], "clip") == 0 && n == 3) {
 		clip_begin(tok[1], tok[2]);
 	} else if (strcmp(tok[0], "status") == 0 && n == 1) {
@@ -332,11 +346,12 @@ static void do_status(const struct rtt_link_ops *ops)
 		snprintf(unit, sizeof(unit), "role=- slot=-");
 	}
 
-	reply("ok status %s sync=%s soak=%s mode=%s clip=%u/%08x "
+	reply("ok status %s sync=%s soak=%s mode=%s clip=%u/%08x lead=%u "
 	      "rtt_drop=%u", unit,
 	      sync_name(tdma_get_telemetry()->sync_state),
 	      u.soak_running ? "run" : "idle", mode_name[rtt_link_mode()],
-	      clip_src_chunks(), clip_src_crc(), ls.rtt_dropped);
+	      clip_src_chunks(), clip_src_crc(), rtt_link_lead_us(),
+	      ls.rtt_dropped);
 }
 
 static void do_soak(const struct rtt_link_ops *ops)

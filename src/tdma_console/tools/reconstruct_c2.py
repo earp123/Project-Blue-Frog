@@ -61,6 +61,7 @@ from reconstruct_tone import (clean_rx, frame_period, place, trusted_records,
                               write_wav)
 
 F_TX_T = 1 << 1		# soak_log.h SOAK_F_TX_T: TX t_us is the stage time
+F_TX_LEAD = 1 << 2	# SOAK_F_TX_LEAD: TX frame_ctr is the stage lead, us
 OFFSET_MAX_GAP_US = 2_000_000	# farthest common-view sample to trust
 MAGIC = 0xC2
 HDR = 8
@@ -342,9 +343,10 @@ def rx_times(recs, meta):
     return times
 
 
-def tx_sent(path):
+def tx_sent(path, leads=None):
     """A peer's own log -> (slot, {clip_id: {index: stage t_us or None}},
-    its RX times)."""
+    its RX times). With a dict for leads, also fills {(clip_id, index):
+    stage lead us} from SOAK_F_TX_LEAD records."""
     recs, meta = load(path)
     good, _ = trusted_records(recs)
     sent = {}
@@ -358,6 +360,8 @@ def tx_sent(path):
         idx16, cid = h
         u = unwraps.setdefault(cid, Unwrap())(idx16)
         sent.setdefault(cid, {})[u] = r.t_us if r.flags & F_TX_T else None
+        if leads is not None and r.flags & F_TX_LEAD:
+            leads[(cid, u)] = r.frame_ctr
     return meta["slot_id"], sent, rx_times(recs, meta)
 
 
@@ -368,10 +372,17 @@ def latency(sender, receiver, stage, rx_rcv, rx_snd):
     rx_times() of the receiver's and the sender's logs. Returns (latencies,
     common-view samples used, third slots used).
     """
+    lat, n, thirds = latency_by_chunk(sender, receiver, stage, rx_rcv,
+                                      rx_snd)
+    return list(lat.values()), n, thirds
+
+
+def latency_by_chunk(sender, receiver, stage, rx_rcv, rx_snd):
+    """latency(), keyed: ({(cid, u): us}, samples, third slots)."""
     # Unwrap the sender's clock around its first stage time: the counter
     # wraps every 71.6 min, a run is minutes long.
     if not stage:
-        return [], 0, []
+        return {}, 0, []
     ref = next(iter(stage.values()))
 
     def unw(t):
@@ -389,11 +400,11 @@ def latency(sender, receiver, stage, rx_rcv, rx_snd):
             ts = rx_snd[x][k]
             samples.append((unw(ts), s32(rx_rcv[x][k] - ts)))
     if not samples:
-        return [], 0, []
+        return {}, 0, []
     samples.sort()
     keys = [s[0] for s in samples]
 
-    lat = []
+    lat = {}
     got = rx_rcv.get(sender, {})
     for k, ts in stage.items():
         if k not in got:
@@ -404,7 +415,7 @@ def latency(sender, receiver, stage, rx_rcv, rx_snd):
                    key=lambda j: abs(keys[j] - t))
         if abs(keys[near] - t) > OFFSET_MAX_GAP_US:
             continue
-        lat.append(s32(got[k] - (ts + samples[near][1])))
+        lat[k] = s32(got[k] - (ts + samples[near][1]))
     return lat, len(samples), sorted(thirds)
 
 
