@@ -12,7 +12,35 @@ For hardware wiring, build/flash instructions, and SDK setup, see
 
 On-device radio-evaluation tooling for the nRF5340 DK + Wio-SX1262 (SX1262),
 plus the first slice of the wireless-intercom firmware (TDMA radio layer).
-_Last updated: 2026-09-25._
+_Last updated: 2026-09-26._
+
+### Where things stand (2026-09-26)
+
+- **Bench link:** J-Link RTT replaces the SD card on the bench. Soaks are
+  started, captured and scored from the host (`rtt_link.py`).
+- **Radio engine:**
+  - A pre-TX pickup gives every unit the same staging deadline, 2.45 ms
+    before its TX boundary, whatever its neighbours do. Stage-to-DIO1 is
+    ~11 ms.
+  - A sync race that could leave a secondary stuck in SYNCING (8 % of
+    starts) is fixed.
+- **Voice path, proven end to end on three units:**
+  - Codec 2 3200 frames cross the link byte for byte.
+  - Each unit now encodes its own speech on the device: ~27 ms per 80 ms
+    chunk at 128 MHz, 96–97 % bit-exact with the reference codec.
+  - First sample to peer DIO1 is ~124 ms, before decode and playout.
+- **Next, in order of payoff:**
+  1. Encode each 20 ms frame as it is captured and stage it straight from
+     the encoder: ~12 ms of phase instead of 36, ~100 ms first sample to
+     peer.
+  2. Decode and playout on the receiving unit.
+  3. Settle Codec 2's LGPL licensing for the product. It is test-only
+     today, behind `CONFIG_SOAK_C2_ENCODE`.
+  4. The four-unit soak (card #23 first).
+- **Open questions:**
+  - One acquisition in 400 had not locked at 3 s after the sync fix. It
+    was not re-checked, so it is unknown whether it was slow or stuck.
+  - PESQ has not been run: the package needs a host C compiler.
 
 ### Firmware variants
 
