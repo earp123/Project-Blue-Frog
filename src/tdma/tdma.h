@@ -207,6 +207,14 @@ int tdma_tx_submit(const uint8_t payload[TDMA_PAYLOAD_LEN]); /* -EAGAIN if pendi
 const struct tdma_telemetry *tdma_get_telemetry(void);
 
 /*
+ * Current slot-clock time in us: the free-running 1 MHz counter that
+ * tdma_rx_msg.timestamp_us is read from. Callable from any thread. Each
+ * unit's counter is its own (sync moves the slot compare, never the
+ * counter), so readings from two units differ by an unknown offset.
+ */
+uint32_t tdma_now_us(void);
+
+/*
  * Request a TX power change (-9..+22 dBm; -EINVAL outside that). Callable
  * from any thread at any time, including before tdma_init(): the value is
  * latched and SetTxParams is issued on the radio thread immediately before

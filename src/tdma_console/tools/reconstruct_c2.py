@@ -30,13 +30,19 @@ Per peer slot:
      clip's _ref.wav (c2clip.py) aligned by the first placed index.
   6. With --tx (the peers' own logs): pairs each peer's TX records with this
      unit's RX records by (clip_id, chunk index) for per-link delivery, sent
-     vs received. Latency needs a TX stage time the firmware does not log
-     yet, and is reported as unavailable.
+     vs received, and latency: RX DIO1 time minus the peer's TX stage time
+     (SOAK_F_TX_T records). The two units' slot clocks are free-running and
+     unrelated, so the offset between them is measured by common view: both
+     units hear a third unit's chunk k, and the difference of their two RX
+     times is the clock offset at that moment (nearest sample, so crystal
+     drift over the run cancels). Needs three units. The figure is
+     stage-to-DIO1 on the air path: it excludes encode, decode and playout.
 
 Codec 2 comes from c2codec.py (pycodec2, else c2enc/c2dec on PATH).
 """
 
 import argparse
+import bisect
 import json
 import os
 import struct
@@ -52,6 +58,8 @@ from decode_soak_log import (PAYLOAD_CLIP, REC_META, REC_TX, iter_records,
 from reconstruct_tone import (clean_rx, frame_period, place, trusted_records,
                               write_wav)
 
+F_TX_T = 1 << 1		# soak_log.h SOAK_F_TX_T: TX t_us is the stage time
+OFFSET_MAX_GAP_US = 2_000_000	# farthest common-view sample to trust
 MAGIC = 0xC2
 HDR = 8
 CHUNK = 32
@@ -270,8 +278,28 @@ def audio(res, clip, out_path):
     return len(out), score
 
 
+def s32(x):
+    return ((x + (1 << 31)) & 0xFFFFFFFF) - (1 << 31)
+
+
+def rx_times(recs, meta):
+    """{peer slot: {(clip_id, unwrapped index): first RX t_us}}."""
+    rx, _ = clean_rx(recs, meta["slot_id"], meta["slot_count"])
+    times = {}
+    unwraps = {}
+    for r, _brk in rx:
+        h = header(r.payload)
+        if h is None:
+            continue
+        idx16, cid = h
+        u = unwraps.setdefault(r.slot_id, Unwrap())(idx16)
+        times.setdefault(r.slot_id, {}).setdefault((cid, u), r.t_us)
+    return times
+
+
 def tx_sent(path):
-    """A peer's own log -> (its slot, {clip_id: {unwrapped index: t_us}})."""
+    """A peer's own log -> (slot, {clip_id: {index: stage t_us or None}},
+    its RX times)."""
     recs, meta = load(path)
     good, _ = trusted_records(recs)
     sent = {}
@@ -284,8 +312,55 @@ def tx_sent(path):
             continue
         idx16, cid = h
         u = unwraps.setdefault(cid, Unwrap())(idx16)
-        sent.setdefault(cid, {})[u] = r.t_us
-    return meta["slot_id"], sent
+        sent.setdefault(cid, {})[u] = r.t_us if r.flags & F_TX_T else None
+    return meta["slot_id"], sent, rx_times(recs, meta)
+
+
+def latency(sender, receiver, stage, rx_rcv, rx_snd):
+    """Stage-to-DIO1 latencies (us) for the sender -> receiver link.
+
+    stage: {(cid, u): stage t_us} in the sender's clock; rx_rcv / rx_snd:
+    rx_times() of the receiver's and the sender's logs. Returns (latencies,
+    common-view samples used, third slots used).
+    """
+    # Unwrap the sender's clock around its first stage time: the counter
+    # wraps every 71.6 min, a run is minutes long.
+    if not stage:
+        return [], 0, []
+    ref = next(iter(stage.values()))
+
+    def unw(t):
+        return ref + s32(t - ref)
+
+    samples = []	# (sender time, receiver - sender offset)
+    thirds = []
+    for x in rx_rcv:
+        if x in (sender, receiver) or x not in rx_snd:
+            continue
+        common = rx_rcv[x].keys() & rx_snd[x].keys()
+        if common:
+            thirds.append(x)
+        for k in common:
+            ts = rx_snd[x][k]
+            samples.append((unw(ts), s32(rx_rcv[x][k] - ts)))
+    if not samples:
+        return [], 0, []
+    samples.sort()
+    keys = [s[0] for s in samples]
+
+    lat = []
+    got = rx_rcv.get(sender, {})
+    for k, ts in stage.items():
+        if k not in got:
+            continue
+        t = unw(ts)
+        i = bisect.bisect_left(keys, t)
+        near = min((j for j in (i - 1, i) if 0 <= j < len(keys)),
+                   key=lambda j: abs(keys[j] - t))
+        if abs(keys[near] - t) > OFFSET_MAX_GAP_US:
+            continue
+        lat.append(s32(got[k] - (ts + samples[near][1])))
+    return lat, len(samples), sorted(thirds)
 
 
 def main():
@@ -315,6 +390,7 @@ def main():
     rx, tally = clean_rx(recs, own, meta["slot_count"])
     period = frame_period(rx, meta["slot_us"], meta["frame_us"])
     chunks = place(rx, meta["slot_us"], period)
+    own_rx = rx_times(recs, meta)
 
     stem = os.path.splitext(os.path.basename(args.logfile))[0]
     out_dir = args.out_dir or os.path.dirname(os.path.abspath(args.logfile))
@@ -326,8 +402,8 @@ def main():
 
     sent_by_slot = {}
     for p in args.tx:
-        slot, sent = tx_sent(p)
-        sent_by_slot[slot] = (p, sent)
+        slot, sent, their_rx = tx_sent(p)
+        sent_by_slot[slot] = (p, sent, their_rx)
 
     print("file:     %s" % args.logfile)
     print("logger:   %s slot=%d %s" % (meta["role"], own, payload_desc(meta)))
@@ -401,7 +477,7 @@ def main():
             peer["pesq_nb"] = score
 
         if slot in sent_by_slot and cid is not None:
-            path, sent = sent_by_slot[slot]
+            path, sent, their_rx = sent_by_slot[slot]
             tx = sent.get(cid, {})
             got = set(res["placed"])
             both = [u for u in tx if u in got]
@@ -415,10 +491,31 @@ def main():
                          len(in_range) - len(lost), len(lost), lo, hi))
                 peer["link"] = {"sent": len(in_range),
                                 "lost": len(lost), "span": [lo, hi]}
-            if both and all(tx[u] == 0 for u in both):
-                print("           latency: unavailable. TX records carry "
-                      "t_us = 0 (no stage time); see "
-                      "docs/rtt_link_c2_transport.md")
+            stage = {(cid, u): tx[u] for u in both if tx[u] is not None}
+            if both and not stage:
+                print("           latency: unavailable. %s has no TX stage "
+                      "times (firmware before SOAK_F_TX_T)"
+                      % os.path.basename(path))
+            elif stage:
+                lat, n_off, thirds = latency(slot, own, stage, own_rx,
+                                             their_rx)
+                if not lat:
+                    print("           latency: unavailable. No common view: "
+                          "the two logs share no third unit's chunks")
+                else:
+                    a = np.array(lat) / 1000.0
+                    print("           latency %d->%d, stage to DIO1 (air "
+                          "path only; excludes encode, decode and playout): "
+                          "min %.2f / median %.2f / max %.2f ms over %d "
+                          "chunks; clock offset by common view of slot %s "
+                          "(%d samples)" % (
+                              slot, own, a.min(), float(np.median(a)),
+                              a.max(), len(a),
+                              "/".join(map(str, thirds)), n_off))
+                    peer["latency_ms"] = {
+                        "min": float(a.min()), "median": float(np.median(a)),
+                        "max": float(a.max()), "n": len(a),
+                        "common_view": thirds}
         summary["peers"][slot] = peer
 
     if pesq_score is None:

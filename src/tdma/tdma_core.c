@@ -58,6 +58,11 @@ static struct {
 	uint16_t manual_ctr;
 } eng;
 
+uint32_t tdma_now_us(void)
+{
+	return tdma_port_now();
+}
+
 const struct tdma_telemetry *tdma_get_telemetry(void)
 {
 	/* Read-mostly counters, updated in place on the radio thread; a

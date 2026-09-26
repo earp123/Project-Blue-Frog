@@ -255,6 +255,21 @@ void soak_log_tx(const uint8_t payload[TDMA_PAYLOAD_LEN], uint8_t slot_id,
 	submit(&r);
 }
 
+void soak_log_tx_at(const uint8_t payload[TDMA_PAYLOAD_LEN], uint8_t slot_id,
+		    uint8_t sync_state, uint32_t stage_us)
+{
+	struct soak_rec r = { 0 };
+
+	r.type = SOAK_REC_TX;
+	r.slot_id = slot_id;
+	r.sync_state = sync_state;
+	r.t_us = stage_us;
+	r.flags = SOAK_F_NO_CTR | SOAK_F_TX_T;
+	memcpy(r.payload, payload, TDMA_PAYLOAD_LEN);
+
+	submit(&r);
+}
+
 void soak_log_stats(const struct tdma_telemetry *t)
 {
 	struct soak_rec r = { 0 };

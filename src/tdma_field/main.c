@@ -211,6 +211,11 @@ static struct {
 	 * other field moves.
 	 */
 	enum soak_payload_mode payload_mode;
+
+	/* With RTT: slot-clock time the armed payload was staged at, logged
+	 * in its TX record for the latency pairing.
+	 */
+	uint32_t tx_stage_us;
 } soak;
 
 static int64_t soak_last_draw_ms;
@@ -820,8 +825,13 @@ static void soak_data_step(void)
 	 * every pass instead would overwrite most payloads before their slot.
 	 */
 	if (soak.tx_armed && t->tx_done != soak.tx_done_at_arm) {
-		soak_log_tx(soak.tx_payload, my_slot,
-			    t->sync_state);
+		if (IS_ENABLED(CONFIG_SOAK_RTT)) {
+			soak_log_tx_at(soak.tx_payload, my_slot,
+				       t->sync_state, soak.tx_stage_us);
+		} else {
+			soak_log_tx(soak.tx_payload, my_slot,
+				    t->sync_state);
+		}
 		soak.tx_armed = false;
 	}
 
@@ -829,7 +839,13 @@ static void soak_data_step(void)
 		/* Keyed to tx_done; see the console's copy. */
 		payload_fill(soak.tx_payload, soak.payload_mode, my_slot,
 			     t->tx_done - soak.snap.tx_done, soak.seq);
+		uint32_t stage_us = IS_ENABLED(CONFIG_SOAK_RTT) ?
+					    tdma_now_us() : 0;
+
 		if (tdma_tx_submit(soak.tx_payload) == 0) {
+			if (IS_ENABLED(CONFIG_SOAK_RTT)) {
+				soak.tx_stage_us = stage_us;
+			}
 			soak.tx_armed = true;
 			soak.tx_done_at_arm = t->tx_done;
 			soak.seq++;

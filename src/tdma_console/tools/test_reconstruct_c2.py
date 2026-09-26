@@ -8,7 +8,8 @@ checks it lands in the right bucket:
 
     clean, loss (single + burst), dup (stale re-transmit), stale (same index,
     new bytes), out-of-order, card #23's shifted first packet, an RTT/ring seq
-    gap, corrupted bytes, chunk-index wrap, and TX pairing.
+    gap, corrupted bytes, chunk-index wrap, TX pairing, and latency through a
+    common-view clock offset with crystal drift.
 
 Run from anywhere: python test_reconstruct_c2.py
 """
@@ -28,6 +29,8 @@ from decode_soak_log import MAGIC, META_FMT, REC_FMT	# noqa: E402
 
 SLOT_US, FRAME_US = 20000, 80000
 REC_META, REC_RX, REC_TX = 1, 2, 3
+F_NO_CTR, F_TX_T = 1, 2
+AIR_US = 7900		# boundary to DIO1 in the synthetic RX times
 
 
 def make_clip(seed, chunks=50):
@@ -43,30 +46,44 @@ def payload(clip, n):
 
 
 class Log:
-    """A soak log for one unit, built in time order."""
+    """A soak log for one unit, built in time order.
 
-    def __init__(self, slot, clip_chunks):
+    The unit's slot clock reads clock_off + true time * (1 + ppm / 1e6):
+    every unit's counter is its own.
+    """
+
+    def __init__(self, slot, clip_chunks, clock_off=0, ppm=0.0):
         self.recs = []
         self.seq = 0
         self.slot = slot
+        self.clock_off = clock_off
+        self.ppm = ppm
         meta = struct.pack(META_FMT, MAGIC, 2, 0 if slot == 0 else 1, slot,
                            915000000, SLOT_US, FRAME_US, 7760, 5, 1, 500, 0,
                            4, 40, 8, 0, 2, 0, clip_chunks)
         self.add(REC_META, slot, 0, 0, meta.ljust(40, b"\0"))
 
-    def add(self, rtype, slot, t_us, ctr, pl, skip_seq=0):
+    def clock(self, t_true):
+        return int(round(self.clock_off + t_true * (1 + self.ppm / 1e6)))
+
+    def add(self, rtype, slot, t_us, ctr, pl, skip_seq=0, flags=0):
         self.seq += skip_seq
-        self.recs.append(struct.pack(REC_FMT, rtype, slot, 2, 0,
+        self.recs.append(struct.pack(REC_FMT, rtype, slot, 2, flags,
                                      t_us & 0xFFFFFFFF, ctr & 0xFFFF, -80, 8,
                                      b"\0\0\0", self.seq, 0, pl))
         self.seq += 1
 
     def rx(self, frame, slot, pl, skip_seq=0):
-        t = 1_000_000 + frame * FRAME_US + slot * SLOT_US + 7900
-        self.add(REC_RX, slot, t, frame, pl, skip_seq)
+        t = 1_000_000 + frame * FRAME_US + slot * SLOT_US + AIR_US
+        self.add(REC_RX, slot, self.clock(t), frame, pl, skip_seq)
 
-    def tx(self, pl):
-        self.add(REC_TX, self.slot, 0, 0, pl)
+    def tx(self, pl, stage_true=None):
+        """A TX record; with stage_true, a stage time (SOAK_F_TX_T)."""
+        if stage_true is None:
+            self.add(REC_TX, self.slot, 0, 0, pl, flags=F_NO_CTR)
+        else:
+            self.add(REC_TX, self.slot, self.clock(stage_true), 0, pl,
+                     flags=F_NO_CTR | F_TX_T)
 
     def write(self, path):
         with open(path, "wb") as f:
@@ -265,6 +282,27 @@ def tx_pairing(tmp):
               ["--tx", peer_path])
     expect(slot_line(out, 0), "link 0->1", "sent %d, received %d, lost 2"
            % (N, N - 2), "latency: unavailable")
+
+
+@case
+def latency(tmp):
+    # The master (slot 0) stages chunk f 30 ms before its slot boundary;
+    # the receiver (slot 1) logs DIO1 AIR_US after the boundary. The two
+    # clocks are unrelated and the master's runs 20 ppm fast; both hear
+    # SEC 2 (slot 2), which is the common view.
+    lead = 30000
+    sender = Log(0, 50, clock_off=123_456_789, ppm=20.0)
+    for f in range(N):
+        boundary = 1_000_000 + f * FRAME_US
+        sender.tx(payload(A, f), stage_true=boundary - lead)
+        sender.rx(f, 2, payload(B, f))
+    peer_path = os.path.join(tmp, "peer.bin")
+    sender.write(peer_path)
+    out = run(base(), [A, B], tmp, ["--tx", peer_path])
+    want = (lead + AIR_US) / 1000.0
+    expect(slot_line(out, 0), "latency 0->1",
+           "min %.2f / median %.2f / max %.2f ms over %d chunks"
+           % (want, want, want, N), "common view of slot 2")
 
 
 def main():
