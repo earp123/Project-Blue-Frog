@@ -32,6 +32,10 @@
  * UART logging stays on for bring-up. Boot, card scans, card-detect changes,
  * role, TX power and soak start/stop are logged, but nothing per packet.
  *
+ * With CONFIG_SOAK_RTT the J-Link RTT bench port (rtt_link.h) can also start
+ * and stop soaks and stream their records to the host; the unit pick stays
+ * on the buttons.
+ *
  * SPDX-License-Identifier: Apache-2.0
  */
 
@@ -44,12 +48,16 @@
 #include <zephyr/logging/log.h>
 #include <zephyr/sys/atomic.h>
 #include <zephyr/sys/util.h>
+#include <errno.h>
 #include <stdio.h>
 #include <string.h>
 
 #include "tdma.h"
 #include "soak_log.h"
 #include "tone_src.h"
+#ifdef CONFIG_SOAK_RTT
+#include "rtt_link.h"
+#endif
 
 LOG_MODULE_REGISTER(tdma_field, LOG_LEVEL_INF);
 
@@ -629,7 +637,7 @@ static void fill_pattern(uint8_t payload[TDMA_PAYLOAD_LEN], uint8_t seq)
 	}
 }
 
-static void soak_start(int64_t duration_ms)
+static void soak_start(int64_t duration_ms, bool sd)
 {
 	int rc;
 
@@ -665,7 +673,8 @@ static void soak_start(int64_t duration_ms)
 	 * drawers on this variant: logs always land in the card root.
 	 */
 	(void)soak_log_start(role, my_slot,
-			     (int8_t)tx_power_dbm, (uint32_t)duration_ms, NULL);
+			     (int8_t)tx_power_dbm, (uint32_t)duration_ms, NULL,
+			     sd);
 
 	rc = tdma_start();
 	if (rc < 0) {
@@ -871,7 +880,7 @@ static void soak_begin(int pick)
 	LOG_INF("soak start: %s, %s, %+d dBm", role_str(),
 		soak_durations[pick].label, tx_power_dbm);
 	soak_page = SP_TIME;
-	soak_start(soak_durations[pick].ms);
+	soak_start(soak_durations[pick].ms, true);
 	if (screen != SCR_SOAK) {
 		LOG_ERR("soak did not start: %s", home_msg);
 	}
@@ -901,7 +910,62 @@ static void soak_end(const char *why)
 			ls.path[0] ? ls.path : "(none)", ls.written,
 			ls.dropped);
 	}
+	if (IS_ENABLED(CONFIG_SOAK_RTT)) {
+		LOG_INF("soak rtt: %u records sent, %u dropped",
+			ls.rtt_written, ls.rtt_dropped);
+	}
 }
+
+#ifdef CONFIG_SOAK_RTT
+/* ---- RTT bench port: the runner's side (UI loop only) ---- */
+static void rtt_get_unit(struct rtt_link_unit *u)
+{
+	u->picked = (screen != SCR_ROLE_PICK);
+	u->role = role;
+	u->slot_id = my_slot;
+	u->soak_running = soak.active;
+}
+
+static int rtt_soak_start(uint32_t minutes, bool sd)
+{
+	if (screen == SCR_ROLE_PICK) {
+		return -ENODEV;
+	}
+	/* A card scan still in flight would delay the log's open, as on the
+	 * soak pick screen; only a run that asked for the card waits on it.
+	 */
+	if (soak.active || (sd && sd_busy)) {
+		return -EBUSY;
+	}
+
+	LOG_INF("soak start (rtt): %s, %u min, %+d dBm%s", role_str(),
+		minutes, tx_power_dbm, sd ? ", +SD" : "");
+	tx_edit = false;
+	soak_page = SP_TIME;
+	soak_start((int64_t)minutes * 60 * 1000, sd);
+	if (!soak.active) {
+		LOG_ERR("soak did not start: %s", home_msg);
+		return -EIO;
+	}
+	mark_dirty();
+	return 0;
+}
+
+static int rtt_soak_stop(void)
+{
+	if (!soak.active) {
+		return -EALREADY;
+	}
+	soak_end("rtt");
+	return 0;
+}
+
+static const struct rtt_link_ops rtt_ops = {
+	.get_unit = rtt_get_unit,
+	.soak_start = rtt_soak_start,
+	.soak_stop = rtt_soak_stop,
+};
+#endif /* CONFIG_SOAK_RTT */
 
 /* ---------------------------------------------------------------------------
  * Screens. Edge strings are kept to 12 characters so they fit the 16 px font.
@@ -1069,7 +1133,7 @@ static void draw_soak(void)
 		break;
 	case SP_LOG:
 		soak_log_get_status(&ls);
-		if (ls.err) {
+		if (ls.sd && ls.err) {
 			/* disk = card never came up, mount = volume rejected,
 			 * open = file creation failed, write/close = the card
 			 * stopped answering mid-run.
@@ -1077,6 +1141,21 @@ static void draw_soak(void)
 			snprintf(mid, sizeof(mid), "LOG FAIL");
 			snprintf(bottom, sizeof(bottom), "%s %d", ls.err_stage,
 				 ls.err);
+		} else if (IS_ENABLED(CONFIG_SOAK_RTT) &&
+			   (ls.path[0] ||
+			    (!ls.sd && (ls.active || ls.rtt_written)))) {
+			/* Card file, or "RTT" for a run logged to the host
+			 * only. "d" = ring drops, "r" = RTT drops; r climbs
+			 * harmlessly whenever no capture is attached.
+			 */
+			if (ls.path[0]) {
+				file_stem(mid, sizeof(mid), ls.path);
+			} else {
+				snprintf(mid, sizeof(mid), "RTT");
+			}
+			snprintf(bottom, sizeof(bottom), "%u d%u r%u",
+				 ls.path[0] ? ls.written : ls.rtt_written,
+				 ls.dropped, ls.rtt_dropped);
 		} else if (ls.path[0]) {
 			file_stem(mid, sizeof(mid), ls.path);
 			/* "d" non-zero: the card fell behind and the run's
@@ -1369,6 +1448,9 @@ int main(void)
 			soak_end("limit");
 		}
 
+#ifdef CONFIG_SOAK_RTT
+		rtt_link_service(&rtt_ops);
+#endif
 		sd_poll();
 		det_poll();
 

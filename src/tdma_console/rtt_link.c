@@ -1,0 +1,282 @@
+/*
+ * rtt_link - J-Link RTT bench port. See rtt_link.h.
+ *
+ * SPDX-License-Identifier: Apache-2.0
+ */
+
+#include <zephyr/kernel.h>
+#include <zephyr/init.h>
+#include <zephyr/sys/atomic.h>
+#include <SEGGER_RTT.h>
+#include <errno.h>
+#include <stdarg.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+
+#include "rtt_link.h"
+#include "soak_log.h"
+
+#define CH_SOAK		1	/* up: record stream */
+#define CH_CTL		1	/* down: commands */
+#define CH_REPLY	2	/* up: replies */
+
+/*
+ * 8 KB matches the soak_log ring: ~2.5 s at the 20 ms slot, enough to
+ * swallow a host hiccup or a capture started a moment late.
+ */
+static uint8_t soak_buf[8192];
+static uint8_t reply_buf[512];
+static uint8_t ctl_buf[1024];
+
+/* Longest command line; anything longer is discarded as malformed. */
+#define LINE_MAX	64
+
+/* Longest timed soak: a week, well inside the log's uint32 duration_ms. */
+#define SOAK_MAX_MIN	(7U * 24U * 60U)
+
+/* Writer-thread line assembly. */
+static char line[LINE_MAX];
+static size_t line_len;
+static bool line_overflow;
+
+/*
+ * One-deep slot for commands the runner must carry out. The writer thread
+ * fills it and publishes PENDING; the UI loop reads nothing before that, and
+ * frees it once the reply is out.
+ */
+enum { SLOT_IDLE, SLOT_PENDING };
+
+enum run_cmd { RUN_STATUS, RUN_SOAK, RUN_STOP };
+
+static struct {
+	enum run_cmd cmd;
+	uint32_t minutes;
+	bool sd;
+} slot;
+static atomic_t slot_state = ATOMIC_INIT(SLOT_IDLE);
+
+static int rtt_link_init(void)
+{
+	SEGGER_RTT_ConfigUpBuffer(CH_SOAK, "soak", soak_buf, sizeof(soak_buf),
+				  SEGGER_RTT_MODE_NO_BLOCK_SKIP);
+	SEGGER_RTT_ConfigUpBuffer(CH_REPLY, "ctl", reply_buf,
+				  sizeof(reply_buf),
+				  SEGGER_RTT_MODE_NO_BLOCK_SKIP);
+	SEGGER_RTT_ConfigDownBuffer(CH_CTL, "ctl", ctl_buf, sizeof(ctl_buf),
+				    SEGGER_RTT_MODE_NO_BLOCK_SKIP);
+	return 0;
+}
+
+/* Before the writer thread starts: static threads start after APPLICATION. */
+SYS_INIT(rtt_link_init, APPLICATION, 0);
+
+bool rtt_link_write_rec(const void *rec, uint32_t len)
+{
+	return SEGGER_RTT_Write(CH_SOAK, rec, len) == len;
+}
+
+/* One reply line. Whole or nothing, like the records: a host that is not
+ * reading loses the reply, never gets half of one.
+ */
+static void reply(const char *fmt, ...)
+{
+	char buf[160];
+	va_list ap;
+	int n;
+
+	va_start(ap, fmt);
+	n = vsnprintf(buf, sizeof(buf) - 1, fmt, ap);
+	va_end(ap);
+	if (n < 0) {
+		return;
+	}
+	n = MIN(n, (int)sizeof(buf) - 2);
+	buf[n++] = '\n';
+	(void)SEGGER_RTT_Write(CH_REPLY, buf, (unsigned int)n);
+}
+
+/* Parse a non-negative decimal integer that must fill the whole token. */
+static bool parse_u32(const char *s, uint32_t *out)
+{
+	char *end;
+	unsigned long v;
+
+	if (s == NULL || *s < '0' || *s > '9') {
+		return false;
+	}
+	v = strtoul(s, &end, 10);
+	if (*end != '\0' || v > UINT32_MAX) {
+		return false;
+	}
+	*out = (uint32_t)v;
+	return true;
+}
+
+static void park(enum run_cmd cmd, uint32_t minutes, bool sd)
+{
+	if (atomic_get(&slot_state) != SLOT_IDLE) {
+		/* The host sends one command and waits for its reply, so this
+		 * only happens if it stopped waiting.
+		 */
+		reply("err busy");
+		return;
+	}
+	slot.cmd = cmd;
+	slot.minutes = minutes;
+	slot.sd = sd;
+	atomic_set(&slot_state, SLOT_PENDING);
+}
+
+/* Split on spaces in place; returns the token count (at most max). */
+static int tokenize(char *s, char *tok[], int max)
+{
+	int n = 0;
+	char *save = NULL;
+
+	for (char *t = strtok_r(s, " \t", &save); t != NULL && n < max;
+	     t = strtok_r(NULL, " \t", &save)) {
+		tok[n++] = t;
+	}
+	return n;
+}
+
+static void handle_line(char *s)
+{
+	char *tok[4];
+	int n = tokenize(s, tok, ARRAY_SIZE(tok));
+	uint32_t minutes;
+
+	if (n == 0) {
+		return;		/* blank line: ignore */
+	}
+
+	if (strcmp(tok[0], "status") == 0 && n == 1) {
+		park(RUN_STATUS, 0, false);
+	} else if (strcmp(tok[0], "soak") == 0 && (n == 2 || n == 3) &&
+		   parse_u32(tok[1], &minutes) && minutes <= SOAK_MAX_MIN &&
+		   (n == 2 || strcmp(tok[2], "sd") == 0)) {
+		park(RUN_SOAK, minutes, n == 3);
+	} else if (strcmp(tok[0], "stop") == 0 && n == 1) {
+		park(RUN_STOP, 0, false);
+	} else {
+		reply("err cmd");
+	}
+}
+
+void rtt_link_poll(void)
+{
+	char in[64];
+	unsigned int got;
+
+	while ((got = SEGGER_RTT_Read(CH_CTL, in, sizeof(in))) > 0) {
+		for (unsigned int i = 0; i < got; i++) {
+			char c = in[i];
+
+			if (c == '\r') {
+				continue;
+			}
+			if (c != '\n') {
+				if (line_len < sizeof(line) - 1) {
+					line[line_len++] = c;
+				} else {
+					line_overflow = true;
+				}
+				continue;
+			}
+
+			line[line_len] = '\0';
+			if (line_overflow) {
+				reply("err cmd");
+			} else {
+				handle_line(line);
+			}
+			line_len = 0;
+			line_overflow = false;
+		}
+	}
+}
+
+static const char *sync_name(uint8_t s)
+{
+	switch (s) {
+	case TDMA_SYNC_SYNCING:
+		return "SYNC";
+	case TDMA_SYNC_RUNNING:
+		return "RUN";
+	default:
+		return "IDLE";
+	}
+}
+
+static void do_status(const struct rtt_link_ops *ops)
+{
+	struct rtt_link_unit u;
+	struct soak_log_status ls;
+	char unit[24];
+
+	ops->get_unit(&u);
+	soak_log_get_status(&ls);
+
+	if (u.picked) {
+		snprintf(unit, sizeof(unit), "role=%c slot=%u",
+			 (u.role == TDMA_ROLE_MASTER) ? 'M' : 'S', u.slot_id);
+	} else {
+		snprintf(unit, sizeof(unit), "role=- slot=-");
+	}
+
+	/* The payload source is still the build's; the mode command and the
+	 * clip buffer are the next step of the task.
+	 */
+	reply("ok status %s sync=%s soak=%s mode=%s clip=0/00000000 "
+	      "rtt_drop=%u", unit,
+	      sync_name(tdma_get_telemetry()->sync_state),
+	      u.soak_running ? "run" : "idle",
+	      IS_ENABLED(CONFIG_SOAK_PAYLOAD_TONE) ? "tone" : "ramp",
+	      ls.rtt_dropped);
+}
+
+static void do_soak(const struct rtt_link_ops *ops)
+{
+	int rc = ops->soak_start(slot.minutes, slot.sd);
+
+	if (rc == 0) {
+		reply("ok soak");
+	} else if (rc == -EBUSY) {
+		reply("err soak busy");
+	} else if (rc == -ENODEV) {
+		reply("err soak nounit");
+	} else {
+		reply("err soak %d", rc);
+	}
+}
+
+static void do_stop(const struct rtt_link_ops *ops)
+{
+	if (ops->soak_stop() == 0) {
+		reply("ok stop");
+	} else {
+		reply("err stop idle");
+	}
+}
+
+void rtt_link_service(const struct rtt_link_ops *ops)
+{
+	if (atomic_get(&slot_state) != SLOT_PENDING) {
+		return;
+	}
+
+	switch (slot.cmd) {
+	case RUN_STATUS:
+		do_status(ops);
+		break;
+	case RUN_SOAK:
+		do_soak(ops);
+		break;
+	case RUN_STOP:
+		do_stop(ops);
+		break;
+	}
+
+	atomic_set(&slot_state, SLOT_IDLE);
+}

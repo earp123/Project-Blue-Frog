@@ -55,6 +55,41 @@ config SOAK_PAYLOAD_TONE
 	  its peers with tools/reconstruct_tone.py. See
 	  docs/tone_payload_test.md.
 
+config SOAK_RTT
+	bool "Soak bench port over J-Link RTT"
+	default y
+	depends on APP_TDMA_CONSOLE || APP_TDMA_FIELD
+	select USE_SEGGER_RTT
+	help
+	  Stream every soak record to the host over J-Link RTT (up channel 1,
+	  the same 64 B records the card gets, META first) and take bench
+	  commands on down channel 1: status, soak <minutes> [sd], stop.
+	  Replies come back on up channel 2. No pins and no USB stack: the
+	  DK's on-board J-Link reads the RAM rings over SWD. A soak started
+	  from the UI still logs to the card as well; one started by the
+	  soak command logs to RTT only unless given "sd". Drive it with
+	  tools/rtt_link.py. Channel 0, logging and the console are left
+	  alone. With n, the tree builds and behaves as before. See
+	  docs/rtt_link_c2_transport.md.
+
+# RTT channel counts for the bench port: up 0 (Zephyr's terminal, unused),
+# up 1 records, up 2 replies; down 0, down 1 commands. Parsed before the
+# SEGGER module's definitions, so these defaults win.
+config SEGGER_RTT_MAX_NUM_UP_BUFFERS
+	int
+	default 3 if SOAK_RTT
+
+config SEGGER_RTT_MAX_NUM_DOWN_BUFFERS
+	int
+	default 2 if SOAK_RTT
+
+# Turning RTT on would otherwise also turn on Zephyr's RTT log backend, a
+# blocking writer on channel 0 that stalls every log call while no host is
+# attached. The shield unit logs to UART; the bench port leaves that alone.
+config LOG_BACKEND_RTT
+	bool
+	default n if SOAK_RTT
+
 # The TDMA engine keeps the radio awake for its whole life (PLL kept locked
 # in FS between slots; the TCXO warm-up cost is paid once at init). The
 # driver's sleep-when-idle behaviour would also detach/re-attach its DIO1

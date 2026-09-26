@@ -20,6 +20,12 @@
  *    radio test: the ring simply drops, the drop count is surfaced on screen,
  *    and the soak keeps running.
  *
+ * Sinks. The writer drains the ring into every active sink: the SD card, and
+ * with CONFIG_SOAK_RTT the J-Link RTT bench port (rtt_link.h), which carries
+ * the identical record stream, META first. RTT is always on when built in; SD
+ * is chosen per run. A capture file is therefore a soak log, and an RTT drop
+ * shows up as a seq gap exactly like a ring drop.
+ *
  * Rate budget at the 20 ms slot (80 ms frame, 4 units): 3 RX + 1 TX per frame
  * = 50 records/s = 3.2 KB/s = ~6 sector writes/s. Comfortably inside what the
  * card demonstrated, with the ring absorbing the sync stalls.
@@ -165,9 +171,12 @@ BUILD_ASSERT(sizeof(struct soak_meta) <= TDMA_PAYLOAD_LEN,
 
 struct soak_log_status {
 	bool active;
+	bool sd;		/* this run writes to the card */
 	uint32_t queued;	/* records handed to the ring */
 	uint32_t written;	/* records the writer pushed to sd_log */
 	uint32_t dropped;	/* ring-full drops (producer side) */
+	uint32_t rtt_written;	/* records pushed to the RTT soak channel */
+	uint32_t rtt_dropped;	/* RTT channel full: no host, or a slow one */
 	uint32_t bytes;
 	int err;		/* last writer error, 0 if healthy */
 	const char *err_stage;	/* "disk" / "mount" / "open" / "write" / "close"
@@ -176,9 +185,11 @@ struct soak_log_status {
 };
 
 /*
- * Open a session file and queue the META record. Returns 0, or a negative
- * errno if the card is unusable — the caller should carry on with the soak
- * regardless and simply show the failure.
+ * Start a run: queue the META record and, if sd is set, open a session file.
+ * Returns 0 or -EBUSY (the previous run is still closing). Card trouble is
+ * reported through soak_log_get_status(), never here — the caller carries on
+ * with the soak regardless and simply shows the failure. With sd clear and
+ * no RTT built in there is nowhere to log, and the run is simply unlogged.
  *
  * The file name encodes the run: "<PWR>_<DUR>_NNN.BIN" with M/P for the
  * power sign (M9 = -9 dBm, P22 = +22 dBm) and the duration in minutes/hours
@@ -187,7 +198,7 @@ struct soak_log_status {
  * missing drawer is created when the file opens.
  */
 int soak_log_start(enum tdma_role role, uint8_t slot_id, int8_t tx_power_dbm,
-		   uint32_t duration_ms, const char *dir);
+		   uint32_t duration_ms, const char *dir, bool sd);
 
 /* ---- Card file operations (browser back end) --------------------------- *
  * All card I/O runs on the writer thread — the FatFs LFN working buffer is

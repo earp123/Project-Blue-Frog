@@ -38,6 +38,11 @@
  * sd_log): one 64-byte record per received packet — payload included — plus
  * TX and periodic counter records. Logging is best-effort and never aborts a
  * run; the soak screen carries the file name, record count and drop count.
+ *
+ * With CONFIG_SOAK_RTT the J-Link RTT bench port (rtt_link.h) streams the
+ * same records to the host and can start and stop soaks, which then log to
+ * RTT only unless asked for the card. Calibration and the unit pick stay on
+ * the touch screen.
  * Decode with tools/decode_soak_log.py.
  *
  * SPDX-License-Identifier: Apache-2.0
@@ -47,6 +52,7 @@
 #include <zephyr/input/input.h>
 #include <zephyr/sys/atomic.h>
 #include <zephyr/sys/util.h>
+#include <errno.h>
 #include <string.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -56,6 +62,9 @@
 #include "tdma.h"
 #include "soak_log.h"
 #include "tone_src.h"
+#ifdef CONFIG_SOAK_RTT
+#include "rtt_link.h"
+#endif
 
 /* ---- Layout ----
  * Portrait, 240x320 (see the rotation note in the TFT overlay). Rows use
@@ -734,11 +743,24 @@ static void draw_soak_dynamic(void)
 	struct soak_log_status ls;
 
 	soak_log_get_status(&ls);
-	if (ls.err) {
+	if (ls.sd && ls.err) {
 		/* Stage says where: disk = card never came up, mount = volume
 		 * rejected (format), open = volume fine but file creation failed.
 		 */
 		snprintf(l, sizeof(l), "LOG FAIL %s %d", ls.err_stage, ls.err);
+	} else if (IS_ENABLED(CONFIG_SOAK_RTT) &&
+		   (ls.path[0] || (!ls.sd && (ls.active || ls.rtt_written)))) {
+		/* Card file, or "RTT" for a run logged to the host only. "d" =
+		 * ring drops, "r" = RTT drops; r climbs harmlessly whenever no
+		 * capture is attached.
+		 */
+		const char *base = strrchr(ls.path, '/');
+
+		snprintf(l, sizeof(l), "%s %uk d%u r%u",
+			 ls.path[0] ? ((base != NULL) ? base + 1 : ls.path)
+				    : "RTT",
+			 (ls.path[0] ? ls.written : ls.rtt_written) / 1000u,
+			 ls.dropped, ls.rtt_dropped);
 	} else if (ls.path[0]) {
 		/* Basename only: with a drawer in it the full path no longer
 		 * fits a 23-character portrait line.
@@ -780,7 +802,7 @@ static void fill_pattern(uint8_t payload[TDMA_PAYLOAD_LEN], uint8_t seq)
 	}
 }
 
-static void soak_start(int64_t duration_ms)
+static void soak_start(int64_t duration_ms, bool sd)
 {
 	int rc;
 
@@ -816,7 +838,7 @@ static void soak_start(int64_t duration_ms)
 	 */
 	(void)soak_log_start(role, my_slot,
 			     (int8_t)tx_power_dbm, (uint32_t)duration_ms,
-			     drawer_name[log_dir_idx]);
+			     drawer_name[log_dir_idx], sd);
 
 	rc = tdma_start();
 	if (rc < 0) {
@@ -884,6 +906,46 @@ static void soak_finish(void)
 	soak_last_draw_ms = k_uptime_get();
 	mark_dirty();
 }
+
+#ifdef CONFIG_SOAK_RTT
+/* ---- RTT bench port: the runner's side (UI loop only) ---- */
+static void rtt_get_unit(struct rtt_link_unit *u)
+{
+	u->picked = !role_required;
+	u->role = role;
+	u->slot_id = my_slot;
+	u->soak_running = soak.active;
+}
+
+static int rtt_soak_start(uint32_t minutes, bool sd)
+{
+	if (role_required) {
+		return -ENODEV;
+	}
+	if (soak.active) {
+		return -EBUSY;
+	}
+
+	/* Same path as the pick screen; it moves the UI to the soak screen. */
+	soak_start((int64_t)minutes * 60 * 1000, sd);
+	return soak.active ? 0 : -EIO;
+}
+
+static int rtt_soak_stop(void)
+{
+	if (!soak.active) {
+		return -EALREADY;
+	}
+	soak_finish();
+	return 0;
+}
+
+static const struct rtt_link_ops rtt_ops = {
+	.get_unit = rtt_get_unit,
+	.soak_start = rtt_soak_start,
+	.soak_stop = rtt_soak_stop,
+};
+#endif /* CONFIG_SOAK_RTT */
 
 /*
  * One data-plane pass: drain received frames into the continuity stats, log
@@ -1746,7 +1808,7 @@ static void pick_activate(int i)
 	} else if (i == PICK_ROW_BACK) {
 		screen = SCR_HOME;
 	} else {
-		soak_start(soak_durations[i - 1].ms);
+		soak_start(soak_durations[i - 1].ms, true);
 	}
 }
 
@@ -2151,6 +2213,10 @@ int main(void)
 		if (soak.expired) {
 			soak_finish();
 		}
+
+#ifdef CONFIG_SOAK_RTT
+		rtt_link_service(&rtt_ops);
+#endif
 
 		/* Browser card-op completions (writer thread finishes them). */
 		br_poll();

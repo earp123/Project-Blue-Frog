@@ -11,6 +11,9 @@
 #include "soak_log.h"
 #include "sd_log.h"
 #include "tone_src.h"
+#ifdef CONFIG_SOAK_RTT
+#include "rtt_link.h"
+#endif
 
 #include <zephyr/fs/fs.h>
 #include <zephyr/sys/util.h>
@@ -68,6 +71,7 @@ static struct {
 static atomic_t fsop_state = ATOMIC_INIT(FSOP_IDLE);
 
 static atomic_t log_active;	/* producers gate on this */
+static bool sd_wanted;		/* this run writes to the card */
 static bool file_open;		/* writer-thread side */
 static char log_path[SD_PATH_MAX];
 static const char *err_stage = "";	/* which step failed, for the UI */
@@ -77,6 +81,8 @@ static atomic_t stat_queued;
 static atomic_t stat_written;
 static atomic_t stat_dropped;
 static atomic_t stat_err;
+static atomic_t stat_rtt_written;
+static atomic_t stat_rtt_dropped;
 
 /* Hand a record to the writer. Never blocks: a full ring means the card is
  * not keeping up, and dropping is strictly better than stalling the UI.
@@ -119,7 +125,7 @@ static void fmt_duration(char *out, size_t n, uint32_t ms)
 }
 
 int soak_log_start(enum tdma_role role, uint8_t slot_id, int8_t tx_power_dbm,
-		   uint32_t duration_ms, const char *dir)
+		   uint32_t duration_ms, const char *dir, bool sd)
 {
 	struct soak_rec r = { 0 };
 	struct soak_meta m = { 0 };
@@ -139,6 +145,8 @@ int soak_log_start(enum tdma_role role, uint8_t slot_id, int8_t tx_power_dbm,
 	atomic_set(&stat_written, 0);
 	atomic_set(&stat_dropped, 0);
 	atomic_set(&stat_err, 0);
+	atomic_set(&stat_rtt_written, 0);
+	atomic_set(&stat_rtt_dropped, 0);
 	atomic_set(&cmd_flags, 0);
 	log_path[0] = '\0';
 	err_stage = "";
@@ -182,16 +190,24 @@ int soak_log_start(enum tdma_role role, uint8_t slot_id, int8_t tx_power_dbm,
 	r.slot_id = slot_id;
 	memcpy(r.payload, &m, sizeof(m));
 
+	sd_wanted = sd;
+	if (!sd && !IS_ENABLED(CONFIG_SOAK_RTT)) {
+		return 0;	/* no sink: an unlogged run */
+	}
+
 	/*
 	 * Open on the writer, not here. Producers are enabled immediately and
 	 * META goes in as record 0, so it lands first once the file exists; if
-	 * the open fails the writer disables logging and purges the ring. This
-	 * call does no card I/O at all and always returns at once — the UI can
-	 * never be held up by the card, whatever state it is in.
+	 * the open fails with no other sink, the writer disables logging and
+	 * purges the ring. This call does no card I/O at all and always
+	 * returns at once — the UI can never be held up by the card, whatever
+	 * state it is in.
 	 */
 	atomic_set(&log_active, 1);
 	submit(&r);
-	atomic_or(&cmd_flags, CMD_OPEN);
+	if (sd) {
+		atomic_or(&cmd_flags, CMD_OPEN);
+	}
 
 	return 0;
 }
@@ -287,9 +303,12 @@ void soak_log_get_status(struct soak_log_status *out)
 	const struct sd_log_stats *s = sd_log_get_stats();
 
 	out->active = atomic_get(&log_active) != 0;
+	out->sd = sd_wanted;
 	out->queued = (uint32_t)atomic_get(&stat_queued);
 	out->written = (uint32_t)atomic_get(&stat_written);
 	out->dropped = (uint32_t)atomic_get(&stat_dropped);
+	out->rtt_written = (uint32_t)atomic_get(&stat_rtt_written);
+	out->rtt_dropped = (uint32_t)atomic_get(&stat_rtt_dropped);
 	out->bytes = s->bytes;
 	out->err = (int)atomic_get(&stat_err);
 	out->err_stage = err_stage;
@@ -307,16 +326,19 @@ static void do_open(void)
 	}
 
 	if (rc < 0) {
-		/* Unusable card: report it, stop the producers, and drop what
-		 * was queued rather than churn a full ring for the whole run.
+		/* Unusable card: report it. With no other sink, stop the
+		 * producers and drop what was queued rather than churn a full
+		 * ring for the whole run; with RTT the run carries on there.
 		 */
 		err_stage = sd_log_mount_stage();
 		if (err_stage[0] == '\0') {
 			err_stage = "open";	/* mount was fine, open was not */
 		}
 		atomic_set(&stat_err, rc);
-		atomic_set(&log_active, 0);
-		k_msgq_purge(&rec_msgq);
+		if (!IS_ENABLED(CONFIG_SOAK_RTT)) {
+			atomic_set(&log_active, 0);
+			k_msgq_purge(&rec_msgq);
+		}
 		file_open = false;
 		return;
 	}
@@ -567,6 +589,26 @@ static void do_fsop(void)
 	fsop.result = rc;
 }
 
+/* Every sink but the card: a 64 B memcpy into the RTT ring, when built in. */
+static void write_rtt(const struct soak_rec *r)
+{
+#ifdef CONFIG_SOAK_RTT
+	if (rtt_link_write_rec(r, sizeof(*r))) {
+		atomic_inc(&stat_rtt_written);
+	} else {
+		atomic_inc(&stat_rtt_dropped);
+	}
+#else
+	ARG_UNUSED(r);
+#endif
+}
+
+/*
+ * Writer idle tick. It bounds how late a close handshake is noticed and, with
+ * RTT, how long a bench command waits to be read.
+ */
+#define WRITER_IDLE_MS	(IS_ENABLED(CONFIG_SOAK_RTT) ? 10 : 50)
+
 static void writer_thread_fn(void *p1, void *p2, void *p3)
 {
 	struct soak_rec r;
@@ -588,10 +630,16 @@ static void writer_thread_fn(void *p1, void *p2, void *p3)
 			atomic_set(&fsop_state, FSOP_DONE);
 		}
 
+#ifdef CONFIG_SOAK_RTT
+		/* Bench commands: read on every pass, record or idle. */
+		rtt_link_poll();
+#endif
+
 		/* Wake on a record, or periodically so the close handshake
 		 * cannot be missed.
 		 */
-		if (k_msgq_get(&rec_msgq, &r, K_MSEC(50)) == 0) {
+		if (k_msgq_get(&rec_msgq, &r, K_MSEC(WRITER_IDLE_MS)) == 0) {
+			write_rtt(&r);
 			if (file_open) {
 				int rc = sd_log_write(&r, sizeof(r));
 

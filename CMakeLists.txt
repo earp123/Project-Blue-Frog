@@ -37,6 +37,8 @@ target_sources(app PRIVATE ${tdma_sources}
   src/tdma_console/sd_log.c
   src/tdma_console/soak_log.c
   src/tdma_console/tone_src.c)
+# The RTT bench port (CONFIG_SOAK_RTT), shared the same way.
+target_sources_ifdef(CONFIG_SOAK_RTT app PRIVATE src/tdma_console/rtt_link.c)
 target_include_directories(app PRIVATE src/tdma src/tdma_console)
 # Driver-internal header, needed once at init to detach the native driver's
 # DIO1 gpio_callback (docs/tdma_layering.md). The installed driver *is* the
