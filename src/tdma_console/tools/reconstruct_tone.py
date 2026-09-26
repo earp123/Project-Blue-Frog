@@ -104,7 +104,9 @@ def trusted_records(recs):
       - a shorter run between two trusted ones whose offset and uptime lie
         between theirs (a ring drop between two holes, say);
       - a short final run with the last trusted offset (good records after
-        a hole near the end of the file).
+        a hole near the end of the file), or with a larger one, if it holds
+        at least two valid record types and uptime keeps rising (a ring or
+        RTT drop near the end of the file).
     Returns the trusted records in file order and the count discarded.
     """
     runs = []	# [start, end, offset]
@@ -145,6 +147,11 @@ def trusted_records(recs):
             if poff <= off <= noff and up(pb - 1) <= up(a) and up(b - 1) <= up(na):
                 keep.add(k)
         elif off == poff and up(pb - 1) <= up(a):
+            keep.add(k)
+        elif (off > poff and b - a >= 2 and up(pb - 1) <= up(a) and
+              all(1 <= recs[i].type <= 4 for i in range(a, b))):
+            # A ring or RTT drop near the end: seq steps forward, and what
+            # follows is records of this run, not a hole's bytes.
             keep.add(k)
 
     good = [r for k in sorted(keep) for r in recs[runs[k][0]:runs[k][1]]]
