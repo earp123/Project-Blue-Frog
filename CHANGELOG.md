@@ -34,6 +34,120 @@ Four other variants were retired on 2026-09-25: LoRa send, the telemetry
 console, the TDMA UART-shell test and the UART soak harness (see "Streamlined
 to two unit types"). Their sections below are kept as history.
 
+### RTT bench link + Codec 2 transport test (2026-09-25)
+
+The card is now optional on the bench. Each unit streams its soak records to
+the host over J-Link RTT and takes bench commands on the same link, and a soak
+can carry a pre-encoded Codec 2 speech clip. Task and design:
+[`docs/rtt_link_c2_transport.md`](docs/rtt_link_c2_transport.md). This
+follows the tone option below and reuses its placement rules.
+
+- **Bench-verified: three units, three speech clips, 5 min at +0 dBm, no
+  cards, RTT capture on all three.** Captures are in `soaks/rtt/c2_5m/`
+  (untracked).
+  - PER is 0.000 % on every unit. `rtt_dropped` is 0 and every capture has
+    0 `seq` gaps.
+  - `reconstruct_c2.py` reports 0 missing, 0 dup, 0 stale and 0
+    out-of-order on all six peer streams. Every placed chunk is byte-exact
+    against its sender's clip: 0 mismatched chunks. `--tx` pairing agrees:
+    every chunk each unit sent in the common span arrived.
+  - The only foreign chunks are each secondary's first packet (card #23),
+    seen by both of its peers. See Known limitations for the second layout
+    this run found.
+  - Stage-to-DIO1 latency is 78.7 ms median (77.6 to 79.7 ms) on every
+    link. The one outlier is the master's chunk 0 at 98 ms, staged before
+    its first TX slot. A payload waits almost a whole frame because the
+    runner stages the next chunk right after its own TxDone. The figure
+    excludes encode, decode and playout.
+  - Each peer WAV tracks its clip's reference decode: 20 ms envelope
+    correlation 0.996 to 0.998, equal RMS, no silent frames. The samples are
+    not identical, because Codec 2 synthesises unvoiced sound with random
+    phases, so two decodes of the same frames differ. PESQ was not run: the
+    `pesq` package needs a C compiler to install on this host.
+  - The step 1 check (the 2026-09-25 tone soak, repeated over RTT with no
+    cards) matched the SD result: PER 0, 0 gaps and 0 slips on all six
+    streams, `rtt_dropped` 0.
+- **RTT bench port** (`src/tdma_console/rtt_link.{c,h}`, both units,
+  `CONFIG_SOAK_RTT`, default y). Up 1 carries the same 64 B records the card
+  gets, META first, so a capture file is a soak log and every decoder reads
+  it unchanged. Up 2 carries one reply per command. Down 1 carries commands
+  (`status`, `mode`, `clip`, `soak <min> [sd]`, `stop`) and clip bytes. The
+  up channels are `NO_BLOCK_SKIP`, so a missing host drops whole records
+  (counted) and never corrupts the stream. Commands are read on the
+  `soak_log` writer thread. `status`, `soak` and `stop` are carried out by
+  the unit's UI loop, since stopping a soak waits on the writer. Zephyr's
+  RTT log backend is forced off, so channel 0 and UART logging are
+  unchanged. With `n`, the tree builds as before.
+- **Sinks.** `soak_log` writes every record to RTT when it is built in, and
+  to the card when the run asks for it. A UI start keeps the card; the
+  `soak` command adds it only with `sd`. A card that fails to open no longer
+  stops an RTT run. The LOG page shows RTT drops (`r`) next to ring drops
+  (`d`).
+- **Payload modes.** `CONFIG_SOAK_PAYLOAD_TONE` is now one option of the
+  choice `SOAK_PAYLOAD` (ramp default, tone, clip), so existing build lines
+  still work. With RTT all three sources are linked and `mode` picks the next
+  soak's. The runner latches it at start and makes one `payload_fill()`
+  call (`payload_src.h`).
+- **Clip source** (`src/tdma_console/clip_src.{c,h}`). A 32 KB RAM buffer
+  (`CONFIG_SOAK_CLIP_BUF_KB`) is loaded once per boot with
+  `rtt_link.py clip`. Each payload is an 8 B test header (magic 0xC2, codec
+  0 = 3200, chunk index, clip id = CRC32 low 16 bits) plus four Codec 2 3200
+  frames: 80 ms of speech. Chunk *n* is keyed to `tx_done` like the tone,
+  and the clip loops. Uploads are refused during a soak, on a bad size or
+  CRC, and after a 2 s stall. A clip soak with no clip loaded is refused.
+- **META:** `tone_fs_khz` / `tone_f0_hz` became mode-generic `p8` / `p16`.
+  For clip they hold the codec and the chunk count. Same bytes, so there is
+  no version bump, and tone logs decode as before.
+- **Latency needed a firmware addition.** The task assumed TX records carry
+  a time, but they logged `t_us = 0`. Each unit's slot clock is also its own
+  free-running counter, so times from two units cannot be subtracted
+  directly. The engine gained one public getter, `tdma_now_us()`, a wrapper
+  around `tdma_port_now()`. With RTT the runners log the stage time in each
+  TX record (new flag `SOAK_F_TX_T`). `reconstruct_c2.py` measures the clock
+  offset between two units by common view: both hear a third unit's chunk
+  *k*, and the difference of their two RX times is the offset. This needs
+  three units.
+- **A ramp build without RTT keeps the pre-task TX path.** `soak_data_fn` is
+  instruction-identical to `9d9a1a8` on both units (150 instructions). The
+  image sizes are below:
+
+  | Unit   | Ramp, no RTT | With RTT (ramp, tone or clip default) |
+  |--------|--------------|---------------------------------------|
+  | TFT    | 103,288 B    | 107,428 B                             |
+  | Shield | 117,652 B    | 122,216 B                             |
+
+  RTT adds 32 KB of RAM for the clip buffer and 9.5 KB for the RTT rings.
+- **Host tools** (`src/tdma_console/tools/`):
+  - `rtt_link.py` (pylink-square): `status`, `mode`, `clip`, `soak`,
+    `stop` and `capture`. `--all` runs one process per J-Link. `capture
+    --soak M` starts the run once it is draining and ends when the run does.
+  - `c2clip.py`: `fetch` downloads the three Open Speech Repository files,
+    and `encode` writes a `.c2` clip plus its `_ref.wav` decode.
+  - `c2codec.py`: the one Codec 2 wrapper both tools use. It tries
+    `pycodec2` first, then `c2enc`/`c2dec` on PATH. `pycodec2` has a Windows
+    wheel for CPython 3.13, so no WSL is needed.
+  - `reconstruct_c2.py` does the following:
+    - checks each chunk's header and names card #23's packets;
+    - places chunks by unwrapped chunk index into placed, dup, stale,
+      out-of-order and foreign;
+    - cross-checks placement against arrival time;
+    - compares every chunk byte for byte with the clip;
+    - prints a missing-run histogram that separates log loss from radio
+      loss;
+    - writes a WAV per peer, with gaps as silence;
+    - with `--tx`, pairs each link's TX and RX records for delivery and
+      latency, and optionally writes `--json`.
+  - `test_reconstruct_c2.py`: 12 synthetic cases, all passing.
+- **Clips:** `soaks/clips/OSR_0010_F.c2` (MASTER), `OSR_0030_M.c2` (SEC 1)
+  and `OSR_0011_F.c2` (SEC 2): 420, 586 and 409 chunks. They are Harvard
+  sentences from the Open Speech Repository, credited in
+  `soaks/clips/README`. The WAVs are gitignored.
+- **`reconstruct_tone.trusted_records` fix:** a short final run after a
+  forward `seq` jump (a ring or RTT drop near the end) is now kept instead
+  of being discarded as an SD hole. Output is unchanged on every existing
+  log, including `P0_30M_000`'s 128-record hole, and garbage tails are
+  still discarded.
+
 ### Tone payload option + audio reconstruction (2026-09-25)
 
 A soak can now carry audio: build with `CONFIG_SOAK_PAYLOAD_TONE=y`, and any
@@ -1148,6 +1262,21 @@ native SX126x LoRa driver this project uses. See the README's
 
 ### Known limitations / next
 
+- **RTT has no host-present signal.** A unit cannot tell whether a capture
+  is attached, so `rtt_dropped` (and the LOG page's `r` count) climbs
+  harmlessly whenever a soak runs with no host reading. Start
+  `rtt_link.py capture` before the soak; the 8 KB up buffer covers only a
+  ~2.5 s late start.
+- **RTT stage-to-DIO1 is almost a frame (78.7 ms).** The runner stages
+  the next chunk right after its own TxDone, so a payload waits almost a
+  whole frame before its slot. That is fine for a soak. For live audio,
+  the encode test should stage each chunk just before the last RX slot
+  ahead of its TX slot.
+- **Latency needs three units.**
+  `reconstruct_c2.py --tx` measures the offset between two units' slot
+  clocks by common view of a third unit, so a two-unit run reports
+  delivery but no latency.
+
 - **Touch calibration is in-RAM only** on the TFT unit. That is deliberate:
   it is a mandatory power-on step lasting the session (see above).
 - **TX records carry no frame counter.** `frame_ctr` is a *shared* frame
@@ -1183,7 +1312,11 @@ native SX126x LoRa driver this project uses. See the README's
   previous received packet: its 4-byte header, then its payload bytes 0–35.
   So that RX landed at buffer offset `0x04`, where
   `0x80 + 3 × 44 = 0x104` wraps to. A ramp could not show this, because a
-  ramp shifted by 4 bytes is still a ramp. Because SYNCING → RUNNING is
+  ramp shifted by 4 bytes is still a ramp. The Codec 2 soak (2026-09-25)
+  found a second layout. SEC 1's first packet was the +4 shift. SEC 2's
+  was the last 8 bytes of one received packet (SEC 1's chunk 2) followed by
+  bytes 4–35 of another (the master's chunk 3). So the wrap lands at more
+  than one phase; `reconstruct_c2.py` names both. Because SYNCING → RUNNING is
   one-way, the failure mode to watch for is a unit slow to lock or stuck
   in SYNCING — not one that drops out mid-run.
 - **Three soak logs have come back with an 8 KB hole in them.** The master's file from

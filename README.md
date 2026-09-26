@@ -71,6 +71,21 @@ in the run that way, then turn any unit's log into a WAV with
 [`src/tdma_console/tools/reconstruct_tone.py`](src/tdma_console/tools/reconstruct_tone.py)
 (see [`docs/tone_payload_test.md`](docs/tone_payload_test.md)).
 
+**On the bench the SD card is optional.** Both builds include the J-Link RTT
+bench port (`CONFIG_SOAK_RTT`). It streams every soak record to the host and
+takes commands over the DK's own J-Link USB, driven by
+[`src/tdma_console/tools/rtt_link.py`](src/tdma_console/tools/rtt_link.py)
+(`pip install pylink-square`):
+
+```sh
+rtt_link.py --all capture -o soaks/rtt/ --soak 5   # every unit, 5 min, no cards
+```
+
+A capture file is a soak log. The same port uploads a Codec 2 clip and
+switches the payload (`mode ramp|tone|clip`). The clip tools are
+`c2clip.py` and `reconstruct_c2.py`; see
+[`docs/rtt_link_c2_transport.md`](docs/rtt_link_c2_transport.md).
+
 Flash with the DK's J-Link serial number when more than one board is on USB
 (`nrfutil device list` shows them):
 

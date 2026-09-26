@@ -155,6 +155,31 @@ One summary block per capture, plain text, and a `--json` option for the bench l
 
 Codec 2 on the device (next task: encode test — same link, same header, the clip buffer holds raw PCM and the TX path encodes 4 frames per chunk, with encode time logged); on-device decode or the earpiece; any concealment; a product L3 header; unit pick over RTT; moving Zephyr logging to RTT; native USB; CRC-off runs.
 
+## Outcome (2026-09-25)
+
+Done: all four steps. Results are in the CHANGELOG entry "RTT bench link +
+Codec 2 transport test". In short: step 1 matched the SD tone result over RTT
+with no cards. The 5 min three-clip run had 0 missing, 0 dup and 0 mismatched
+chunks on all six streams, `rtt_dropped` 0, and 78.7 ms median
+stage-to-DIO1. Where the build differs from this write-up:
+
+- **Latency.** TX records logged `t_us = 0`, and the slot clock is
+  free-running per unit, not shared. So "both clocks are the slot clock,
+  synced" does not hold for the counter itself. The engine gained a public
+  `tdma_now_us()` (the one `src/tdma/` change). TX records carry the stage
+  time (`SOAK_F_TX_T`), and `reconstruct_c2.py` measures the clock offset
+  between two units by common view of a third.
+- **Card #23 has two first-packet layouts:** the single +4 shift, and the
+  tail of one received packet followed by the start of another. The tool
+  names both.
+- **PESQ** was not run: `pesq` has no Windows wheel and the host has no C
+  compiler. Codec 2's random-phase synthesis means two decodes of identical
+  frames differ sample by sample, so the byte-exact chunk check is the
+  integrity test, and the WAVs were checked by envelope against
+  `_ref.wav`.
+- **Clip names:** `OSR_0010_F.c2`, `OSR_0030_M.c2` and `OSR_0011_F.c2`.
+  They run 34–47 s (13–19 KB) rather than ~30 s / 12 KB.
+
 ## CHANGELOG
 
 New entry: the RTT bench link (channels, commands, sink model, "the card is now optional on the bench"), the payload-mode choice replacing the tone bool, `clip_src` and the test header layout, the META rename, the three host tools, the OSR clips and attribution, and the bench result. Cross-reference the tone entry. Add to Known limitations: RTT has no host-present signal, so `rtt_dropped` climbs harmlessly whenever no capture is attached.
