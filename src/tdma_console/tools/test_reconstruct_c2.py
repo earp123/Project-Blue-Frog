@@ -228,6 +228,22 @@ def shifted_first_packet(tmp):
 
 
 @case
+def straddled_first_packet(tmp):
+    # Card #23's other layout, seen on the bench 2026-09-25: the tail of one
+    # received packet (8 B of SEC 1 audio) then bytes 4..35 of another (the
+    # master's chunk 3). Here: slot 2's first packet carries the tail of the
+    # master's chunk 2 and the start of chunk 3.
+    def s2(f, log):
+        if f == 0:
+            log.rx(f, 2, payload(A, 2)[32:40] + payload(A, 3)[4:36])
+            return True
+        return False
+    b = slot_line(run(base(slot2=s2), [A, B], tmp), 2)
+    expect(b, "foreign 1", "card #23 received bytes in the TX region",
+           "[0:8] = clip0.c2 chunk 2 +24", ":40] = clip0.c2 chunk")
+
+
+@case
 def rtt_seq_gap(tmp):
     # 10 records lost between frames 60 and 63 on the capture: a log gap.
     def s0(f, log):

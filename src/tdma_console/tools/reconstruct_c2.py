@@ -11,9 +11,11 @@ Usage:
         --clip OSR_0011_F.c2 [-o out_dir] [--tx peer.bin ...] [--json out.json]
 
 Per peer slot:
-  1. Header check (magic 0xC2, codec 0 = 3200). A bad header is "foreign";
-     card #23's first packet (a received packet written at TX buffer offset
-     4) is recognised by the shifted header and named as such.
+  1. Header check (magic 0xC2, codec 0 = 3200). A bad header is "foreign".
+     Card #23's first packet is received bytes left in the TX region: seen
+     as one packet shifted by 4 (its header at payload offset 4), or as the
+     tail of one received packet followed by the start of another. Both are
+     named, with the clip bytes they carry.
   2. Placement by chunk index, unwrapped from 16 bits. Each chunk is placed,
      a dup (same index, same bytes), stale (same index, different bytes:
      should never happen) or out-of-order (an index below one already seen).
@@ -111,6 +113,40 @@ def shifted_header(p):
     return struct.unpack_from("<HH", p, 6)
 
 
+FRAG_MIN = 8	# shortest run of clip bytes worth naming (one Codec 2 frame)
+
+
+def clip_fragments(p, clips):
+    """Runs of >= FRAG_MIN payload bytes found verbatim in a supplied clip.
+
+    Returns [(payload offset, length, clip, chunk, byte in chunk)], greedy
+    longest match first from the left. Random bytes essentially never match
+    8 bytes of a clip by chance, so a hit means received audio.
+    """
+    out = []
+    i = 0
+    while i <= len(p) - FRAG_MIN:
+        best = None
+        for clip in clips.values():
+            n = FRAG_MIN
+            at = clip.data.find(p[i:i + n])
+            if at < 0:
+                continue
+            while i + n < len(p):
+                nxt = clip.data.find(p[i:i + n + 1])
+                if nxt < 0:
+                    break
+                n, at = n + 1, nxt
+            if best is None or n > best[1]:
+                best = (i, n, clip, at // CHUNK, at % CHUNK)
+        if best is None:
+            i += 1
+            continue
+        out.append(best)
+        i += best[1]
+    return out
+
+
 class Clip:
     def __init__(self, path):
         with open(path, "rb") as f:
@@ -197,8 +233,17 @@ def analyse_slot(chunks, clips):
                                % (c.frame, sh[1], sh[0],
                                   " (bytes match)" if ok else ""))
             else:
-                foreign.append("frame %d: bad header %s"
-                               % (c.frame, p[:8].hex()))
+                frags = clip_fragments(p, clips)
+                if frags:
+                    foreign.append(
+                        "frame %d: card #23 received bytes in the TX "
+                        "region: %s" % (c.frame, ", ".join(
+                            "[%d:%d] = %s chunk %d +%d" % (
+                                o, o + n, cl.name, k, b)
+                            for o, n, cl, k, b in frags)))
+                else:
+                    foreign.append("frame %d: bad header %s"
+                                   % (c.frame, p[:8].hex()))
             continue
 
         idx16, cid = h
