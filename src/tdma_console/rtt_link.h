@@ -20,10 +20,14 @@
  *   status                  ok status role= slot= sync= soak= mode=
  *                           clip=<chunks>/<crc32> lead= rtt_drop=
  *                           pretx=<pickups>/<staged>/<min>/<last margin us>
- *   mode ramp|tone|clip     payload source for the next soak start
+ *   mode ramp|tone|clip|pcm payload source for the next soak start (pcm
+ *                           only with CONFIG_SOAK_C2_ENCODE)
  *   clip <nbytes> <crc32>   followed by exactly nbytes raw bytes: load the
  *                           clip buffer (clip_src.h); refused while a soak
  *                           runs, or if the size or CRC is wrong
+ *   phase <us>              PCM mode: each 80 ms chunk of the simulated
+ *                           mic becomes available this long before its TX
+ *                           boundary, from the next soak (c2_enc.h)
  *   lead <us>               stage each payload this long before the unit's
  *                           TX boundary, from the next soak (0 = at once,
  *                           right after TxDone; the default)
@@ -93,5 +97,8 @@ enum soak_payload_mode rtt_link_mode(void);
 
 /* Staging lead for the next soak, us ("lead" command; 0 = at once). */
 uint32_t rtt_link_lead_us(void);
+
+/* PCM availability before the TX boundary for the next soak ("phase"). */
+uint32_t rtt_link_phase_us(void);
 
 #endif /* RTT_LINK_H_ */

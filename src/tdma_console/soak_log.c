@@ -189,6 +189,10 @@ int soak_log_start(enum tdma_role role, uint8_t slot_id, int8_t tx_power_dbm,
 		m.payload_mode = SOAK_PAYLOAD_CLIP;
 		m.p8 = CLIP_CODEC_3200;
 		m.p16 = (uint16_t)clip_src_chunks();
+	} else if (PAYLOAD_PCM_LINKED && mode == SOAK_PAYLOAD_PCM) {
+		m.payload_mode = SOAK_PAYLOAD_PCM;
+		m.p8 = CLIP_CODEC_3200;
+		m.p16 = (uint16_t)payload_pcm_chunks();
 	}
 
 	r.type = SOAK_REC_META;
@@ -256,7 +260,8 @@ void soak_log_tx(const uint8_t payload[TDMA_PAYLOAD_LEN], uint8_t slot_id,
 }
 
 void soak_log_tx_at(const uint8_t payload[TDMA_PAYLOAD_LEN], uint8_t slot_id,
-		    uint8_t sync_state, uint32_t stage_us, uint32_t lead_us)
+		    uint8_t sync_state, uint32_t stage_us, uint32_t lead_us,
+		    uint32_t enc_us)
 {
 	struct soak_rec r = { 0 };
 
@@ -266,6 +271,13 @@ void soak_log_tx_at(const uint8_t payload[TDMA_PAYLOAD_LEN], uint8_t slot_id,
 	r.t_us = stage_us;
 	r.frame_ctr = (uint16_t)MIN(lead_us, 0xFFFFU);
 	r.flags = SOAK_F_NO_CTR | SOAK_F_TX_T | SOAK_F_TX_LEAD;
+	if (enc_us != 0) {
+		enc_us = MIN(enc_us, 0xFFFFFFU);
+		r.rsvd[0] = (uint8_t)enc_us;
+		r.rsvd[1] = (uint8_t)(enc_us >> 8);
+		r.rsvd[2] = (uint8_t)(enc_us >> 16);
+		r.flags |= SOAK_F_TX_ENC;
+	}
 	memcpy(r.payload, payload, TDMA_PAYLOAD_LEN);
 
 	submit(&r);

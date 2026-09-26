@@ -4,6 +4,7 @@
 Usage:
     c2clip.py fetch [-d soaks/clips]        # download the three OSR files
     c2clip.py encode in.wav -o clip.c2 [--mode 3200]
+    c2clip.py pcm in.wav -o clip.pcm [--seconds 8]    # encode test
 
 encode takes 8 kHz, 16-bit mono PCM (Codec 2's native input), encodes it,
 trims to a whole number of 32-byte payload chunks (4 frames = 80 ms at 3200),
@@ -11,6 +12,11 @@ and writes clip.c2 plus clip_ref.wav, the clip's own decode: what a lossless
 link should play back, and the reference reconstruct_c2.py scores against.
 It prints the chunk count and the CRC32 that the unit reports after
 `rtt_link.py clip clip.c2`.
+
+pcm cuts the first --seconds of a WAV to a whole number of 80 ms chunks and
+writes it as raw little-endian 16-bit samples, for the on-device encode test
+(`rtt_link.py clip clip.pcm`, `mode pcm`; docs/c2_encode_test.md). The
+device's 128 KB buffer holds 8 s.
 
 Speech: the Open Speech Repository (Telchemy), Harvard sentences, free to use,
 copy and publish. Credit: "Open Speech Repository". One file per unit, so each
@@ -103,6 +109,22 @@ def cmd_encode(args):
     print("%s: reference decode" % ref_path(args.out))
 
 
+PCM_CHUNK = 640		# samples per 80 ms chunk (c2_enc.h)
+
+
+def cmd_pcm(args):
+    pcm = read_wav(args.wav)
+    n = min(len(pcm), int(args.seconds * c2codec.FS)) // PCM_CHUNK * PCM_CHUNK
+    if n == 0:
+        sys.exit("%s: shorter than one 80 ms chunk" % args.wav)
+    data = pcm[:n].astype("<i2").tobytes()
+    with open(args.out, "wb") as f:
+        f.write(data)
+    crc = zlib.crc32(data) & 0xFFFFFFFF
+    print("%s: %d B, %d chunks (%.2f s), crc32 %08x, clip_id %04x" % (
+        args.out, len(data), n // PCM_CHUNK, n / c2codec.FS, crc, crc & 0xFFFF))
+
+
 def main():
     ap = argparse.ArgumentParser(
         description=__doc__.split("\n\n")[0],
@@ -115,8 +137,12 @@ def main():
     p.add_argument("-o", "--out", required=True)
     p.add_argument("--mode", type=int, default=3200,
                    choices=sorted(c2codec.MODES))
+    p = sub.add_parser("pcm", help="WAV -> raw PCM excerpt (encode test)")
+    p.add_argument("wav")
+    p.add_argument("-o", "--out", required=True)
+    p.add_argument("--seconds", type=float, default=8.0)
     args = ap.parse_args()
-    {"fetch": cmd_fetch, "encode": cmd_encode}[args.cmd](args)
+    {"fetch": cmd_fetch, "encode": cmd_encode, "pcm": cmd_pcm}[args.cmd](args)
 
 
 if __name__ == "__main__":

@@ -16,6 +16,7 @@ Usage:
     rtt_link.py --sn N stop
     rtt_link.py --sn N mode ramp|tone|clip
     rtt_link.py --sn N lead 20000             # stage 20 ms before TX; 0 = at once
+    rtt_link.py --sn N phase 20000            # pcm: chunk ready 20 ms before TX
     rtt_link.py --sn N clip clip_F.c2         # "clip <n> <crc>" + the bytes
     rtt_link.py --sn N capture -o m.bin [--minutes M] [--soak M [--sd]]
     rtt_link.py --all capture -o soaks/rtt/ [--soak M]
@@ -105,11 +106,15 @@ class Link:
         return bytes(self.jl.rtt_read(ch, n))
 
     def write(self, data, timeout=5.0):
-        """Push all of data into down 1, waiting for the unit to drain it."""
+        """Push all of data into down 1, waiting for the unit to drain it.
+        Gives up only after timeout seconds with no progress: a 128 KB PCM
+        clip takes a while through the 1 KB down buffer."""
         deadline = time.monotonic() + timeout
         while data:
             n = self.jl.rtt_write(DOWN_CTL, list(data))
             data = data[n:]
+            if n:
+                deadline = time.monotonic() + timeout
             if data:
                 if time.monotonic() > deadline:
                     raise SystemExit(f"J-Link {self.sn}: unit stopped "
@@ -267,6 +272,8 @@ def run_one(args):
             line = f"mode {args.mode}"
         elif args.cmd == "lead":
             line = f"lead {args.us}"
+        elif args.cmd == "phase":
+            line = f"phase {args.us}"
         elif args.cmd == "clip":
             return cmd_clip(link, args)
         elif args.cmd == "capture":
@@ -320,7 +327,11 @@ def main(argv=None):
     p.add_argument("--sd", action="store_true", help="also log to the card")
     sub.add_parser("stop")
     p = sub.add_parser("mode")
-    p.add_argument("mode", choices=["ramp", "tone", "clip"])
+    p.add_argument("mode", choices=["ramp", "tone", "clip", "pcm"])
+    p = sub.add_parser("phase")
+    p.add_argument("us", type=int,
+                   help="pcm mode: each 80 ms chunk becomes available this "
+                        "many us before its TX boundary, from the next soak")
     p = sub.add_parser("lead")
     p.add_argument("us", type=int,
                    help="stage each payload this many us before the unit's "

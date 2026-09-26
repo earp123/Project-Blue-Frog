@@ -54,6 +54,16 @@ uint32_t clip_src_crc(void)
 	return clip_src_valid() ? clip_crc : 0;
 }
 
+const uint8_t *clip_src_data(uint32_t *len)
+{
+	if (!clip_src_valid()) {
+		*len = 0;
+		return NULL;
+	}
+	*len = clip_chunks * CLIP_CHUNK;
+	return clip_buf;
+}
+
 int clip_src_load_begin(uint32_t nbytes, uint32_t crc)
 {
 	atomic_set(&clip_valid, 0);

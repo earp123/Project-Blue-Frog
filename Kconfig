@@ -83,14 +83,33 @@ config SOAK_PAYLOAD_CLIP
 
 endchoice
 
+config SOAK_C2_ENCODE
+	bool "Encode Codec 2 on the device (encode test)"
+	depends on SOAK_RTT
+	select FPU
+	select FPU_SHARING
+	select INIT_STACKS
+	select THREAD_STACK_INFO
+	help
+	  Link the vendored Codec 2 (external/codec2, LGPL-2.1) and add the
+	  "pcm" payload mode: the clip buffer holds raw 8 kHz 16-bit PCM,
+	  a frame-locked simulated microphone makes each 80 ms chunk
+	  available a set time before its TX boundary, and an encoder thread
+	  turns it into four Codec 2 3200 frames behind the clip test header.
+	  Encode time is logged per TX record. Test firmware only: the
+	  product licensing of Codec 2 is not settled. See
+	  docs/c2_encode_test.md.
+
 config SOAK_CLIP_BUF_KB
 	int "Clip buffer size (KB)"
+	default 128 if SOAK_C2_ENCODE
 	default 32
 	range 1 256
 	depends on SOAK_RTT
 	help
 	  Static RAM for the uploaded clip. 32 KB holds ~80 s of Codec 2
-	  3200. The clip must be a multiple of 32 bytes and no larger.
+	  3200. The clip must be a multiple of 32 bytes and no larger. Raw
+	  PCM for the encode test is 16 KB/s, so 128 KB holds 8 s.
 
 config SOAK_RTT
 	bool "Soak bench port over J-Link RTT"
@@ -119,6 +138,20 @@ config SEGGER_RTT_MAX_NUM_UP_BUFFERS
 config SEGGER_RTT_MAX_NUM_DOWN_BUFFERS
 	int
 	default 2 if SOAK_RTT
+
+# The encode test's libc heap: Codec 2 allocates its state with malloc once
+# per run. A fixed arena keeps the RAM budget visible (the default takes
+# whatever RAM is left).
+config COMMON_LIBC_MALLOC_ARENA_SIZE
+	int
+	default 49152 if SOAK_C2_ENCODE
+
+# The encoder thread is preemptible so it can never hold off the radio or
+# data threads. It must still outrank the UI loop, whose repaints run long;
+# preemptible priority 0 is the highest there is, so main steps down one.
+config MAIN_THREAD_PRIORITY
+	int
+	default 1 if SOAK_C2_ENCODE
 
 # Turning RTT on would otherwise also turn on Zephyr's RTT log backend, a
 # blocking writer on channel 0 that stalls every log call while no host is

@@ -48,6 +48,11 @@ bool clip_src_valid(void);
 uint32_t clip_src_chunks(void);	/* 0 unless valid */
 uint32_t clip_src_crc(void);	/* 0 unless valid */
 
+/* The loaded clip's raw bytes and length; NULL / 0 unless valid. The PCM
+ * mode reads it as 16-bit samples (c2_enc.h).
+ */
+const uint8_t *clip_src_data(uint32_t *len);
+
 /*
  * Loader, for the RTT command channel (soak_log writer thread). begin marks
  * the clip invalid and checks the size (-EINVAL: 0, not a multiple of

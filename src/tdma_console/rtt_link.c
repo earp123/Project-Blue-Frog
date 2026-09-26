@@ -65,10 +65,19 @@ uint32_t rtt_link_lead_us(void)
 	return (uint32_t)atomic_get(&next_lead_us);
 }
 
+/* A generous default: a whole 20 ms slot for the encoder. */
+static atomic_t next_phase_us = ATOMIC_INIT(20000);
+
+uint32_t rtt_link_phase_us(void)
+{
+	return (uint32_t)atomic_get(&next_phase_us);
+}
+
 static const char *const mode_name[] = {
 	[SOAK_PAYLOAD_RAMP] = "ramp",
 	[SOAK_PAYLOAD_TONE] = "tone",
 	[SOAK_PAYLOAD_CLIP] = "clip",
+	[SOAK_PAYLOAD_PCM] = "pcm",
 };
 
 enum soak_payload_mode rtt_link_mode(void)
@@ -234,13 +243,18 @@ static void handle_line(char *s)
 
 	if (strcmp(tok[0], "mode") == 0 && n == 2) {
 		for (int m = 0; m < (int)ARRAY_SIZE(mode_name); m++) {
-			if (strcmp(tok[1], mode_name[m]) == 0) {
+			if (strcmp(tok[1], mode_name[m]) == 0 &&
+			    (m != SOAK_PAYLOAD_PCM || PAYLOAD_PCM_LINKED)) {
 				atomic_set(&next_mode, m);
 				reply("ok mode %s", mode_name[m]);
 				return;
 			}
 		}
 		reply("err cmd");
+	} else if (strcmp(tok[0], "phase") == 0 && n == 2 &&
+		   parse_u32(tok[1], &lead) && lead <= LEAD_MAX_US) {
+		atomic_set(&next_phase_us, (atomic_val_t)lead);
+		reply("ok phase %u", lead);
 	} else if (strcmp(tok[0], "lead") == 0 && n == 2 &&
 		   parse_u32(tok[1], &lead) && lead <= LEAD_MAX_US) {
 		atomic_set(&next_lead_us, (atomic_val_t)lead);
@@ -351,12 +365,31 @@ static void do_status(const struct rtt_link_ops *ops)
 	/* pretx = pickups/with a payload/min and last margin (us) before the
 	 * TX boundary; the minimum is this run's (tdma.h).
 	 */
+#ifdef CONFIG_SOAK_C2_ENCODE
+	struct c2_enc_stats es;
+
+	c2_enc_get_stats(&es);
+	/* enc = encoded/late/skipped/max us/worst wake after availability/
+	 * encoder stack never used (bytes)
+	 */
+	reply("ok status %s sync=%s soak=%s mode=%s clip=%u/%08x lead=%u "
+	      "rtt_drop=%u pretx=%u/%u/%d/%d phase=%u enc=%u/%u/%u/%u/%u/%u",
+	      unit,
+	      sync_name(t->sync_state),
+	      u.soak_running ? "run" : "idle", mode_name[rtt_link_mode()],
+	      clip_src_chunks(), clip_src_crc(), rtt_link_lead_us(),
+	      ls.rtt_dropped, t->pre_tx_pickups, t->pre_tx_staged,
+	      (int)t->pre_tx_margin_min_us, (int)t->pre_tx_margin_last_us,
+	      rtt_link_phase_us(), es.encoded, es.late, es.skipped,
+	      es.enc_max_us, es.start_late_max_us, es.stack_unused);
+#else
 	reply("ok status %s sync=%s soak=%s mode=%s clip=%u/%08x lead=%u "
 	      "rtt_drop=%u pretx=%u/%u/%d/%d", unit, sync_name(t->sync_state),
 	      u.soak_running ? "run" : "idle", mode_name[rtt_link_mode()],
 	      clip_src_chunks(), clip_src_crc(), rtt_link_lead_us(),
 	      ls.rtt_dropped, t->pre_tx_pickups, t->pre_tx_staged,
 	      (int)t->pre_tx_margin_min_us, (int)t->pre_tx_margin_last_us);
+#endif
 }
 
 static void do_soak(const struct rtt_link_ops *ops)

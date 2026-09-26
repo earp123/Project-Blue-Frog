@@ -279,6 +279,7 @@ static struct {
 	uint32_t tx_stage_us;
 	uint32_t tx_lead_us;	/* and how long before its TX boundary */
 	uint32_t lead_us;	/* staging lead, latched at start (0 = at once) */
+	uint32_t tx_enc_us;	/* PCM mode: the armed chunk's encode time */
 } soak;
 
 static int64_t soak_last_draw_ms;
@@ -866,6 +867,22 @@ static void soak_start(int64_t duration_ms, bool sd)
 		return;
 	}
 
+#ifdef CONFIG_SOAK_C2_ENCODE
+	/* PCM mode: the on-device encoder, fresh state per run. It waits for
+	 * the engine to reach RUNNING before its first chunk.
+	 */
+	if (mode == SOAK_PAYLOAD_PCM) {
+		rc = c2_enc_start(rtt_link_phase_us());
+		if (rc < 0) {
+			snprintf(home_msg, sizeof(home_msg), "enc err %d", rc);
+			tdma_stop();
+			soak_log_stop();
+			screen = SCR_HOME;
+			return;
+		}
+	}
+#endif
+
 	/*
 	 * Baseline counter snapshot at t=0. The engine's counters are not
 	 * reset by tdma_start(), so they carry over between soaks in one boot;
@@ -915,6 +932,9 @@ static void soak_finish(void)
 	k_mutex_unlock(&soak_lock);
 
 	tdma_stop();
+#ifdef CONFIG_SOAK_C2_ENCODE
+	c2_enc_stop();
+#endif
 
 	/* One last counter snapshot, then drain and close the log. */
 	soak_log_stats(tdma_get_telemetry());
@@ -1038,7 +1058,7 @@ static void soak_data_step(void)
 		if (IS_ENABLED(CONFIG_SOAK_RTT)) {
 			soak_log_tx_at(soak.tx_payload, my_slot,
 				       t->sync_state, soak.tx_stage_us,
-				       soak.tx_lead_us);
+				       soak.tx_lead_us, soak.tx_enc_us);
 		} else {
 			soak_log_tx(soak.tx_payload, my_slot,
 				    t->sync_state);
@@ -1054,15 +1074,28 @@ static void soak_data_step(void)
 		 * and a missed frame's payload is dropped rather than delaying
 		 * the rest.
 		 */
-		payload_fill(soak.tx_payload, soak.payload_mode, my_slot,
-			     t->tx_done - soak.snap.tx_done, soak.seq);
+		uint32_t enc_us = 0;
+		bool have = true;
+
+		if (PAYLOAD_PCM_LINKED &&
+		    soak.payload_mode == SOAK_PAYLOAD_PCM) {
+			/* The encoder's chunk for our next boundary, once
+			 * it is done; until then stage nothing.
+			 */
+			have = payload_take_pcm(soak.tx_payload, &enc_us);
+		} else {
+			payload_fill(soak.tx_payload, soak.payload_mode,
+				     my_slot, t->tx_done - soak.snap.tx_done,
+				     soak.seq);
+		}
 		uint32_t stage_us = IS_ENABLED(CONFIG_SOAK_RTT) ?
 					    tdma_now_us() : 0;
 
-		if (tdma_tx_submit(soak.tx_payload) == 0) {
+		if (have && tdma_tx_submit(soak.tx_payload) == 0) {
 			if (IS_ENABLED(CONFIG_SOAK_RTT)) {
 				soak.tx_stage_us = stage_us;
 				soak.tx_lead_us = lead_us;
+				soak.tx_enc_us = enc_us;
 			}
 			soak.tx_armed = true;
 			soak.tx_done_at_arm = t->tx_done;

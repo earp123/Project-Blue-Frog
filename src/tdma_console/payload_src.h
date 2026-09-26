@@ -29,12 +29,19 @@
 #ifdef CONFIG_SOAK_RTT
 #include "rtt_link.h"
 #endif
+#ifdef CONFIG_SOAK_C2_ENCODE
+#include "c2_enc.h"
+#endif
 
 /* A source is linked if the bench port can select it, or if it is the one. */
 #define PAYLOAD_TONE_LINKED \
 	(IS_ENABLED(CONFIG_SOAK_RTT) || IS_ENABLED(CONFIG_SOAK_PAYLOAD_TONE))
 #define PAYLOAD_CLIP_LINKED \
 	(IS_ENABLED(CONFIG_SOAK_RTT) || IS_ENABLED(CONFIG_SOAK_PAYLOAD_CLIP))
+/* The on-device encoder: only with CONFIG_SOAK_C2_ENCODE, and never a Kconfig
+ * default (it needs a PCM clip, uploaded over RTT, and "mode pcm").
+ */
+#define PAYLOAD_PCM_LINKED	IS_ENABLED(CONFIG_SOAK_C2_ENCODE)
 
 /* The Kconfig choice, as the boot default. */
 #define PAYLOAD_DEFAULT_MODE \
@@ -52,11 +59,47 @@ static inline enum soak_payload_mode payload_next_mode(void)
 #endif
 }
 
-/* True if a soak can start in mode (a clip must be loaded). */
+/* True if a soak can start in mode (a clip must be loaded; PCM mode needs
+ * it PCM-sized).
+ */
 static inline bool payload_ready(enum soak_payload_mode mode)
 {
+#ifdef CONFIG_SOAK_C2_ENCODE
+	if (mode == SOAK_PAYLOAD_PCM) {
+		return c2_enc_pcm_ok();
+	}
+#endif
 	return !(PAYLOAD_CLIP_LINKED && mode == SOAK_PAYLOAD_CLIP) ||
 	       clip_src_valid();
+}
+
+/* PCM mode: 80 ms chunks in the clip buffer (META). */
+static inline uint32_t payload_pcm_chunks(void)
+{
+#ifdef CONFIG_SOAK_C2_ENCODE
+	uint32_t len;
+
+	(void)clip_src_data(&len);
+	return len / C2_ENC_CHUNK_PCM_BYTES;
+#else
+	return 0;
+#endif
+}
+
+/*
+ * PCM mode: the encoder's chunk for this unit's next TX boundary, if it is
+ * done (c2_enc_take()). Always false in other builds.
+ */
+static inline bool payload_take_pcm(uint8_t out[TDMA_PAYLOAD_LEN],
+				    uint32_t *enc_us)
+{
+#ifdef CONFIG_SOAK_C2_ENCODE
+	return c2_enc_take(tdma_next_tx_us(), out, enc_us);
+#else
+	ARG_UNUSED(out);
+	ARG_UNUSED(enc_us);
+	return false;
+#endif
 }
 
 /*

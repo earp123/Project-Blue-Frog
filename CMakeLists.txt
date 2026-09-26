@@ -43,6 +43,38 @@ target_sources(app PRIVATE ${tdma_sources}
 target_sources_ifdef(CONFIG_SOAK_RTT app PRIVATE
   src/tdma_console/rtt_link.c
   src/tdma_console/clip_src.c)
+
+# Codec 2 on the device (CONFIG_SOAK_C2_ENCODE): the vendored subset in
+# external/codec2 (LGPL-2.1, see its README) as its own static library, and
+# the encoder thread that drives it. __EMBEDDED__ keeps the codebooks const
+# (flash) and routes the codec's MALLOC to codec2_malloc() (c2_enc.c);
+# -ffp-contract=off stops
+# GCC fusing multiply-adds, so the device computes what the host reference
+# (pycodec2) computes. Upstream code, upstream warnings: silenced.
+if(CONFIG_SOAK_C2_ENCODE)
+  FILE(GLOB codec2_sources external/codec2/src/*.c)
+  add_library(codec2 STATIC ${codec2_sources})
+  target_link_libraries(codec2 PRIVATE zephyr_interface)
+  # Only mode 3200 is compiled in; the others' tables never reach flash.
+  target_compile_definitions(codec2 PUBLIC CODEC2_MODE_EN_DEFAULT=0
+    CODEC2_MODE_3200_EN=1)
+  target_compile_definitions(codec2 PUBLIC __EMBEDDED__)
+  # Upstream builds in GNU C; Zephyr's -std=c99 hides M_PI and friends.
+  target_compile_definitions(codec2 PRIVATE _DEFAULT_SOURCE)
+  # -O2 through a force-included pragma (external/codec2_opt.h): Zephyr's
+  # -Os lands after target options, so -O2 here would lose.
+  # -fsingle-precision-constant: the sources write constants like 2.0*PI,
+  # which promote float maths to double, and the M33's FPU is single
+  # precision only, so every such expression ran in software
+  # (__aeabi_dmul & co. in every hot file).
+  target_compile_options(codec2 PRIVATE -w -ffp-contract=off
+    -fsingle-precision-constant
+    -include ${CMAKE_CURRENT_SOURCE_DIR}/external/codec2_opt.h)
+  target_include_directories(codec2 PUBLIC external/codec2/src
+    external/codec2/include)
+  target_link_libraries(app PRIVATE codec2)
+  target_sources(app PRIVATE src/tdma_console/c2_enc.c)
+endif()
 target_include_directories(app PRIVATE src/tdma src/tdma_console)
 # Driver-internal header, needed once at init to detach the native driver's
 # DIO1 gpio_callback (docs/tdma_layering.md). The installed driver *is* the

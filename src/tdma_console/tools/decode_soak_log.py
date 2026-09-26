@@ -33,12 +33,12 @@ META_FMT = "<IHBBIIIIBBHbBBBIBBH"
 MAGIC = 0x4B414F53  # "SOAK"
 # META payload_mode (zero in pre-tone v2 files). p8 / p16 mean, per mode:
 # ramp 0 / 0, tone fs kHz / f0 Hz, clip codec / clip chunk count.
-PAYLOAD_RAMP, PAYLOAD_TONE, PAYLOAD_CLIP = 0, 1, 2
+PAYLOAD_RAMP, PAYLOAD_TONE, PAYLOAD_CLIP, PAYLOAD_PCM = 0, 1, 2, 3
 CODEC_NAME = {0: "3200"}	# Codec 2 mode enum in the clip header
 
 # One on-disk record, unpacked. index is the record's position in the file.
 Rec = namedtuple("Rec", "index type slot_id sync flags t_us frame_ctr rssi snr"
-                        " seq uptime_ms payload")
+                        " seq uptime_ms payload rsvd")
 
 SOAK_LOG_VERSION = 2	# newest format this decoder writes assumptions for
 REC_META, REC_RX, REC_TX, REC_STATS = 1, 2, 3, 4
@@ -67,11 +67,12 @@ CSV_FIELDS = ["seq", "type", "uptime_ms", "t_us", "slot_id", "sync",
 def iter_records(blob):
     """Yield every whole 64-byte record in blob as a Rec, in file order."""
     for i in range(len(blob) // REC_SIZE):
-        (rtype, slot_id, sync, flags, t_us, frame_ctr, rssi, snr, _rsvd,
+        (rtype, slot_id, sync, flags, t_us, frame_ctr, rssi, snr, rsvd,
          seq, uptime_ms, payload) = struct.unpack_from(REC_FMT, blob,
                                                        i * REC_SIZE)
+        # rsvd last, so positional users of the older fields are unchanged.
         yield Rec(i, rtype, slot_id, sync, flags, t_us, frame_ctr, rssi, snr,
-                  seq, uptime_ms, payload)
+                  seq, uptime_ms, payload, rsvd)
 
 
 def parse_meta(payload):
@@ -103,6 +104,8 @@ def parse_meta(payload):
         meta["tone_fs_khz"], meta["tone_f0_hz"] = p8, p16
     elif payload_mode == PAYLOAD_CLIP:
         meta["clip_codec"], meta["clip_chunks"] = p8, p16
+    elif payload_mode == PAYLOAD_PCM:
+        meta["clip_codec"], meta["pcm_chunks"] = p8, p16
     return meta
 
 
@@ -114,6 +117,10 @@ def payload_desc(meta):
         return "payload=clip codec=%s chunks=%d" % (
             CODEC_NAME.get(meta["clip_codec"], "?%d" % meta["clip_codec"]),
             meta["clip_chunks"])
+    if meta["payload_mode"] == PAYLOAD_PCM:
+        return "payload=pcm codec=%s chunks=%d (encoded on the device)" % (
+            CODEC_NAME.get(meta["clip_codec"], "?%d" % meta["clip_codec"]),
+            meta["pcm_chunks"])
     if meta["payload_mode"] == PAYLOAD_RAMP:
         return "payload=ramp"
     return "payload=unknown(%d)" % meta["payload_mode"]

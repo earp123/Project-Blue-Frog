@@ -34,6 +34,49 @@ Four other variants were retired on 2026-09-25: LoRa send, the telemetry
 console, the TDMA UART-shell test and the UART soak harness (see "Streamlined
 to two unit types"). Their sections below are kept as history.
 
+### On-device Codec 2 encode test (2026-09-26)
+
+Each unit encodes speech itself and sends it. The encoder is fast enough,
+correct, and delivered intact over the air. Details:
+[`docs/c2_encode_test.md`](docs/c2_encode_test.md).
+
+- **Codec 2 vendored** into `external/codec2/` (LGPL-2.1, 1.2.0) by
+  `scripts/vendor_codec2.py`. That includes a Python port of upstream's
+  codebook generator, since this machine has no host C compiler. It is
+  linked only with `CONFIG_SOAK_C2_ENCODE` (default off, mode 3200 only).
+  Test firmware: product licensing is open.
+- **Encode builds:**
+  - A PCM payload mode: a frame-locked simulated mic makes each 80 ms chunk
+    available `phase` before its TX boundary, and an encoder thread
+    (`src/tdma_console/c2_enc.c`) turns it into four 3200 frames.
+  - The TX record logs each chunk's encode time (`SOAK_F_TX_ENC`).
+  - The app core runs at 128 MHz, the clip buffer is 128 KB, there is a
+    48 KB libc heap, and the encoder stack is 20 KB.
+- **Speed:** ~100 ms per chunk at first; 26.5–28.3 ms median, 29.3 ms max
+  after two fixes:
+  - the app core had been left at 64 MHz;
+  - the codec's unsuffixed constants were forcing software
+    double-precision maths on the single-precision FPU
+    (`-fsingle-precision-constant`).
+
+  That is about 35 % of the core.
+- **Correct:** 96–97 % of chunks are bit-exact with `pycodec2`, and the
+  rest differ in 1–2 bits, from deterministic float rounding. Over the air,
+  every chunk arrives byte for byte.
+- **Phase sweep:** clean at 34 ms and above, stale re-sends below. Use
+  36 ms. That makes first sample to peer DIO1 ~124 ms, before decode and
+  playout.
+- **Next for the audio path:** encode per 20 ms frame as it is captured,
+  and stage from the encoder. That is ~12 ms of phase, ~100 ms first
+  sample to peer.
+- **Tools:** `c2clip.py pcm`, `c2_encode_check.py`, `rtt_link.py
+  mode pcm` / `phase`. `decode_soak_log.py` knows mode 3 and exposes the
+  record's `rsvd` bytes.
+- **Without RTT, the TX path is unchanged:** `soak_data_fn` has the same
+  instructions as `9d9a1a8`. Only its data offsets moved, because
+  `struct tdma_telemetry` (copied into the soak state) gained the pre-TX
+  fields.
+
 ### Pre-TX payload pickup + sync acquisition fix (2026-09-26)
 
 The engine now takes the staged payload on its own alarm 2.5 ms before each

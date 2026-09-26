@@ -79,6 +79,8 @@ enum soak_rec_type {
 /* flags bits */
 #define SOAK_F_NO_CTR	BIT(0)	/* frame_ctr not meaningful (TX records) */
 #define SOAK_F_TX_T	BIT(1)	/* TX record: t_us holds the stage time */
+#define SOAK_F_TX_ENC	BIT(3)	/* TX record: rsvd[0..2] hold the chunk's
+				 * encode time, us, little-endian (PCM) */
 #define SOAK_F_TX_LEAD	BIT(2)	/* TX record: frame_ctr holds the stage lead,
 				 * us before the TX boundary (0xFFFF = more) */
 
@@ -140,6 +142,7 @@ enum soak_payload_mode {
 	SOAK_PAYLOAD_RAMP = 0,	/* payload[i] = base + i; all pre-tone logs */
 	SOAK_PAYLOAD_TONE = 1,	/* tone_src chunks */
 	SOAK_PAYLOAD_CLIP = 2,	/* clip_src chunks: test header + Codec 2 */
+	SOAK_PAYLOAD_PCM = 3,	/* c2_enc: PCM clip encoded on the device */
 };
 
 /*
@@ -154,6 +157,7 @@ enum soak_payload_mode {
  *   RAMP           0               0
  *   TONE           fs kHz (8)      f0 Hz (330)
  *   CLIP           codec (0=3200)  clip chunk count
+ *   PCM            codec (0=3200)  PCM chunk count (80 ms each)
  *
  * The clip's CRC does not fit here; every clip chunk's header carries it.
  */
@@ -301,11 +305,14 @@ void soak_log_tx(const uint8_t payload[TDMA_PAYLOAD_LEN], uint8_t slot_id,
  * (tdma_now_us()) in t_us and SOAK_F_TX_T set. Paired with a peer's RX
  * record of the same chunk, it gives stage-to-DIO1 latency
  * (tools/reconstruct_c2.py --tx). lead_us, how long before its TX boundary
- * the payload was staged, goes in frame_ctr (SOAK_F_TX_LEAD).
+ * the payload was staged, goes in frame_ctr (SOAK_F_TX_LEAD). A non-zero
+ * enc_us (PCM mode: the chunk's on-device encode time) goes in rsvd
+ * (SOAK_F_TX_ENC).
  * soak_log_tx() leaves t_us 0.
  */
 void soak_log_tx_at(const uint8_t payload[TDMA_PAYLOAD_LEN], uint8_t slot_id,
-		    uint8_t sync_state, uint32_t stage_us, uint32_t lead_us);
+		    uint8_t sync_state, uint32_t stage_us, uint32_t lead_us,
+		    uint32_t enc_us);
 
 void soak_log_stats(const struct tdma_telemetry *t);
 
