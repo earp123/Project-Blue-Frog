@@ -277,6 +277,19 @@ WRAP_FFT(kiss_fftr, (kiss_fftr_cfg st, const kiss_fft_scalar *in,
 WRAP_FFT(kiss_fftri, (kiss_fftr_cfg st, const kiss_fft_cpx *in,
 		      kiss_fft_scalar *out), (st, in, out))
 
+#ifdef FDV_ARM_MATH
+/* CMSIS-DSP (CONFIG_SOAK_C2_ARM_FFT); arm_rfft_fast_f32 calls arm_cfft_f32. */
+WRAP_FFT(arm_cfft_f32, (const arm_cfft_instance_f32 *s, float32_t *p,
+			uint8_t ifft, uint8_t bitrev), (s, p, ifft, bitrev))
+WRAP_FFT(arm_rfft_fast_f32, (const arm_rfft_fast_instance_f32 *s,
+			     float32_t *p, float32_t *out, uint8_t ifft),
+	 (s, p, out, ifft))
+#else
+/* Keep the linker's --wrap symbols resolvable in kiss_fft builds. */
+void __wrap_arm_cfft_f32(void) {}
+void __wrap_arm_rfft_fast_f32(void) {}
+#endif
+
 /* Float maths from libm, charged to the running codec function. */
 #define WRAP_M1(name)							\
 	float __real_##name(float x);					\

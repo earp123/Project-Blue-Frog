@@ -1,7 +1,7 @@
 # Live audio smoke test: WM8960 HAT, three units
 
-**Status:** task, 2026-09-29. **G0 failed 2026-09-29** (decode CPU;
-results at the end); G1–G4 not started. **Follows:**
+**Status:** task, 2026-09-29. **G0 failed, then passed after Codec 2
+speed fixes (2026-09-29)**, results at the end; G1–G4 not started. **Follows:**
 [`c2_encode_test.md`](c2_encode_test.md) (on-device encode, ~100 ms first
 sample to peer DIO1). **Supersedes** the CHANGELOG's "Next #1" plan of an
 I2S amp/DAC breakout: the audio front end is now a WM8960 codec board.
@@ -297,3 +297,55 @@ encode and 14 ms to decode. That is ~56 ms per frame for four units (70 %,
 right at the gate) and ~42 ms for three (~52 %). Talker gating would take
 four units under 50 %. Each fix should be measured with this profiler as
 it goes in.
+
+### G0 re-run after the fixes (2026-09-29): PASS
+
+Talker gating was ruled out: simultaneous talkers are rare but must work,
+so every peer is always decoded. The fixes went in one at a time, each
+measured with the profiler (per 80 ms chunk, profile build, shield):
+
+| Step | Encode | Decode | Note |
+|---|---|---|---|
+| Start | 27.4 ms | 25.2 ms | |
+| `-fno-math-errno` | 27.4 | 25.2 | no gain: GCC already emits `vsqrt`; reverted |
+| CMSIS-DSP FFTs (`CONFIG_SOAK_C2_ARM_FFT`, upstream `FDV_ARM_MATH`) | 19.4 | 22.3 | also cuts a Codec 2 state from 31.3 to 11.9 KB of heap |
+| Patch 0001: decimating `nlp` FIR | 12.2 | 22.3 | encoded frames bit-identical to upstream (372 chunks compared on the device) |
+| Patch 0002a: post-filter power function instead of `powf` | 12.2 | 16.8 | max relative error 1.4e-6 (host check over 1e-30..1e30) |
+| `-O3` instead of `-O2` | 12.2 | 16.8 | no gain; reverted |
+| Patch 0002b: direct order-10 LPC spectra in one pass | 12.2 | 13.9 | within 3.4e-7 of NumPy's FFT relative to the peak, all bins, 300 random filters |
+
+The patches live in `external/codec2-patches/`, and
+`scripts/vendor_codec2.py` applies them. Re-vendoring from a clean
+upstream checkout reproduces the tested sources exactly (ignoring line
+endings).
+
+**Isolated benchmark, normal encode images, all three units, per chunk:**
+encode 12.1–12.2 ms average (13.2 max), decode 12.9–13.2 ms average
+(16.8 max), mix ~0.1 ms, 12.1 KB heap per state.
+
+**In situ, 1 min each, phase 12 ms:**
+
+| | MASTER (shield) | SEC 1 (TFT) | SEC 2 (TFT) |
+|---|---|---|---|
+| 3 units (encode + 2 decodes): CPU busy | 48.6 % | 57.6 % | 57.6 % |
+| 4-unit emulation (+1 phantom decode): CPU busy | **64.4 %** | 72.1 % | 71.3 % |
+| 4-unit: encoder / decoder share | 14.8 / 47.5 % | 15.1 / 47.8 % | 15.1 / 47.5 % |
+
+- **Gate met: ~64 % for four units** on the shield, whose OLED costs
+  little, which is the closest to a display-less production unit. Three
+  units are at ~49 %.
+- **The TFT's UI takes ~9 %** once there is CPU to spare (busy minus the
+  voice-path threads). It had only ~2 % when the codec threads, which
+  outrank it, saturated the core. That is why the TFT units read ~8 points
+  higher; production has no display.
+- **Everything else held.** 0 decoder drops. Staging lead ≥ 8.1 ms at the
+  12 ms phase, 0 below the deadline. Every chunk was the same over the
+  air. Encoder bit-exactness against `pycodec2` was unchanged: the CMSIS
+  FFTs did not flip a single extra bit. Only card #23's first packets
+  were rejected as not audio.
+- **The phase could come down at G2.** A frame now encodes in ≤ 3.8 ms,
+  so capture-to-stage is ≤ 3.9 ms. That leaves ~8 ms of slack at the
+  12 ms phase; ~8 ms would still leave margin, for about 96 ms first
+  sample to peer.
+- **In reserve, if the live pipeline needs more:** fast `sinf`/`cosf`/
+  `atan2f` in phase synthesis and synthesis (~2 ms of libm per decode).

@@ -90,7 +90,12 @@ typedef struct {
   float w[PMAX_M / DEC];   /* DFT window                   */
   float sq[PMAX_M];        /* squared speech samples       */
   float mem_x, mem_y;      /* memory for notch filter      */
-  float mem_fir[NLP_NTAP]; /* decimation FIR filter memory */
+  /* Decimation FIR memory: a circular buffer written twice (at pos and
+     pos + NLP_NTAP), so the last NLP_NTAP inputs are always contiguous at
+     mem_fir[fir_pos + 1 ...] and no per-sample shift is needed.
+     Project-Blue-Frog patch, see external/codec2/README.md. */
+  float mem_fir[2 * NLP_NTAP];
+  int fir_pos;
   codec2_fft_cfg fft_cfg;  /* kiss FFT config              */
   float *Sn16k;            /* Fs=16kHz input speech vector */
   FILE *f;
@@ -149,7 +154,8 @@ void *nlp_create(C2CONST *c2const) {
   for (i = 0; i < PMAX_M; i++) nlp->sq[i] = 0.0;
   nlp->mem_x = 0.0;
   nlp->mem_y = 0.0;
-  for (i = 0; i < NLP_NTAP; i++) nlp->mem_fir[i] = 0.0;
+  for (i = 0; i < 2 * NLP_NTAP; i++) nlp->mem_fir[i] = 0.0;
+  nlp->fir_pos = 0;
 
   nlp->fft_cfg = codec2_fft_alloc(PE_FFT_SIZE, 0, NULL, NULL);
   assert(nlp->fft_cfg != NULL);
@@ -285,11 +291,25 @@ float nlp(
 
   for (i = m - n; i < m; i++) { /* FIR filter vector */
 
-    for (j = 0; j < NLP_NTAP - 1; j++) nlp->mem_fir[j] = nlp->mem_fir[j + 1];
-    nlp->mem_fir[NLP_NTAP - 1] = nlp->sq[i];
+    /* Project-Blue-Frog patch: every input goes into the circular
+       memory, but the output is computed only where it is used. The
+       decimation below reads sq[] at multiples of DEC only, and n is a
+       multiple of DEC, so those positions never move off the grid as the
+       buffer shifts. At those positions the result is bit-identical to
+       upstream: the same products, summed in the same order from 0.0. */
+    int pos = nlp->fir_pos;
+    nlp->mem_fir[pos] = nlp->sq[i];
+    nlp->mem_fir[pos + NLP_NTAP] = nlp->sq[i];
+    nlp->fir_pos = (pos + 1) % NLP_NTAP;
 
-    nlp->sq[i] = 0.0;
-    for (j = 0; j < NLP_NTAP; j++) nlp->sq[i] += nlp->mem_fir[j] * nlp_fir[j];
+    if (i % DEC == 0) {
+      const float *x = &nlp->mem_fir[pos + 1]; /* oldest .. newest */
+      float acc = 0.0;
+      for (j = 0; j < NLP_NTAP; j++) acc += x[j] * nlp_fir[j];
+      nlp->sq[i] = acc;
+    } else {
+      nlp->sq[i] = 0.0; /* never read: only multiples of DEC are */
+    }
   }
 
   PROFILE_SAMPLE_AND_LOG(filter, tnotch, "      filter");

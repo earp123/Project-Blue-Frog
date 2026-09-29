@@ -6,7 +6,9 @@ Usage:
     python scripts/vendor_codec2.py /tmp/codec2
 
 Copies the codec's own C sources (not the modems, FreeDV or LDPC code) plus
-exactly the headers they include, the licence, and the codebook tables. Upstream
+exactly the headers they include, the licence, and the codebook tables, then
+applies this project's patches from external/codec2-patches/ in order (speed
+changes for the nRF5340; see external/codec2/README.md). Upstream
 generates the tables at build time with a host C program (generate_codebook.c);
 this script does the same in Python, so the firmware build needs no host
 compiler. The output matches generate_codebook's: each table value is parsed as
@@ -27,6 +29,7 @@ import sys
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 OUT = os.path.join(REPO, "external", "codec2")
+PATCHES = os.path.join(REPO, "external", "codec2-patches")
 
 # The speech codec itself. Linked with --gc-sections, so modes this project
 # never selects cost flash only for what codec2_create() references.
@@ -161,6 +164,12 @@ def main():
               encoding="utf-8", newline="\n") as f:
         f.write(tpl)
 
+    # This project's patches, in order (git apply, paths from the repo root).
+    patches = sorted(p for p in os.listdir(PATCHES) if p.endswith(".patch"))
+    for p in patches:
+        subprocess.run(["git", "-C", REPO, "apply", "--whitespace=nowarn",
+                        os.path.join(PATCHES, p)], check=True)
+
     with open(os.path.join(OUT, "README.md"), "w", newline="\n") as f:
         f.write(
             "# Codec 2 (vendored subset)\n\n"
@@ -178,8 +187,28 @@ def main():
             "codec2.git /tmp/codec2\npython scripts/vendor_codec2.py "
             "/tmp/codec2\n```\n\n"
             "Linked only into builds with `CONFIG_SOAK_C2_ENCODE` (test "
-            "firmware); see `docs/c2_encode_test.md`.\n" % (tag or "1.2.0",
-                                                            commit))
+            "firmware); see `docs/c2_encode_test.md`.\n\n"
+            "## Patches (Project-Blue-Frog)\n\n"
+            "Applied in order from `external/codec2-patches/` by the "
+            "script. Each changed spot is marked `Project-Blue-Frog "
+            "patch` in the source. Measured on the nRF5340 at 128 MHz "
+            "(docs/live_audio_wm8960.md, G0):\n\n"
+            "- `0001-nlp-decimating-fir.patch`: `nlp()`'s 48-tap decimation "
+            "FIR keeps its memory in a mirrored circular buffer and computes "
+            "an output only where the decimation reads one (every 5th "
+            "sample). Encoded frames are bit-identical to upstream (372 "
+            "chunks compared on the device). Encode -7.2 ms per 80 ms "
+            "chunk.\n"
+            "- `0002-quantise-direct-lpc-spectrum-and-postfilter-pow.patch`: "
+            "`aks_to_M2()` evaluates the order-10 LPC spectrum and the "
+            "post-filter's weighting spectrum directly in one pass (11 terms "
+            "at 257 bins, cosine table) instead of two 512-point real FFTs "
+            "(within 3.4e-7 of the FFT, relative to the spectrum peak); "
+            "`lpc_post_filter()` takes that spectrum and uses a dedicated "
+            "positive-argument power function instead of `powf` (max "
+            "relative error 1.4e-6). Decode output differs from upstream "
+            "only at float-rounding level. Decode -8.4 ms per chunk.\n"
+            % (tag or "1.2.0", commit))
     n = len(os.listdir(os.path.join(OUT, "src")))
     print("vendored %d files from %s (%s) into %s" % (n, tag, commit, OUT))
 

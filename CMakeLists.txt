@@ -55,6 +55,11 @@ if(CONFIG_SOAK_C2_ENCODE)
   FILE(GLOB codec2_sources external/codec2/src/*.c)
   add_library(codec2 STATIC ${codec2_sources})
   target_link_libraries(codec2 PRIVATE zephyr_interface)
+  # FFTs on CMSIS-DSP (CONFIG_SOAK_C2_ARM_FFT): upstream's FDV_ARM_MATH path.
+  # PUBLIC, so every file that includes codec2_fft.h agrees on the types.
+  if(CONFIG_SOAK_C2_ARM_FFT)
+    target_compile_definitions(codec2 PUBLIC FDV_ARM_MATH)
+  endif()
   # Only mode 3200 is compiled in; the others' tables never reach flash.
   target_compile_definitions(codec2 PUBLIC CODEC2_MODE_EN_DEFAULT=0
     CODEC2_MODE_3200_EN=1)
@@ -84,7 +89,7 @@ if(CONFIG_SOAK_C2_ENCODE)
         two_stage_pitch_refinement estimate_amplitudes est_voicing_mbe
         speech_to_uq_lsps encode_lspds_scalar decode_lspds_scalar lsp_to_lpc
         aks_to_M2 phase_synth_zero_order postfilter synthesise
-        kiss_fft kiss_fftr kiss_fftri
+        kiss_fft kiss_fftr kiss_fftri arm_cfft_f32 arm_rfft_fast_f32
         cosf sinf expf logf log10f sqrtf floorf atan2f powf)
       zephyr_ld_options(-Wl,--wrap=${fn})
     endforeach()

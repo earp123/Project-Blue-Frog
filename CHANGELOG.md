@@ -31,16 +31,14 @@ _Last updated: 2026-09-29._
   - Encoding is pipelined per 20 ms frame. First sample to peer DIO1 is
     ~100 ms, before decode and playout.
 - **Live audio** ([`docs/live_audio_wm8960.md`](docs/live_audio_wm8960.md),
-  WM8960 HATs) **is stopped at G0, the CPU budget.** Codec 2 decode costs
-  ~23 ms per 80 ms chunk, nearly as much as encode. A 3-unit kit already
-  runs the core at ~90 %; a 4-unit kit would need ~119 %.
+  WM8960 HATs) **has passed G0, the CPU budget.** After the Codec 2 speed
+  fixes, encode is 12.2 ms and decode 13.2 ms per 80 ms chunk. Four units
+  take ~64 % of the core, with every peer decoded.
 - **Next, in order of payoff:**
-  1. Decide how to fit encode and decode. The profile is done: FFTs are
-     ~39 % of each; encode also loses ~8 ms to a wasteful FIR in `nlp`, and
-     decode ~8 ms to libm in the LPC post-filter. The options, with rough
-     savings, are in the G0 profile.
-  2. Then G1–G4: WM8960 bring-up, live mic, three-unit playout, and
-     mouth-to-ear latency.
+  1. G1–G4, once the HATs are wired: WM8960 bring-up, live mic,
+     three-unit playout, and mouth-to-ear latency.
+  2. In reserve if the live pipeline needs CPU: fast sin/cos/atan2 in
+     synthesis (~2 ms per decode).
   3. Settle Codec 2's LGPL licensing for the product. It is test-only
      today, behind `CONFIG_SOAK_C2_ENCODE`.
   4. The four-unit soak (card #23 first).
@@ -70,6 +68,37 @@ Exactly one `main()` is linked, chosen by the Kconfig choice in
 Four other variants were retired on 2026-09-25: LoRa send, the telemetry
 console, the TDMA UART-shell test and the UART soak harness (see "Streamlined
 to two unit types"). Their sections below are kept as history.
+
+### Codec 2 speed fixes: live audio G0 passes (2026-09-29)
+
+Encode and decode are both about twice as fast. A four-unit kit fits the
+70 % CPU gate, with every peer always decoded (no talker gating). Details:
+[`docs/live_audio_wm8960.md`](docs/live_audio_wm8960.md) ("G0 re-run").
+
+- **Per 80 ms chunk:** encode 27.4 → 12.2 ms, decode 25.2 → 13.2 ms
+  (averages on the normal encode images).
+- **In situ:** CPU busy on the shield unit is **~49 %** for three units and
+  **~64 %** in the four-unit emulation (was ~90 % and ~119 %). The TFT
+  units read ~8 points higher: their UI takes ~9 % once there is spare CPU.
+- **CMSIS-DSP FFTs** (`CONFIG_SOAK_C2_ARM_FFT`, default on in encode
+  builds): upstream's own `FDV_ARM_MATH` path. It also cuts a Codec 2
+  state from 31.3 to 11.9 KB of heap.
+- **The first changes to the vendored codec**, as patches in
+  `external/codec2-patches/`, applied by `scripts/vendor_codec2.py`, and
+  listed in `external/codec2/README.md`:
+  - **0001:** `nlp`'s decimation FIR computes only the outputs it keeps.
+    Encoded frames are bit-identical to upstream.
+  - **0002:** `aks_to_M2` evaluates the order-10 LPC spectrum and the
+    post-filter's weighting spectrum directly in one pass instead of two
+    FFTs, and the post-filter uses a dedicated power function instead of
+    `powf`. Decode output changes only at float-rounding level (checked
+    against NumPy: 3.4e-7 and 1.4e-6).
+- **Tried and dropped:** `-fno-math-errno` (GCC already emits `vsqrt`)
+  and `-O3`. Neither helped.
+- **Held throughout:** encoder bit-exactness against `pycodec2`, 0
+  decoder drops, 0 staging misses, and every chunk the same over the air.
+- **RAM:** the TFT encode image is at 86 % (the 128 KB PCM test buffer and
+  the 128 KB heap); ~70 KB of heap is still free with five codec states.
 
 ### Codec 2 profile on the device (2026-09-29)
 

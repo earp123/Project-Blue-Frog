@@ -1,0 +1,208 @@
+diff --git a/external/codec2/src/quantise.c b/external/codec2/src/quantise.c
+index da1d821..e0533b0 100644
+--- a/external/codec2/src/quantise.c
++++ b/external/codec2/src/quantise.c
+@@ -319,12 +319,136 @@ void force_min_lsp_dist(float lsp[], int order) {
+ 
+ \*---------------------------------------------------------------------------*/
+ 
++/* Project-Blue-Frog patch, see external/codec2/README.md: x^y for x > 0,
++   as 2^(y log2 x). log2 from the exponent bits plus an atanh series on the
++   mantissa (reduced to [sqrt(1/2), sqrt(2))); 2^f by a degree-6 series on
++   the fraction, the integer part put back into the exponent. Max relative
++   error 1.4e-6 at y = 0.2 over 1e-30..1e30 (mean 2.3e-7), a few float
++   ulps, against ~390 cycles for picolibc's general powf on the M33. The
++   LPC post-filter calls it for every spectral bin. */
++static inline float lpcpf_pow_pos(float x, float y) {
++  union {
++    float f;
++    unsigned int u;
++  } v;
++  v.f = x;
++  int e = (int)((v.u >> 23) & 0xff) - 127;
++  v.u = (v.u & 0x007fffffu) | 0x3f800000u; /* mantissa in [1, 2) */
++  float m = v.f;
++  if (m > 1.41421356f) {
++    m *= 0.5f;
++    e += 1;
++  }
++  float s = (m - 1.0f) / (m + 1.0f);
++  float s2 = s * s;
++  float ln_m =
++      2.0f * s * (1.0f + s2 * (1.0f / 3 + s2 * (1.0f / 5 + s2 * (1.0f / 7))));
++  float t = y * ((float)e + ln_m * 1.44269504f); /* log2 of the result */
++  int n = (int)(t + (t >= 0.0f ? 0.5f : -0.5f));
++  float z = (t - (float)n) * 0.69314718f;
++  float p =
++      1.0f +
++      z * (1.0f +
++           z * (0.5f +
++                z * (1.0f / 6 +
++                     z * (1.0f / 24 + z * (1.0f / 120 + z * (1.0f / 720))))));
++  v.u = (unsigned int)(n + 127) << 23; /* 2^n */
++  return p * v.f;
++}
++
++/* Project-Blue-Frog patch, see external/codec2/README.md: the spectra
++   aks_to_M2() and its post-filter need are the DFTs of order + 1 LPC
++   coefficients padded with zeros to FFT_ENC. Evaluating those few terms
++   directly at the FFT_ENC / 2 + 1 bins is cheaper than two FFT_ENC-point
++   real FFTs, and one pass serves both polynomials: A(z) into A[] and, when
++   W is not NULL, A(z / gamma) (coefficients ak[k] * gamma^k, formed exactly
++   as upstream's lpc_post_filter() did) into W[]. Twiddles come from one
++   cosine table built on first use; sin(x) is cos(x - pi/2), a quarter-turn
++   back in the table. Same sign convention as the forward real FFT. */
++static float lpc_cos_tab[FFT_ENC];
++static int lpc_cos_ready;
++
++static void lpc_dft_pair(const float ak[], int order, float gamma, COMP A[],
++                         COMP W[]) {
++  float wk[LPC_MAX_ORDER + 1];
++  float coeff = gamma;
++  int i, k;
++
++  if (!lpc_cos_ready) {
++    for (i = 0; i < FFT_ENC; i++) lpc_cos_tab[i] = cosf(TWO_PI * i / FFT_ENC);
++    lpc_cos_ready = 1;
++  }
++
++  wk[0] = ak[0];
++  for (k = 1; k <= order; k++) {
++    wk[k] = ak[k] * coeff;
++    coeff *= gamma;
++  }
++
++  /* The common case, order 10 with the post-filter on (every Codec 2 mode
++     this project builds): unrolled, both polynomials' coefficients held in
++     registers, the sine sign applied once per bin. */
++  if (order == 10 && W) {
++    const float a0 = ak[0], a1 = ak[1], a2 = ak[2], a3 = ak[3], a4 = ak[4],
++                a5 = ak[5], a6 = ak[6], a7 = ak[7], a8 = ak[8], a9 = ak[9],
++                a10 = ak[10];
++    const float w0 = wk[0], w1 = wk[1], w2 = wk[2], w3 = wk[3], w4 = wk[4],
++                w5 = wk[5], w6 = wk[6], w7 = wk[7], w8 = wk[8], w9 = wk[9],
++                w10 = wk[10];
++    const float *ct = lpc_cos_tab;
++    for (i = 0; i <= FFT_ENC / 2; i++) {
++      float ar = 0.0, as = 0.0, wr = 0.0, ws = 0.0, c, sn;
++      int t = 0;
++#define LPC_TERM(ak_, wk_)                                  \
++  c = ct[t];                                                \
++  sn = ct[(t + 3 * FFT_ENC / 4) & (FFT_ENC - 1)];           \
++  ar += (ak_) * c;                                          \
++  as += (ak_) * sn;                                         \
++  wr += (wk_) * c;                                          \
++  ws += (wk_) * sn;                                         \
++  t = (t + i) & (FFT_ENC - 1);
++      LPC_TERM(a0, w0) LPC_TERM(a1, w1) LPC_TERM(a2, w2) LPC_TERM(a3, w3)
++      LPC_TERM(a4, w4) LPC_TERM(a5, w5) LPC_TERM(a6, w6) LPC_TERM(a7, w7)
++      LPC_TERM(a8, w8) LPC_TERM(a9, w9) LPC_TERM(a10, w10)
++#undef LPC_TERM
++      A[i].real = ar;
++      A[i].imag = -as;
++      W[i].real = wr;
++      W[i].imag = -ws;
++    }
++    return;
++  }
++
++  for (i = 0; i <= FFT_ENC / 2; i++) {
++    float ar = 0.0, ai = 0.0, wr = 0.0, wi = 0.0;
++    int t = 0;
++    for (k = 0; k <= order; k++) {
++      float c = lpc_cos_tab[t];
++      float s = lpc_cos_tab[(t + 3 * FFT_ENC / 4) & (FFT_ENC - 1)];
++      ar += ak[k] * c;
++      ai -= ak[k] * s;
++      if (W) {
++        wr += wk[k] * c;
++        wi -= wk[k] * s;
++      }
++      t = (t + i) & (FFT_ENC - 1);
++    }
++    A[i].real = ar;
++    A[i].imag = ai;
++    if (W) {
++      W[i].real = wr;
++      W[i].imag = wi;
++    }
++  }
++}
++
+ void lpc_post_filter(codec2_fftr_cfg fftr_fwd_cfg, float Pw[], float ak[],
+                      int order, int dump, float beta, float gamma,
+-                     int bass_boost, float E) {
++                     int bass_boost, float E, COMP Ww[]) {
++  /* Project-Blue-Frog patch: Ww[] arrives holding the weighting spectrum
++     W(exp(jw)) = A(exp(jw) / gamma) from lpc_dft_pair(); it is squared in
++     place below, as upstream did with its own FFT output. */
+   int i;
+-  float x[FFT_ENC];          /* input to FFTs                */
+-  COMP Ww[FFT_ENC / 2 + 1];  /* weighting spectrum           */
+   float Rw[FFT_ENC / 2 + 1]; /* R = WA                       */
+   float e_before, e_after, gain;
+   float Pfw;
+@@ -334,19 +458,8 @@ void lpc_post_filter(codec2_fftr_cfg fftr_fwd_cfg, float Pw[], float ak[],
+ 
+   PROFILE_SAMPLE(tstart);
+ 
+-  /* Determine weighting filter spectrum W(exp(jw)) ---------------*/
+-
+-  for (i = 0; i < FFT_ENC; i++) {
+-    x[i] = 0.0;
+-  }
+-
+-  x[0] = ak[0];
+-  coeff = gamma;
+-  for (i = 1; i <= order; i++) {
+-    x[i] = ak[i] * coeff;
+-    coeff *= gamma;
+-  }
+-  codec2_fftr(fftr_fwd_cfg, x, Ww);
++  /* Determine weighting filter spectrum W(exp(jw)): done by the caller,
++     lpc_dft_pair() (Project-Blue-Frog patch). */
+ 
+   PROFILE_SAMPLE_AND_LOG(tfft2, taw, "        fft2");
+ 
+@@ -387,7 +500,10 @@ void lpc_post_filter(codec2_fftr_cfg fftr_fwd_cfg, float Pw[], float ak[],
+ 
+   e_after = 1E-4;
+   for (i = 0; i < FFT_ENC / 2; i++) {
+-    Pfw = powf(Rw[i], beta);
++    /* Project-Blue-Frog patch: lpcpf_pow_pos() for normal positive
++       Rw (all of them in practice); anything else keeps powf. */
++    Pfw = (Rw[i] > 1E-30f && Rw[i] < 1E30f) ? lpcpf_pow_pos(Rw[i], beta)
++                                             : powf(Rw[i], beta);
+     Pw[i] *= Pfw * Pfw;
+     e_after += Pw[i];
+   }
+@@ -446,16 +562,10 @@ void aks_to_M2(codec2_fftr_cfg fftr_fwd_cfg, float ak[], /* LPC's */
+   r = TWO_PI / (FFT_ENC);
+ 
+   /* Determine DFT of A(exp(jw)) --------------------------------------------*/
+-  {
+-    float a[FFT_ENC]; /* input to FFT for power spectrum */
+-
+-    for (i = 0; i < FFT_ENC; i++) {
+-      a[i] = 0.0;
+-    }
+-
+-    for (i = 0; i <= order; i++) a[i] = ak[i];
+-    codec2_fftr(fftr_fwd_cfg, a, Aw);
+-  }
++  /* Project-Blue-Frog patch: directly, together with the post-filter's
++     weighting spectrum (lpc_dft_pair()), instead of two FFTs. */
++  COMP Ww[FFT_ENC / 2 + 1];
++  lpc_dft_pair(ak, order, gamma, Aw, pf ? Ww : NULL);
+   PROFILE_SAMPLE_AND_LOG(tfft, tstart, "      fft");
+ 
+   /* Determine power spectrum P(w) = E/(A(exp(jw))^2 ------------------------*/
+@@ -484,7 +594,7 @@ void aks_to_M2(codec2_fftr_cfg fftr_fwd_cfg, float ak[], /* LPC's */
+ 
+   if (pf)
+     lpc_post_filter(fftr_fwd_cfg, Pw, ak, order, dump, beta, gamma, bass_boost,
+-                    E);
++                    E, Ww);
+   else {
+     for (i = 0; i < FFT_ENC / 2; i++) {
+       Pw[i] *= E;

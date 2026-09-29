@@ -105,6 +105,21 @@ config SOAK_C2_ENCODE
 	  product licensing of Codec 2 is not settled. See
 	  docs/c2_encode_test.md.
 
+config SOAK_C2_ARM_FFT
+	bool "Codec 2 FFTs through CMSIS-DSP"
+	default y
+	depends on SOAK_C2_ENCODE
+	select CMSIS_DSP
+	select CMSIS_DSP_TRANSFORM
+	select CMSIS_DSP_BASICMATH
+	help
+	  Build Codec 2 with upstream's FDV_ARM_MATH path: its FFTs run on
+	  CMSIS-DSP (arm_cfft_f32, arm_rfft_fast_f32) instead of kiss_fft.
+	  The FFTs were ~39 % of both encode and decode (G0 profile,
+	  docs/live_audio_wm8960.md). CMSIS rounds differently from
+	  kiss_fft, so frames differ from a kiss-based host encoder in a few
+	  more bits. n to go back to kiss_fft for comparison.
+
 config SOAK_C2_PROFILE
 	bool "Profile Codec 2 per function (bench command)"
 	depends on SOAK_C2_ENCODE
