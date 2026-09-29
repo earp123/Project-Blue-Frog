@@ -1,0 +1,67 @@
+/*
+ * WM8960 HAT on the nRF5340 DK, pin map from docs/live_audio_wm8960.md:
+ *
+ *   HAT pin 3  SDA    -> P0.25  i2c1 SDA
+ *   HAT pin 5  SCL    -> P0.26  i2c1 SCL
+ *   HAT pin 12 BCLK   -> P0.04  i2s0 SCK   (input: the WM8960 is master)
+ *   HAT pin 35 LRCLK  -> P0.05  i2s0 LRCK  (input)
+ *   HAT pin 38 ADCDAT -> P0.06  i2s0 SDIN
+ *   HAT pin 40 DACDAT -> P0.11  i2s0 SDOUT
+ *
+ * MCK is not connected: the HAT has its own 24 MHz crystal.
+ */
+
+&pinctrl {
+	/* The HAT has no I2C pull-ups (a Pi provides its own), so without
+	 * these the bus idles low and nothing ACKs. The nRF's ~13 k internal
+	 * pull-ups are enough at 100 kHz on short jumpers. */
+	i2c1_hat_default: i2c1_hat_default {
+		group1 {
+			psels = <NRF_PSEL(TWIM_SDA, 0, 25)>,
+				<NRF_PSEL(TWIM_SCL, 0, 26)>;
+			bias-pull-up;
+		};
+	};
+
+	i2c1_hat_sleep: i2c1_hat_sleep {
+		group1 {
+			psels = <NRF_PSEL(TWIM_SDA, 0, 25)>,
+				<NRF_PSEL(TWIM_SCL, 0, 26)>;
+			low-power-enable;
+		};
+	};
+
+	i2s0_hat_default: i2s0_hat_default {
+		group1 {
+			psels = <NRF_PSEL(I2S_SCK_S, 0, 4)>,
+				<NRF_PSEL(I2S_LRCK_S, 0, 5)>,
+				<NRF_PSEL(I2S_SDIN, 0, 6)>,
+				<NRF_PSEL(I2S_SDOUT, 0, 11)>;
+		};
+	};
+
+	i2s0_hat_sleep: i2s0_hat_sleep {
+		group1 {
+			psels = <NRF_PSEL(I2S_SCK_S, 0, 4)>,
+				<NRF_PSEL(I2S_LRCK_S, 0, 5)>,
+				<NRF_PSEL(I2S_SDIN, 0, 6)>,
+				<NRF_PSEL(I2S_SDOUT, 0, 11)>;
+			low-power-enable;
+		};
+	};
+};
+
+&i2c1 {
+	status = "okay";
+	clock-frequency = <I2C_BITRATE_STANDARD>;
+	pinctrl-0 = <&i2c1_hat_default>;
+	pinctrl-1 = <&i2c1_hat_sleep>;
+	pinctrl-names = "default", "sleep";
+};
+
+&i2s0 {
+	status = "okay";
+	pinctrl-0 = <&i2s0_hat_default>;
+	pinctrl-1 = <&i2s0_hat_sleep>;
+	pinctrl-names = "default", "sleep";
+};
