@@ -36,22 +36,38 @@ Facts that matter here:
 | Output | 4-pole OMTP 3.5 mm jack; plain 3-pole headphones are fine. Speaker terminals unused |
 | Button | BCM17, unused |
 
-Wire the HAT to the DK with jumpers (~10 wires: 5 V, GND, SDA, SCL, BCLK,
-LRCLK, ADCDAT, DACDAT). **Pick nRF pins that are free on both unit
-types** by reading `boards/nrf5340dk_nrf5340_cpuapp_tft.overlay` and
-`boards/nrf5340dk_nrf5340_cpuapp_shield.overlay`; do not trust a
-hand-picked list. Constraints:
+## Pin map (same on both unit types)
 
-- Keep clear of the radio (P1.00–P1.09), the TFT unit's shared SPI bus,
-  display, touch and SD pins, the shield's SD (P1.11–P1.15), OLED
-  (P0.25/P0.26/P0.07), the DK buttons and VCOM UART.
-- **Shield unit:** put the WM8960 on the existing `i2c1` (P0.25/P0.26,
-  OLED at 0x3C). No address clash. The HAT likely carries its own I2C
-  pull-ups; check the schematic, they help the OLED's rise time.
-- **TFT unit:** needs its own I2C instance; check it does not share a
-  serial-box instance with an SPI already in use.
-- Use the same I2S pins on both unit types if at all possible.
-- Record the final pin map in the README and CHANGELOG.
+Checked against `boards/nrf5340dk_nrf5340_cpuapp_tft.overlay`,
+`boards/nrf5340dk_nrf5340_cpuapp_shield.overlay`, the radio overlay
+(P1.00–P1.09) and the nRF5340 pin spec (no low-frequency-only pins on
+this part). Eight jumpers, HAT 40-pin header to the DK's P0 GPIO headers:
+
+| Signal | HAT pin (phys / BCM) | nRF5340 | nRF peripheral |
+|---|---|---|---|
+| 5 V | 2 / 5V | DK 5 V | — |
+| GND | 6 / GND | DK GND | — |
+| SDA | 3 / BCM2 | P0.25 | `i2c1` SDA |
+| SCL | 5 / BCM3 | P0.26 | `i2c1` SCL |
+| BCLK | 12 / BCM18 | P0.04 | `i2s0` SCK (input, slave) |
+| LRCLK | 35 / BCM19 | P0.05 | `i2s0` LRCK (input, slave) |
+| ADCDAT (codec → nRF) | 38 / BCM20 | P0.06 | `i2s0` SDIN |
+| DACDAT (nRF → codec) | 40 / BCM21 | P0.11 | `i2s0` SDOUT |
+
+- **Shield unit:** `i2c1` on P0.25/P0.26 already exists for the OLED
+  (0x3C); the WM8960 (0x1A) joins that bus. The HAT likely carries its own
+  I2C pull-ups; check the schematic, they help the OLED's rise time.
+- **TFT unit:** enable `i2c1` on the same two pins. The TFT unit uses
+  `spi4`, the radio uses `spi2`; serial-box 1 (`spi1`/`i2c1`/`uart1`) is
+  free on both units.
+- `i2s0` is its own peripheral on the nRF5340; MCK is unused (the HAT has
+  its own crystal). Any GPIO works for I2S on this part.
+- Kept clear of: radio P1.00–P1.09; TFT bus P0.10, P0.13–18, P0.28–31;
+  shield SD P1.11–15, OLED RST P0.07; DK buttons P0.08/09/23/24; VCOM UART
+  P0.19–22.
+- **Agent:** verify each pin is on the DK's P0 header and not eaten by a
+  solder-bridge default, then record the final map in the README and
+  CHANGELOG.
 
 ## Design decisions (made; revisit only if a gate fails)
 
