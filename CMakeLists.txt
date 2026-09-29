@@ -75,6 +75,20 @@ if(CONFIG_SOAK_C2_ENCODE)
   target_link_libraries(app PRIVATE codec2)
   target_sources(app PRIVATE src/tdma_console/c2_enc.c
     src/tdma_console/c2_dec.c)
+
+  # Per-function profile (CONFIG_SOAK_C2_PROFILE): the linker sends the
+  # codec's cross-file calls to timing wrappers in c2_prof.c.
+  if(CONFIG_SOAK_C2_PROFILE)
+    target_sources(app PRIVATE src/tdma_console/c2_prof.c)
+    foreach(fn codec2_encode codec2_decode dft_speech nlp
+        two_stage_pitch_refinement estimate_amplitudes est_voicing_mbe
+        speech_to_uq_lsps encode_lspds_scalar decode_lspds_scalar lsp_to_lpc
+        aks_to_M2 phase_synth_zero_order postfilter synthesise
+        kiss_fft kiss_fftr kiss_fftri
+        cosf sinf expf logf log10f sqrtf floorf atan2f powf)
+      zephyr_ld_options(-Wl,--wrap=${fn})
+    endforeach()
+  endif()
 endif()
 target_include_directories(app PRIVATE src/tdma src/tdma_console)
 # Driver-internal header, needed once at init to detach the native driver's

@@ -235,3 +235,65 @@ are init-only.
    ~125 KB of heap next to the 128 KB PCM clip buffer. That buffer goes
    away with a live mic (a capture ring is a few KB), so memory is not
    the blocker; CPU is.
+
+### G0 profile (2026-09-29)
+
+**Method.** `CONFIG_SOAK_C2_PROFILE` (`src/tdma_console/c2_prof.c`) leaves the
+vendored codec untouched:
+- The linker's `--wrap` sends the codec's cross-file calls, and its libm
+  calls, to wrappers timed with the cycle counter.
+- Each function gets inclusive time, the FFT and libm time spent inside
+  it, and its own (exclusive) time.
+- Each wrapper's own cost is measured once and subtracted per call.
+
+The run is `rtt_link.py bench 200` on the shield unit, whose output is kept
+in `soaks/rtt/g0_profile_shield.txt` (untracked). A second run matched to
+within a few µs.
+
+**Encode, 27.4 ms per 80 ms chunk:**
+
+| Where | ms / chunk | Share |
+|---|---|---|
+| FFTs (8 in `dft_speech`, 8 in `nlp`; 512-point complex, kiss_fft) | 10.6 | 39 % |
+| `nlp` own code | 10.2 | 37 % |
+| — of which its 48-tap decimation FIR * | ~8.0 | ~29 % |
+| `speech_to_uq_lsps` | 2.4 | 9 % |
+| `dft_speech` own (windowing) | 2.0 | 7 % |
+| pitch refinement, amplitudes, voicing, LSP quantise, glue | ~2.2 | 8 % |
+| libm | 0.2 | <1 % |
+
+\* From a temporary, uncommitted probe build with timestamps between
+`nlp`'s stages. The FIR computes all 80 outputs per call, although `nlp`
+keeps every fifth. It also shifts a 48-entry delay line per sample and
+reads its coefficients from flash. It is all float; there is no double
+maths here.
+
+**Decode, 25.2 ms per 80 ms chunk:**
+
+| Where | ms / chunk | Share |
+|---|---|---|
+| FFTs (8 real forward in `aks_to_M2`, 8 real inverse in `synthesise`, …) | 9.6 | 38 % |
+| libm: `powf` + `sqrtf` per spectral bin in the LPC post-filter (inside `aks_to_M2`) | 6.3 | 25 % |
+| libm: `cosf`/`sinf`/`atan2f` per harmonic in phase synthesis | 1.3 | 5 % |
+| libm: other (`synthesise`, `lsp_to_lpc`) | 0.8 | 3 % |
+| `aks_to_M2` own code | 4.6 | 18 % |
+| `synthesise`, `phase_synth`, postfilter own; glue | ~2.2 | 9 % |
+
+Decode makes ~3,670 libm calls per chunk, against ~84 for encode.
+
+**Candidate fixes, with rough savings.** These are estimates to guide the
+decision, not measurements.
+
+| Fix | Kind | Encode | Decode |
+|---|---|---|---|
+| CMSIS-DSP FFTs (upstream `FDV_ARM_MATH`) | build, CMSIS-DSP module | −(5–8) ms | −(5–7) ms |
+| Decimating FIR in `nlp` (16 outputs, circular buffer) | patch to vendored `nlp.c` | −(5–7) ms | — |
+| `-fno-math-errno` (lets `sqrtf` become one instruction) | flag | — | −(0.5–1) ms |
+| Cheaper `powf` in the LPC post-filter, or turn the post-filter off (`codec2_set_lpc_post_filter`, a quality cost) | patch or API | — | −(3–6) ms |
+| Decode only active talkers | architecture | — | caps decodes at 1–2 per frame |
+
+Taking the first four at the middle of their ranges gives roughly 14 ms to
+encode and 14 ms to decode. That is ~56 ms per frame for four units (70 %,
+right at the gate) and ~42 ms for three (~52 %). Talker gating would take
+four units under 50 %. Each fix should be measured with this profiler as
+it goes in.

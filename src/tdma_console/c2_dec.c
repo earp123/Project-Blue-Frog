@@ -16,6 +16,9 @@
 
 #include "c2_dec.h"
 #include "c2_enc.h"
+#ifdef CONFIG_SOAK_C2_PROFILE
+#include "c2_prof.h"
+#endif
 #include "clip_src.h"
 
 /* codec2_decode synthesises through a 512-point inverse FFT on the stack,
@@ -299,12 +302,17 @@ static void summarise(uint32_t *a, uint32_t n, uint32_t *mn, uint32_t *avg,
 	*p99 = a[(n * 99U) / 100U];
 }
 
+static uint8_t bench_frames[BENCH_MAX][FRAMES_PER_CHUNK * FRAME_BYTES];
+
+/*
+ * Two passes, encode every chunk then decode every chunk, so that with
+ * CONFIG_SOAK_C2_PROFILE each function's time lands in the right phase.
+ */
 static int bench(uint32_t chunks, struct c2_bench *out)
 {
 	uint32_t len;
 	const uint8_t *pcm = clip_src_data(&len);
 	struct CODEC2 *enc, *dec;
-	uint8_t frames[FRAMES_PER_CHUNK * FRAME_BYTES];
 	int16_t in[FRAME_SAMPLES];
 	uint32_t mix_max = 0;
 
@@ -333,6 +341,10 @@ static int bench(uint32_t chunks, struct c2_bench *out)
 
 	uint32_t nchunks = len / C2_ENC_CHUNK_PCM_BYTES;
 
+#ifdef CONFIG_SOAK_C2_PROFILE
+	c2_prof_reset();
+	c2_prof_phase(C2_PROF_ENC);
+#endif
 	for (uint32_t c = 0; c < chunks; c++) {
 		const uint8_t *src = pcm + (c % nchunks) *
 					   C2_ENC_CHUNK_PCM_BYTES;
@@ -343,13 +355,19 @@ static int bench(uint32_t chunks, struct c2_bench *out)
 				in[i] = (int16_t)sys_get_le16(
 					&src[(f * FRAME_SAMPLES + i) * 2]);
 			}
-			codec2_encode(enc, &frames[f * FRAME_BYTES], in);
+			codec2_encode(enc, &bench_frames[c][f * FRAME_BYTES],
+				      in);
 		}
 		enc_us[c] = us_since(t0);
+	}
 
+#ifdef CONFIG_SOAK_C2_PROFILE
+	c2_prof_phase(C2_PROF_DEC);
+#endif
+	for (uint32_t c = 0; c < chunks; c++) {
 		timing_t t1 = timing_counter_get();
 
-		decode_chunk(dec, frames);
+		decode_chunk(dec, bench_frames[c]);
 		dec_us[c] = us_since(t1);
 
 		timing_t t2 = timing_counter_get();

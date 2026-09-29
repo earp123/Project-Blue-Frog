@@ -17,6 +17,9 @@
 #include "rtt_link.h"
 #include "soak_log.h"
 #include "payload_src.h"
+#ifdef CONFIG_SOAK_C2_PROFILE
+#include "c2_prof.h"
+#endif
 
 #define CH_SOAK		1	/* up: record stream */
 #define CH_CTL		1	/* down: commands */
@@ -27,7 +30,7 @@
  * swallow a host hiccup or a capture started a moment late.
  */
 static uint8_t soak_buf[8192];
-static uint8_t reply_buf[512];
+static uint8_t reply_buf[2048];	/* bench + profile: ~10 lines at once */
 static uint8_t ctl_buf[1024];
 
 /* Longest command line; anything longer is discarded as malformed. */
@@ -279,6 +282,17 @@ static void handle_line(char *s)
 			      b.enc_p99, b.enc_max, b.dec_min, b.dec_avg,
 			      b.dec_p99, b.dec_max, b.mix_max,
 			      b.heap_per_state);
+#ifdef CONFIG_SOAK_C2_PROFILE
+			char pl[200];
+
+			for (int p = 0; p < C2_PROF_PHASES; p++) {
+				for (int l = 0;
+				     c2_prof_line(p, l, b.n, pl, sizeof(pl));
+				     l++) {
+					reply("%s", pl);
+				}
+			}
+#endif
 		}
 #endif
 	} else if (strcmp(tok[0], "phase") == 0 && n == 2 &&

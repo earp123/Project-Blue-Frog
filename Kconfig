@@ -105,6 +105,18 @@ config SOAK_C2_ENCODE
 	  product licensing of Codec 2 is not settled. See
 	  docs/c2_encode_test.md.
 
+config SOAK_C2_PROFILE
+	bool "Profile Codec 2 per function (bench command)"
+	depends on SOAK_C2_ENCODE
+	help
+	  Wrap the codec's internal cross-file calls (FFTs, pitch
+	  estimation, LSP maths, synthesis) and its libm calls with the
+	  linker's --wrap, time each with the cycle counter, and report
+	  per-chunk figures after "rtt_link.py bench". The vendored sources
+	  are untouched. Adds a little overhead to every wrapped call, so
+	  keep it off for timing runs other than the benchmark. See
+	  src/tdma_console/c2_prof.c.
+
 config SOAK_CLIP_BUF_KB
 	int "Clip buffer size (KB)"
 	default 128 if SOAK_C2_ENCODE

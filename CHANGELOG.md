@@ -35,9 +35,10 @@ _Last updated: 2026-09-29._
   ~23 ms per 80 ms chunk, nearly as much as encode. A 3-unit kit already
   runs the core at ~90 %; a 4-unit kit would need ~119 %.
 - **Next, in order of payoff:**
-  1. Decide how to fit decode, starting by profiling it. The options are
-     in the G0 write-up: CMSIS-DSP FFTs, decoding only active talkers, a
-     lower-rate mode.
+  1. Decide how to fit encode and decode. The profile is done: FFTs are
+     ~39 % of each; encode also loses ~8 ms to a wasteful FIR in `nlp`, and
+     decode ~8 ms to libm in the LPC post-filter. The options, with rough
+     savings, are in the G0 profile.
   2. Then G1–G4: WM8960 bring-up, live mic, three-unit playout, and
      mouth-to-ear latency.
   3. Settle Codec 2's LGPL licensing for the product. It is test-only
@@ -69,6 +70,35 @@ Exactly one `main()` is linked, chosen by the Kconfig choice in
 Four other variants were retired on 2026-09-25: LoRa send, the telemetry
 console, the TDMA UART-shell test and the UART soak harness (see "Streamlined
 to two unit types"). Their sections below are kept as history.
+
+### Codec 2 profile on the device (2026-09-29)
+
+Where the encode and decode time goes, measured with the cycle counter.
+The vendored codec is untouched. Details:
+[`docs/live_audio_wm8960.md`](docs/live_audio_wm8960.md) ("G0 profile").
+
+- **Encode, 27.4 ms per chunk:**
+  - FFTs 10.6 ms (39 %);
+  - `nlp`'s own code 10.2 ms (37 %), ~8 ms of it a 48-tap FIR that
+    computes five times the outputs it uses;
+  - LSP analysis 2.4 ms.
+- **Decode, 25.2 ms:**
+  - FFTs 9.6 ms (38 %);
+  - libm 8.4 ms (33 %), mostly a `powf` and `sqrtf` per spectral bin in
+    the LPC post-filter (~3,670 libm calls per chunk);
+  - `aks_to_M2`'s own code 4.6 ms.
+- **Candidate fixes** (estimates, to be measured): CMSIS-DSP FFTs, a
+  decimating `nlp` FIR, `-fno-math-errno`, a cheaper post-filter `powf`,
+  and decoding only active talkers. The first four together put a
+  four-unit kit near the 70 % gate; talker gating takes it well under.
+- **New:**
+  - `CONFIG_SOAK_C2_PROFILE`: `--wrap` timing wrappers on the codec's
+    cross-file calls and its libm calls, with FFT and libm time charged to
+    the calling function, reported after `rtt_link.py bench`;
+  - the benchmark now encodes every chunk and then decodes every chunk,
+    so each phase profiles cleanly;
+  - the RTT reply channel grew to 2 KB, since the profile is ~10 lines in
+    one burst and the 512 B channel dropped whole lines.
 
 ### Live audio G0: decode CPU budget fails (2026-09-29)
 
