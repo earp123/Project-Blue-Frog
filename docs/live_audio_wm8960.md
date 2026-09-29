@@ -1,6 +1,7 @@
 # Live audio smoke test: WM8960 HAT, three units
 
-**Status:** task, 2026-09-29. **Follows:**
+**Status:** task, 2026-09-29. **G0 failed 2026-09-29** (decode CPU;
+results at the end); G1–G4 not started. **Follows:**
 [`c2_encode_test.md`](c2_encode_test.md) (on-device encode, ~100 ms first
 sample to peer DIO1). **Supersedes** the CHANGELOG's "Next #1" plan of an
 I2S amp/DAC breakout: the audio front end is now a WM8960 codec board.
@@ -166,3 +167,71 @@ number and the breakdown.
   what passed, what failed, what is open.
 - Update the CHANGELOG's "Where things stand" and "Next" list.
 - If a gate fails, the write-up of that gate's numbers is the deliverable.
+
+## G0 result (2026-09-29): FAIL — stopped here
+
+Codec 2 decode is built under the encode flags (128 MHz, `-O2`,
+`-fsingle-precision-constant`) in `src/tdma_console/c2_dec.c`:
+- one persistent state per peer slot;
+- a saturating mix of each decoded chunk;
+- whole-CPU accounting from Zephyr's thread runtime stats (DWT-timed);
+- an isolated benchmark (`rtt_link.py bench N`).
+
+**Isolated, 100 chunks of the loaded PCM clip, per 80 ms chunk, all three
+units:**
+
+| | min | avg | p99 / max |
+|---|---|---|---|
+| Encode | 25.2–26.6 ms | 25.8–27.3 ms | 26.6–28.3 ms |
+| **Decode** | 18.9–22.0 ms | **20.5–23.2 ms** | 23.2–26.4 ms |
+| Mix | | | 0.07–0.11 ms |
+
+One Codec 2 state takes **31.3 KB** of heap (largest-free-block probe).
+
+**Budget per 80 ms frame (averages):**
+
+| Kit | Work | Time | Share of the core |
+|---|---|---|---|
+| 3 units | 1 encode + 2 decodes | ~72 ms | ~90 % |
+| 4 units | 1 encode + 3 decodes | ~95 ms | ~119 % (cannot keep up) |
+| Gate | | ≤ 56 ms | ≤ 70 % |
+
+That is before I2S, playout, radio and UI.
+
+**In situ, three units, phase 12 ms, 1 min** (encode + both peers decoded
+live):
+- **Whole-CPU busy 88.6–91.8 %:** encoder 31.5–32.9 %, decoder
+  53.5–56.0 %, radio ~0.8 %, data thread ~1 %.
+- **It keeps up, just:** 0 chunks dropped. 2 rejected as not audio per
+  unit, which is card #23's first packet, as designed.
+- **The encoder is unaffected** because it outranks the decoder:
+  capture-to-stage ≤ 7.5 ms, staging lead ≥ 4.5 ms, 0 stale.
+- **Memory:** heap left after the encoder and three peer decoder states is
+  5.8 KB (arena 128 KB). A fourth decode state does not fit, so the 4-unit
+  case could not be run even as a phantom stream.
+
+**Where decode time goes (from the code; not yet profiled).** Per 20 ms
+frame, 3200 mode synthesises two 10 ms sub-frames. Each has:
+- a 512-point FFT for the LPC-to-magnitude step;
+- a 512-point inverse real FFT for synthesis;
+- a `cosf`/`sinf`/`atan2f` per harmonic in phase synthesis;
+- the postfilter.
+
+The FFTs are kiss_fft. The two double-precision calls left in `sine.c`
+are init-only.
+
+**Options for the separate decision** (none taken):
+1. **Profile decode first.** Time FFT vs trig vs the rest with the cycle
+   counter, which is cheap. Then pick from the options below with numbers.
+2. **CMSIS-DSP FFTs** (upstream's `FDV_ARM_MATH` path). Helps encode and
+   decode alike; likely the biggest single gain.
+3. **Decode only active talkers.** Each frame's energy is in the Codec 2
+   bits, so silent peers can be skipped without decoding them. Typical
+   intercom use is one talker at a time, which bounds decode at 1–2
+   streams regardless of kit size. It needs a mixing and VAD policy.
+4. **A lower-rate mode** (1600: 40 ms frames, half the frames per chunk,
+   roughly half the CPU) at a quality cost.
+5. **RAM:** 31 KB per state. The 4-unit kit's encoder + 3 decoders need
+   ~125 KB of heap next to the 128 KB PCM clip buffer. That buffer goes
+   away with a live mic (a capture ring is a few KB), so memory is not
+   the blocker; CPU is.

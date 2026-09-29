@@ -90,13 +90,18 @@ config SOAK_C2_ENCODE
 	select FPU_SHARING
 	select INIT_STACKS
 	select THREAD_STACK_INFO
+	select THREAD_RUNTIME_STATS
+	select THREAD_RUNTIME_STATS_USE_TIMING_FUNCTIONS
+	select TIMING_FUNCTIONS
 	help
 	  Link the vendored Codec 2 (external/codec2, LGPL-2.1) and add the
 	  "pcm" payload mode: the clip buffer holds raw 8 kHz 16-bit PCM,
 	  a frame-locked simulated microphone makes each 80 ms chunk
 	  available a set time before its TX boundary, and an encoder thread
 	  turns it into four Codec 2 3200 frames behind the clip test header.
-	  Encode time is logged per TX record. Test firmware only: the
+	  Encode time is logged per TX record. Received chunks are decoded
+	  per peer and mixed (c2_dec.c; output discarded until there is a
+	  playout path), with per-thread CPU accounting. Test firmware only: the
 	  product licensing of Codec 2 is not settled. See
 	  docs/c2_encode_test.md.
 
@@ -139,19 +144,20 @@ config SEGGER_RTT_MAX_NUM_DOWN_BUFFERS
 	int
 	default 2 if SOAK_RTT
 
-# The encode test's libc heap: Codec 2 allocates its state with malloc once
-# per run. A fixed arena keeps the RAM budget visible (the default takes
-# whatever RAM is left).
+# The encode test's libc heap: Codec 2 allocates each state with malloc once
+# per run: the encoder, a decoder per peer slot (three) and up to two extra
+# decode streams (c2_dec.h). A fixed arena keeps the RAM budget visible (the
+# default takes whatever RAM is left); status reports what is left over.
 config COMMON_LIBC_MALLOC_ARENA_SIZE
 	int
-	default 49152 if SOAK_C2_ENCODE
+	default 131072 if SOAK_C2_ENCODE
 
-# The encoder thread is preemptible so it can never hold off the radio or
-# data threads. It must still outrank the UI loop, whose repaints run long;
-# preemptible priority 0 is the highest there is, so main steps down one.
+# The encoder (preemptible 0) and decoder (1) threads are preemptible so
+# they can never hold off the radio or data threads. They must still outrank
+# the UI loop, whose repaints run long, so main steps down to 2.
 config MAIN_THREAD_PRIORITY
 	int
-	default 1 if SOAK_C2_ENCODE
+	default 2 if SOAK_C2_ENCODE
 
 # Turning RTT on would otherwise also turn on Zephyr's RTT log backend, a
 # blocking writer on channel 0 that stalls every log call while no host is

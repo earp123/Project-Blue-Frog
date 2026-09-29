@@ -73,6 +73,13 @@ uint32_t rtt_link_phase_us(void)
 	return (uint32_t)atomic_get(&next_phase_us);
 }
 
+static atomic_t next_decx;
+
+uint32_t rtt_link_decx(void)
+{
+	return (uint32_t)atomic_get(&next_decx);
+}
+
 static const char *const mode_name[] = {
 	[SOAK_PAYLOAD_RAMP] = "ramp",
 	[SOAK_PAYLOAD_TONE] = "tone",
@@ -251,6 +258,29 @@ static void handle_line(char *s)
 			}
 		}
 		reply("err cmd");
+#ifdef CONFIG_SOAK_C2_ENCODE
+	} else if (strcmp(tok[0], "decx") == 0 && n == 2 &&
+		   parse_u32(tok[1], &lead) && lead <= C2_DEC_EXTRA_MAX) {
+		atomic_set(&next_decx, (atomic_val_t)lead);
+		reply("ok decx %u", lead);
+	} else if (strcmp(tok[0], "bench") == 0 && n == 2 &&
+		   parse_u32(tok[1], &lead)) {
+		/* Blocks this (writer) thread for the run: ~35 ms a chunk.
+		 * Refused while a soak runs, so no records are waiting.
+		 */
+		struct c2_bench b;
+		int rc = c2_dec_bench(lead, &b);
+
+		if (rc != 0) {
+			reply("err bench %d", rc);
+		} else {
+			reply("ok bench n=%u enc=%u/%u/%u/%u dec=%u/%u/%u/%u "
+			      "mix=%u state=%u", b.n, b.enc_min, b.enc_avg,
+			      b.enc_p99, b.enc_max, b.dec_min, b.dec_avg,
+			      b.dec_p99, b.dec_max, b.mix_max,
+			      b.heap_per_state);
+		}
+#endif
 	} else if (strcmp(tok[0], "phase") == 0 && n == 2 &&
 		   parse_u32(tok[1], &lead) && lead <= LEAD_MAX_US) {
 		atomic_set(&next_phase_us, (atomic_val_t)lead);
@@ -384,6 +414,19 @@ static void do_status(const struct rtt_link_ops *ops)
 	      rtt_link_phase_us(), es.staged, es.late, es.busy,
 	      es.frame_enc_max_us, es.ready_max_us, es.start_late_max_us,
 	      es.stack_unused, es.unlogged);
+
+	struct c2_dec_stats ds;
+	struct c2_cpu cpu;
+
+	c2_dec_get_stats(&ds);
+	c2_dec_get_cpu(&cpu);
+	/* dec = decoded/extra/bad/dropped/avg us/max us/mix max us/stack/
+	 * heap left; cpu = busy/enc/dec/radio/data, tenths of a percent.
+	 */
+	reply("ok dec %u/%u/%u/%u/%u/%u/%u/%u/%u cpu=%u/%u/%u/%u/%u",
+	      ds.decoded, ds.extra, ds.bad, ds.dropped, ds.dec_avg_us,
+	      ds.dec_max_us, ds.mix_max_us, ds.stack_unused, ds.heap_left,
+	      cpu.busy, cpu.enc, cpu.dec, cpu.radio, cpu.data);
 #else
 	reply("ok status %s sync=%s soak=%s mode=%s clip=%u/%08x lead=%u "
 	      "rtt_drop=%u pretx=%u/%u/%d/%d", unit, sync_name(t->sync_state),

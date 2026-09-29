@@ -12,9 +12,9 @@ For hardware wiring, build/flash instructions, and SDK setup, see
 
 On-device radio-evaluation tooling for the nRF5340 DK + Wio-SX1262 (SX1262),
 plus the first slice of the wireless-intercom firmware (TDMA radio layer).
-_Last updated: 2026-09-26._
+_Last updated: 2026-09-29._
 
-### Where things stand (2026-09-26)
+### Where things stand (2026-09-29)
 
 - **Bench link:** J-Link RTT replaces the SD card on the bench. Soaks are
   started, captured and scored from the host (`rtt_link.py`).
@@ -30,13 +30,19 @@ _Last updated: 2026-09-26._
     chunk at 128 MHz, 96–97 % bit-exact with the reference codec.
   - Encoding is pipelined per 20 ms frame. First sample to peer DIO1 is
     ~100 ms, before decode and playout.
+- **Live audio** ([`docs/live_audio_wm8960.md`](docs/live_audio_wm8960.md),
+  WM8960 HATs) **is stopped at G0, the CPU budget.** Codec 2 decode costs
+  ~23 ms per 80 ms chunk, nearly as much as encode. A 3-unit kit already
+  runs the core at ~90 %; a 4-unit kit would need ~119 %.
 - **Next, in order of payoff:**
-  1. Decode and playout on the receiving unit. The plan is an I2S amp or
-     DAC breakout on a 3.3 V DK, with the audio clock (HFCLKAUDIO) locked
-     to the frame. The Audio DKs' 1.8 V I/O makes them a later option.
-  2. Settle Codec 2's LGPL licensing for the product. It is test-only
+  1. Decide how to fit decode, starting by profiling it. The options are
+     in the G0 write-up: CMSIS-DSP FFTs, decoding only active talkers, a
+     lower-rate mode.
+  2. Then G1–G4: WM8960 bring-up, live mic, three-unit playout, and
+     mouth-to-ear latency.
+  3. Settle Codec 2's LGPL licensing for the product. It is test-only
      today, behind `CONFIG_SOAK_C2_ENCODE`.
-  3. The four-unit soak (card #23 first).
+  4. The four-unit soak (card #23 first).
 - **Open questions:**
   - One acquisition in 400 had not locked at 3 s after the sync fix. It
     was not re-checked, so it is unknown whether it was slow or stuck.
@@ -63,6 +69,35 @@ Exactly one `main()` is linked, chosen by the Kconfig choice in
 Four other variants were retired on 2026-09-25: LoRa send, the telemetry
 console, the TDMA UART-shell test and the UART soak harness (see "Streamlined
 to two unit types"). Their sections below are kept as history.
+
+### Live audio G0: decode CPU budget fails (2026-09-29)
+
+Gate G0 of [`docs/live_audio_wm8960.md`](docs/live_audio_wm8960.md), run
+before any audio hardware: can the app core encode, decode every peer and
+mix within 70 %? **No.** Numbers and options are in the task doc's "G0
+result".
+
+- **Decode costs nearly as much as encode:** 20.5–23.2 ms per 80 ms chunk
+  on average (worst 26.4 ms), against 25.8–27.3 ms to encode. Mixing is
+  ~0.1 ms. One Codec 2 state takes 31.3 KB of heap.
+- **Budget:** a 3-unit kit (encode + 2 decodes) is ~72 ms per 80 ms frame
+  (~90 %); a 4-unit kit ~95 ms (~119 %). The gate is ≤ 70 %.
+- **In situ, three units, 1 min:** whole-CPU busy 88.6–91.8 % (encoder
+  ~32 %, decoder ~55 %). The decoder keeps up with 0 dropped chunks. The
+  encoder, which outranks it, still stages every chunk on time.
+- **New:**
+  - `src/tdma_console/c2_dec.c`: a decoder thread (preemptible 1, between
+    the encoder and the UI, which moves to 2), a persistent state per peer
+    slot, a saturating mix, card #23's garbled packet rejected by header,
+    and optional phantom streams (`decx`) to size bigger kits;
+  - whole-CPU accounting from thread runtime stats (DWT-timed);
+  - `rtt_link.py bench N`, an isolated encode/decode/mix benchmark;
+  - `status` in encode builds gains a second line (`ok dec ...
+    cpu=busy/enc/dec/radio/data`), and `rtt_link.py` now reads
+    multi-line replies;
+  - the encode build's heap is 128 KB.
+- **Without RTT, the TX path is unchanged:** the receive hand-off to the
+  decoder compiles out.
 
 ### Per-frame encode pipeline: ~100 ms first sample to peer (2026-09-26)
 

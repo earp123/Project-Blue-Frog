@@ -32,6 +32,7 @@
 #endif
 #ifdef CONFIG_SOAK_C2_ENCODE
 #include "c2_enc.h"
+#include "c2_dec.h"
 #endif
 
 /* A source is linked if the bench port can select it, or if it is the one. */
@@ -72,6 +73,18 @@ static inline bool payload_ready(enum soak_payload_mode mode)
 #endif
 	return !(PAYLOAD_CLIP_LINKED && mode == SOAK_PAYLOAD_CLIP) ||
 	       clip_src_valid();
+}
+
+/* PCM mode: a received peer payload, for the decoder (c2_dec_submit()). */
+static inline void payload_rx_pcm(uint8_t slot_id,
+				  const uint8_t payload[TDMA_PAYLOAD_LEN])
+{
+#ifdef CONFIG_SOAK_C2_ENCODE
+	c2_dec_submit(slot_id, payload);
+#else
+	ARG_UNUSED(slot_id);
+	ARG_UNUSED(payload);
+#endif
 }
 
 /* PCM mode: 80 ms chunks in the clip buffer (META). */

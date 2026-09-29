@@ -73,7 +73,8 @@ if(CONFIG_SOAK_C2_ENCODE)
   target_include_directories(codec2 PUBLIC external/codec2/src
     external/codec2/include)
   target_link_libraries(app PRIVATE codec2)
-  target_sources(app PRIVATE src/tdma_console/c2_enc.c)
+  target_sources(app PRIVATE src/tdma_console/c2_enc.c
+    src/tdma_console/c2_dec.c)
 endif()
 target_include_directories(app PRIVATE src/tdma src/tdma_console)
 # Driver-internal header, needed once at init to detach the native driver's

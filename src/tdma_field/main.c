@@ -709,6 +709,12 @@ static void soak_start(int64_t duration_ms, bool sd)
 	 */
 	if (mode == SOAK_PAYLOAD_PCM) {
 		rc = c2_enc_start(rtt_link_phase_us());
+		if (rc == 0) {
+			rc = c2_dec_start(my_slot, rtt_link_decx());
+			if (rc < 0) {
+				c2_enc_stop();
+			}
+		}
 		if (rc < 0) {
 			snprintf(home_msg, sizeof(home_msg), "enc err %d", rc);
 			tdma_stop();
@@ -770,6 +776,7 @@ static void soak_finish(void)
 	tdma_stop();
 #ifdef CONFIG_SOAK_C2_ENCODE
 	c2_enc_stop();
+	c2_dec_stop();
 #endif
 
 	/* One last counter snapshot, then drain and close the log. */
@@ -801,6 +808,10 @@ static void soak_data_step(void)
 		 * any derived accounting, so the file holds the raw evidence.
 		 */
 		soak_log_rx(&msg, tdma_get_telemetry()->sync_state);
+		if (PAYLOAD_PCM_LINKED &&
+		    soak.payload_mode == SOAK_PAYLOAD_PCM) {
+			payload_rx_pcm(msg.slot_id, msg.payload);
+		}
 
 		if (soak.have_ctr[s]) {
 			uint16_t delta = msg.frame_ctr - soak.last_ctr[s];

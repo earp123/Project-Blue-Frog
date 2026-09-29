@@ -28,6 +28,10 @@
  *   phase <us>              PCM mode: each 80 ms chunk of the simulated
  *                           mic becomes available this long before its TX
  *                           boundary, from the next soak (c2_enc.h)
+ *   decx <n>                PCM mode: n (0..2) extra decode streams from
+ *                           the next soak, to size a bigger kit (c2_dec.h)
+ *   bench <chunks>          no soak running: time encode + decode + mix of
+ *                           that many chunks of the loaded PCM, isolated
  *   lead <us>               stage each payload this long before the unit's
  *                           TX boundary, from the next soak (0 = at once,
  *                           right after TxDone; the default)
@@ -100,5 +104,8 @@ uint32_t rtt_link_lead_us(void);
 
 /* PCM availability before the TX boundary for the next soak ("phase"). */
 uint32_t rtt_link_phase_us(void);
+
+/* Extra decode streams for the next soak ("decx"), c2_dec.h. */
+uint32_t rtt_link_decx(void);
 
 #endif /* RTT_LINK_H_ */

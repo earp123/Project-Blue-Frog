@@ -17,6 +17,8 @@ Usage:
     rtt_link.py --sn N mode ramp|tone|clip
     rtt_link.py --sn N lead 20000             # stage 20 ms before TX; 0 = at once
     rtt_link.py --sn N phase 20000            # pcm: chunk ready 20 ms before TX
+    rtt_link.py --sn N decx 1                 # pcm: one extra decode stream
+    rtt_link.py --sn N bench 100              # isolated encode/decode timing
     rtt_link.py --sn N clip clip_F.c2         # "clip <n> <crc>" + the bytes
     rtt_link.py --sn N capture -o m.bin [--minutes M] [--soak M [--sd]]
     rtt_link.py --all capture -o soaks/rtt/ [--soak M]
@@ -140,10 +142,24 @@ class Link:
         line, self._reply_buf = self._reply_buf.split(b"\n", 1)
         return line.decode("ascii", "replace").strip()
 
-    def command(self, line, payload=b""):
+    def command(self, line, payload=b"", timeout=REPLY_TIMEOUT_S):
         self.flush_replies()
         self.write(line.encode("ascii") + b"\n" + payload)
-        return self.reply()
+        lines = [self.reply(timeout)]
+        # Some replies run to more than one line (status in encode builds);
+        # they follow the first within a few ms.
+        deadline = time.monotonic() + 0.1
+        while time.monotonic() < deadline:
+            chunk = self.read(UP_CTL, 512)
+            if chunk:
+                self._reply_buf += chunk
+                deadline = time.monotonic() + 0.1
+            else:
+                time.sleep(POLL_S)
+        while b"\n" in self._reply_buf:
+            extra, self._reply_buf = self._reply_buf.split(b"\n", 1)
+            lines.append(extra.decode("ascii", "replace").strip())
+        return "\n".join(lines)
 
 
 def parse_status(line):
@@ -274,6 +290,14 @@ def run_one(args):
             line = f"lead {args.us}"
         elif args.cmd == "phase":
             line = f"phase {args.us}"
+        elif args.cmd == "decx":
+            line = f"decx {args.n}"
+        elif args.cmd == "bench":
+            # ~35 ms of device time per chunk, plus margin.
+            r = link.command(f"bench {args.chunks}",
+                             timeout=10 + 0.05 * args.chunks)
+            print(r)
+            return 0 if r.startswith("ok") else 1
         elif args.cmd == "clip":
             return cmd_clip(link, args)
         elif args.cmd == "capture":
@@ -328,6 +352,13 @@ def main(argv=None):
     sub.add_parser("stop")
     p = sub.add_parser("mode")
     p.add_argument("mode", choices=["ramp", "tone", "clip", "pcm"])
+    p = sub.add_parser("decx")
+    p.add_argument("n", type=int, help="pcm mode: extra decode streams "
+                   "(0-2) from the next soak, to size a bigger kit")
+    p = sub.add_parser("bench")
+    p.add_argument("chunks", type=int, nargs="?", default=100,
+                   help="no soak running: time encode + decode + mix of this "
+                        "many chunks of the loaded PCM (default 100)")
     p = sub.add_parser("phase")
     p.add_argument("us", type=int,
                    help="pcm mode: each 80 ms chunk becomes available this "
