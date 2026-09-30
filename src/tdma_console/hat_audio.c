@@ -225,8 +225,17 @@ static void audio_thread(void *p1, void *p2, void *p3)
 	ARG_UNUSED(p2);
 	ARG_UNUSED(p3);
 
-	if (!device_is_ready(i2s) || wm8960_init() != 0) {
-		return;		/* no HAT: hat_audio_ok() stays false */
+	if (!device_is_ready(i2s)) {
+		return;
+	}
+	/* From a cold power-up the codec may not answer yet at 300 ms (seen
+	 * on the bench; a warm reset always worked): retry for ~5 s.
+	 */
+	for (int i = 0; wm8960_init() != 0; i++) {
+		if (i == 10) {
+			return;	/* no HAT: hat_audio_ok() stays false */
+		}
+		k_msleep(500);
 	}
 	st.codec_ok = true;
 	if (i2s_start() != 0) {
