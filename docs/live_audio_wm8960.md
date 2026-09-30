@@ -1,7 +1,7 @@
 # Live audio smoke test: WM8960 HAT, three units
 
-**Status:** task, 2026-09-29. **G0 passed after Codec 2 speed fixes; G1
-passed (2026-09-29)**, results at the end; G2–G4 not started. **Follows:**
+**Status:** task, 2026-09-29. **G0 passed after Codec 2 speed fixes; G1 and
+G2 passed (2026-09-29)**, results at the end; G3–G4 not started. **Follows:**
 [`c2_encode_test.md`](c2_encode_test.md) (on-device encode, ~100 ms first
 sample to peer DIO1). **Supersedes** the CHANGELOG's "Next #1" plan of an
 I2S amp/DAC breakout: the audio front end is now a WM8960 codec board.
@@ -396,3 +396,47 @@ Findings that the unit firmware (G2 onward) has to carry over:
   ring holds both channels and the encoder gets a selectable mono mix
   (left, right, or the average, the default). Both channels stay available
   for noise suppression or beamforming later.
+
+## G2 result (2026-09-29): PASS
+
+The live mic replaces the simulated one: firmware `1f7ee00` + `4cc54d8`
+(`CONFIG_SOAK_AUDIO_HAT`, `boards/audio_hat.overlay`, payload mode MIC).
+Two units: the HAT on the TFT unit (SEC 1, `mode mic`, `mix avg`, phase
+12 ms) talking, the shield unit (MASTER) listening. 1 min, the engineer
+talking into the HAT mics.
+
+Build (TFT unit; the shield unit the same with its own two files):
+
+```
+west build -b nrf5340dk/nrf5340/cpuapp -d build-hat-tft . -- \
+  -DEXTRA_DTC_OVERLAY_FILE="boards/nrf5340dk_nrf5340_cpuapp_tft.overlay;boards/audio_hat.overlay" \
+  -DEXTRA_CONF_FILE=boards/nrf5340dk_nrf5340_cpuapp_tft.conf \
+  -DCONFIG_SOAK_C2_ENCODE=y -DCONFIG_SOAK_AUDIO_HAT=y
+```
+
+| Check | Result |
+|---|---|
+| Chunks staged by the talker | 743; 0 late (past the pickup deadline), 0 busy |
+| Received by the listener | 743 / 743, 0 missing; decoded audio sample-for-sample equal to the talker's own TX records |
+| Engine | PER 0 %, `slot_timeouts` 0, CRC errors 0; `stale_retx` 1 (the TX slot before the first chunk, as in every PCM run) |
+| Worst frame encode / capture-to-stage | 3.95 ms / 4.00 ms, so ~8 ms of slack at the 12 ms phase |
+| Pre-TX pickup margin | min 1.73 ms, as before for a unit with a payload to write (≥ 1.69 ms, pre-TX pickup entry) |
+| Mic path | LRCLK 7999.96 Hz; 0 slips in 2975 frames; 0 I2S restarts; 0 clipped samples (mic peaks 22.6k / 27.5k of 32.8k) |
+| Talker CPU busy | 26.8 % (encoder 15.6 %) |
+| Listening | "pretty robotic, but it does sound like me and it's clear": Codec 2 3200 as expected. `soaks/rtt/g2/g2_heard_by_master_2.wav` |
+
+- **The no-RTT images are byte-identical** to before G2 on both unit types,
+  so the TX path there is unchanged.
+- `tools/mic_wav.py` decodes a mic stream from a log: the talker's TX
+  records, or a peer's RX records with `--slot`.
+- **Bench trouble on the way, both hardware:**
+  - The HAT DK's SX1262 did not come up (BUSY stuck high, `tdma_init`
+    -ENODEV, the pre-HAT image too) until a radio wire was reseated. The
+    radio driver probes only at boot, so the unit needed a reset afterwards.
+  - From a cold power-up the codec did not answer 300 ms after boot. The
+    firmware now retries its setup for ~5 s (`4cc54d8`).
+- **Open for later:**
+  - The robotic quality is Codec 2 at 3200 bit/s. Things to try: a
+    100–150 Hz high-pass ahead of the encoder (the idle floor is
+    rumble), and mic gain staging.
+  - One run, one talker, one listener. G3 adds a third unit and playout.

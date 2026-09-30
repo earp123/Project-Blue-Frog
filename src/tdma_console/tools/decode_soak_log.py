@@ -189,7 +189,7 @@ def main():
 
     for rec in iter_records(blob):
         (_, rtype, slot_id, sync, flags, t_us, frame_ctr, rssi, snr,
-         seq, uptime_ms, payload) = rec
+         seq, uptime_ms, payload, _rsvd) = rec
 
         counts[rtype] += 1
 

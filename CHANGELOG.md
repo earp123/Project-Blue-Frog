@@ -35,11 +35,12 @@ _Last updated: 2026-09-29._
   fixes, encode is 12.2 ms and decode 13.2 ms per 80 ms chunk. Four units
   take ~64 % of the core, with every peer decoded. **G1 has passed too:**
   the WM8960 HAT runs on one DK (8 kHz, −5 ppm), with a one-bit DAC
-  alignment bug found and fixed in software.
+  alignment bug found and fixed in software. **And G2:** live speech from
+  the HAT mics crosses the link intact (743 of 743 chunks, one minute).
 - **Next, in order of payoff:**
-  1. G2–G4: live mic into the per-frame encoder (in progress), then
-     three-unit playout (the other two HATs, with I2C pull-ups) and
-     mouth-to-ear latency.
+  1. G3–G4: decode + playout on three units (the other two HATs, with
+     I2C pull-ups; playout needs G1's `pack_tx()`), then mouth-to-ear
+     latency.
   2. In reserve if the live pipeline needs CPU: fast sin/cos/atan2 in
      synthesis (~2 ms per decode).
   3. Settle Codec 2's LGPL licensing for the product. It is test-only
@@ -71,6 +72,31 @@ Exactly one `main()` is linked, chosen by the Kconfig choice in
 Four other variants were retired on 2026-09-25: LoRa send, the telemetry
 console, the TDMA UART-shell test and the UART soak harness (see "Streamlined
 to two unit types"). Their sections below are kept as history.
+
+### Live mic over the air: live audio G2 passes (2026-09-29)
+
+A person talks into the HAT mics on one unit and the other unit receives
+it: a 1 min run, two units. Details and the build line:
+[`docs/live_audio_wm8960.md`](docs/live_audio_wm8960.md) ("G2 result").
+
+- **New `CONFIG_SOAK_AUDIO_HAT`** (with `boards/audio_hat.overlay`, either
+  unit type). `hat_audio.c` runs the codec and i2s0, capturing both mics.
+  `rtt_link.py mode mic` feeds the per-frame encoder live 20 ms frames of
+  a mono mix (`mix avg|left|right`, average by default). `status` gains
+  an `ok hat` line.
+- **Result:** 743 of 743 chunks received, sample-for-sample what the
+  talker sent. PER 0 %, 0 late stages, worst capture-to-stage 4.0 ms at
+  the 12 ms phase, 0 mic-clock slips, 26.8 % CPU on the talker. It sounds
+  "pretty robotic, but it does sound like me and it's clear": Codec 2 at
+  3200 bit/s.
+- **The no-RTT images are byte-identical** on both unit types (TX path
+  unchanged).
+- **Tools:** `mic_wav.py` decodes a mic stream from a log to a WAV;
+  `decode_soak_log.py` knows the mic mode, and its summary no longer
+  crashes on current logs (it predated the record's `rsvd` field).
+- **Bench:** the codec now retries its setup for ~5 s after a cold boot.
+  A loose radio wire on the HAT DK looked like a firmware fault
+  (`tdma_init` -ENODEV) until it was reseated.
 
 ### WM8960 HAT bring-up: live audio G1 passes (2026-09-29)
 
