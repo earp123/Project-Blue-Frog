@@ -32,8 +32,10 @@ REC_FMT = "<BBBBIHhb3sII40s"
 META_FMT = "<IHBBIIIIBBHbBBBIBBH"
 MAGIC = 0x4B414F53  # "SOAK"
 # META payload_mode (zero in pre-tone v2 files). p8 / p16 mean, per mode:
-# ramp 0 / 0, tone fs kHz / f0 Hz, clip codec / clip chunk count.
-PAYLOAD_RAMP, PAYLOAD_TONE, PAYLOAD_CLIP, PAYLOAD_PCM = 0, 1, 2, 3
+# ramp 0 / 0, tone fs kHz / f0 Hz, clip codec / clip chunk count, pcm codec /
+# PCM chunk count, mic codec / mono mix (0 avg, 1 left, 2 right).
+PAYLOAD_RAMP, PAYLOAD_TONE, PAYLOAD_CLIP, PAYLOAD_PCM, PAYLOAD_MIC =     0, 1, 2, 3, 4
+MIX_NAME = {0: "avg", 1: "left", 2: "right"}
 CODEC_NAME = {0: "3200"}	# Codec 2 mode enum in the clip header
 
 # One on-disk record, unpacked. index is the record's position in the file.
@@ -106,6 +108,8 @@ def parse_meta(payload):
         meta["clip_codec"], meta["clip_chunks"] = p8, p16
     elif payload_mode == PAYLOAD_PCM:
         meta["clip_codec"], meta["pcm_chunks"] = p8, p16
+    elif payload_mode == PAYLOAD_MIC:
+        meta["clip_codec"], meta["mic_mix"] = p8, p16
     return meta
 
 
@@ -121,6 +125,10 @@ def payload_desc(meta):
         return "payload=pcm codec=%s chunks=%d (encoded on the device)" % (
             CODEC_NAME.get(meta["clip_codec"], "?%d" % meta["clip_codec"]),
             meta["pcm_chunks"])
+    if meta["payload_mode"] == PAYLOAD_MIC:
+        return "payload=mic codec=%s mix=%s (live HAT mics, on-device)" % (
+            CODEC_NAME.get(meta["clip_codec"], "?%d" % meta["clip_codec"]),
+            MIX_NAME.get(meta["mic_mix"], "?%d" % meta["mic_mix"]))
     if meta["payload_mode"] == PAYLOAD_RAMP:
         return "payload=ramp"
     return "payload=unknown(%d)" % meta["payload_mode"]

@@ -105,6 +105,19 @@ config SOAK_C2_ENCODE
 	  product licensing of Codec 2 is not settled. See
 	  docs/c2_encode_test.md.
 
+config SOAK_AUDIO_HAT
+	bool "WM8960 Audio HAT as the microphone (payload mode MIC)"
+	depends on SOAK_C2_ENCODE
+	select I2C
+	select I2S
+	help
+	  Drive a WM8960 Audio HAT (docs/live_audio_wm8960.md): codec setup
+	  over i2c1, i2s0 as the slave at 8 kHz, both mics into a capture
+	  ring, and the "mic" payload mode, in which the per-frame encoder
+	  takes live 20 ms frames (a mono mix, "mix avg|left|right") instead
+	  of the PCM clip. Needs boards/audio_hat.overlay after the unit's
+	  own overlay. G2 of the live audio task; no playout yet.
+
 config SOAK_C2_ARM_FFT
 	bool "Codec 2 FFTs through CMSIS-DSP"
 	default y

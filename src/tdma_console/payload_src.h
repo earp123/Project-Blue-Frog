@@ -34,6 +34,9 @@
 #include "c2_enc.h"
 #include "c2_dec.h"
 #endif
+#ifdef CONFIG_SOAK_AUDIO_HAT
+#include "hat_audio.h"
+#endif
 
 /* A source is linked if the bench port can select it, or if it is the one. */
 #define PAYLOAD_TONE_LINKED \
@@ -44,6 +47,17 @@
  * default (it needs a PCM clip, uploaded over RTT, and "mode pcm").
  */
 #define PAYLOAD_PCM_LINKED	IS_ENABLED(CONFIG_SOAK_C2_ENCODE)
+/* The same encoder fed by the WM8960 HAT's mics ("mode mic"). */
+#define PAYLOAD_MIC_LINKED	IS_ENABLED(CONFIG_SOAK_AUDIO_HAT)
+
+/* The modes whose chunks the on-device encoder makes and stages itself,
+ * and whose received chunks go to the decoder.
+ */
+static inline bool payload_is_c2(enum soak_payload_mode mode)
+{
+	return (PAYLOAD_PCM_LINKED && mode == SOAK_PAYLOAD_PCM) ||
+	       (PAYLOAD_MIC_LINKED && mode == SOAK_PAYLOAD_MIC);
+}
 
 /* The Kconfig choice, as the boot default. */
 #define PAYLOAD_DEFAULT_MODE \
@@ -71,6 +85,13 @@ static inline bool payload_ready(enum soak_payload_mode mode)
 		return c2_enc_pcm_ok();
 	}
 #endif
+	if (mode == SOAK_PAYLOAD_MIC) {
+#ifdef CONFIG_SOAK_AUDIO_HAT
+		return hat_audio_ok();
+#else
+		return false;
+#endif
+	}
 	return !(PAYLOAD_CLIP_LINKED && mode == SOAK_PAYLOAD_CLIP) ||
 	       clip_src_valid();
 }
@@ -84,6 +105,16 @@ static inline void payload_rx_pcm(uint8_t slot_id,
 #else
 	ARG_UNUSED(slot_id);
 	ARG_UNUSED(payload);
+#endif
+}
+
+/* MIC mode: the encoder's mono mix (META p16, enum hat_mix). */
+static inline uint32_t payload_mic_mix(void)
+{
+#ifdef CONFIG_SOAK_AUDIO_HAT
+	return (uint32_t)hat_audio_get_mix();
+#else
+	return 0;
 #endif
 }
 

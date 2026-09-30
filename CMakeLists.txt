@@ -80,6 +80,9 @@ if(CONFIG_SOAK_C2_ENCODE)
   target_link_libraries(app PRIVATE codec2)
   target_sources(app PRIVATE src/tdma_console/c2_enc.c
     src/tdma_console/c2_dec.c)
+  # The WM8960 HAT as the microphone (CONFIG_SOAK_AUDIO_HAT).
+  target_sources_ifdef(CONFIG_SOAK_AUDIO_HAT app PRIVATE
+    src/tdma_console/hat_audio.c src/tdma_console/wm8960.c)
 
   # Per-function profile (CONFIG_SOAK_C2_PROFILE): the linker sends the
   # codec's cross-file calls to timing wrappers in c2_prof.c.

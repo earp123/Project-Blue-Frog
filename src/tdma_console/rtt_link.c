@@ -88,6 +88,7 @@ static const char *const mode_name[] = {
 	[SOAK_PAYLOAD_TONE] = "tone",
 	[SOAK_PAYLOAD_CLIP] = "clip",
 	[SOAK_PAYLOAD_PCM] = "pcm",
+	[SOAK_PAYLOAD_MIC] = "mic",
 };
 
 enum soak_payload_mode rtt_link_mode(void)
@@ -254,7 +255,8 @@ static void handle_line(char *s)
 	if (strcmp(tok[0], "mode") == 0 && n == 2) {
 		for (int m = 0; m < (int)ARRAY_SIZE(mode_name); m++) {
 			if (strcmp(tok[1], mode_name[m]) == 0 &&
-			    (m != SOAK_PAYLOAD_PCM || PAYLOAD_PCM_LINKED)) {
+			    (m != SOAK_PAYLOAD_PCM || PAYLOAD_PCM_LINKED) &&
+			    (m != SOAK_PAYLOAD_MIC || PAYLOAD_MIC_LINKED)) {
 				atomic_set(&next_mode, m);
 				reply("ok mode %s", mode_name[m]);
 				return;
@@ -294,6 +296,18 @@ static void handle_line(char *s)
 			}
 #endif
 		}
+#endif
+#ifdef CONFIG_SOAK_AUDIO_HAT
+	} else if (strcmp(tok[0], "mix") == 0 && n == 2 &&
+		   (strcmp(tok[1], "avg") == 0 || strcmp(tok[1], "left") == 0 ||
+		    strcmp(tok[1], "right") == 0)) {
+		/* The mic mode's mono mix; takes effect at the next frame,
+		 * so it can change mid-run.
+		 */
+		hat_audio_set_mix(tok[1][0] == 'a' ? HAT_MIX_AVG :
+				  tok[1][0] == 'l' ? HAT_MIX_LEFT :
+						     HAT_MIX_RIGHT);
+		reply("ok mix %s", tok[1]);
 #endif
 	} else if (strcmp(tok[0], "phase") == 0 && n == 2 &&
 		   parse_u32(tok[1], &lead) && lead <= LEAD_MAX_US) {
@@ -441,6 +455,20 @@ static void do_status(const struct rtt_link_ops *ops)
 	      ds.decoded, ds.extra, ds.bad, ds.dropped, ds.dec_avg_us,
 	      ds.dec_max_us, ds.mix_max_us, ds.stack_unused, ds.heap_left,
 	      cpu.busy, cpu.enc, cpu.dec, cpu.radio, cpu.data);
+#ifdef CONFIG_SOAK_AUDIO_HAT
+	struct hat_audio_stats hs;
+	static const char *const mix_name[] = { "avg", "left", "right" };
+
+	hat_audio_get_stats(&hs);
+	/* hat = codec ACKed/I2C retries/5 ms blocks/LRCLK mHz/I2S restarts/
+	 * timeouts; slip = short/drop/frames served this run; peak = left/
+	 * right since the last status.
+	 */
+	reply("ok hat %u/%u/%u/%u/%u/%u mix=%s slip=%u/%u/%u peak=%d/%d",
+	      hs.codec_ok, hs.i2c_retries, hs.blocks, hs.rate_mhz, hs.restarts,
+	      hs.timeouts, mix_name[hat_audio_get_mix()], hs.slip_short,
+	      hs.slip_drop, hs.frames, hs.peak[0], hs.peak[1]);
+#endif
 #else
 	reply("ok status %s sync=%s soak=%s mode=%s clip=%u/%08x lead=%u "
 	      "rtt_drop=%u pretx=%u/%u/%d/%d", unit, sync_name(t->sync_state),

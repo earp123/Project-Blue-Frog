@@ -14,7 +14,8 @@ Usage:
     rtt_link.py --sn N status
     rtt_link.py --sn N soak 5 [--sd]          # 0 = continuous
     rtt_link.py --sn N stop
-    rtt_link.py --sn N mode ramp|tone|clip
+    rtt_link.py --sn N mode ramp|tone|clip|pcm|mic   # mic: WM8960 HAT builds
+    rtt_link.py --sn N mix avg|left|right     # mic: the encoder's mono mix
     rtt_link.py --sn N lead 20000             # stage 20 ms before TX; 0 = at once
     rtt_link.py --sn N phase 20000            # pcm: chunk ready 20 ms before TX
     rtt_link.py --sn N decx 1                 # pcm: one extra decode stream
@@ -290,6 +291,8 @@ def run_one(args):
             line = f"lead {args.us}"
         elif args.cmd == "phase":
             line = f"phase {args.us}"
+        elif args.cmd == "mix":
+            line = f"mix {args.mix}"
         elif args.cmd == "decx":
             line = f"decx {args.n}"
         elif args.cmd == "bench":
@@ -351,7 +354,10 @@ def main(argv=None):
     p.add_argument("--sd", action="store_true", help="also log to the card")
     sub.add_parser("stop")
     p = sub.add_parser("mode")
-    p.add_argument("mode", choices=["ramp", "tone", "clip", "pcm"])
+    p.add_argument("mode", choices=["ramp", "tone", "clip", "pcm", "mic"])
+    p = sub.add_parser("mix")
+    p.add_argument("mix", choices=["avg", "left", "right"],
+                   help="mic mode: the mono mix the encoder gets (HAT builds)")
     p = sub.add_parser("decx")
     p.add_argument("n", type=int, help="pcm mode: extra decode streams "
                    "(0-2) from the next soak, to size a bigger kit")

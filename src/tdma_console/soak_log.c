@@ -193,6 +193,10 @@ int soak_log_start(enum tdma_role role, uint8_t slot_id, int8_t tx_power_dbm,
 		m.payload_mode = SOAK_PAYLOAD_PCM;
 		m.p8 = CLIP_CODEC_3200;
 		m.p16 = (uint16_t)payload_pcm_chunks();
+	} else if (PAYLOAD_MIC_LINKED && mode == SOAK_PAYLOAD_MIC) {
+		m.payload_mode = SOAK_PAYLOAD_MIC;
+		m.p8 = CLIP_CODEC_3200;
+		m.p16 = (uint16_t)payload_mic_mix();
 	}
 
 	r.type = SOAK_REC_META;

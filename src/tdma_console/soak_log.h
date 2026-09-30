@@ -147,6 +147,7 @@ enum soak_payload_mode {
 	SOAK_PAYLOAD_TONE = 1,	/* tone_src chunks */
 	SOAK_PAYLOAD_CLIP = 2,	/* clip_src chunks: test header + Codec 2 */
 	SOAK_PAYLOAD_PCM = 3,	/* c2_enc: PCM clip encoded on the device */
+	SOAK_PAYLOAD_MIC = 4,	/* c2_enc: live WM8960 HAT mic (hat_audio) */
 };
 
 /*

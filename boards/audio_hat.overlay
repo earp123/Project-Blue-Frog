@@ -1,0 +1,72 @@
+/*
+ * WM8960 Audio HAT (CONFIG_SOAK_AUDIO_HAT), on either unit type. Applied
+ * after the unit's own overlay:
+ *
+ *   -DEXTRA_DTC_OVERLAY_FILE="boards/nrf5340dk_nrf5340_cpuapp_<unit>.overlay;boards/audio_hat.overlay"
+ *
+ * Pin map (docs/live_audio_wm8960.md):
+ *
+ *   HAT pin 3  SDA    -> P0.25  i2c1 SDA
+ *   HAT pin 5  SCL    -> P0.26  i2c1 SCL
+ *   HAT pin 12 BCLK   -> P0.04  i2s0 SCK   (input: the WM8960 is master)
+ *   HAT pin 35 LRCLK  -> P0.05  i2s0 LRCK  (input)
+ *   HAT pin 38 ADCDAT -> P0.06  i2s0 SDIN
+ *   HAT pin 40 DACDAT -> P0.11  i2s0 SDOUT
+ *
+ * i2c1 on P0.25/P0.26 is the shield unit's OLED bus already (the codec, at
+ * 0x1A, joins it); on the TFT unit this enables it. The HAT has no I2C
+ * pull-ups, so the nRF's internal ones are on: enough on the bench with
+ * write retries (G1), but real units want 2.2-4.7 k to 3.3 V.
+ */
+
+&pinctrl {
+	i2c1_hat_default: i2c1_hat_default {
+		group1 {
+			psels = <NRF_PSEL(TWIM_SDA, 0, 25)>,
+				<NRF_PSEL(TWIM_SCL, 0, 26)>;
+			bias-pull-up;
+		};
+	};
+
+	i2c1_hat_sleep: i2c1_hat_sleep {
+		group1 {
+			psels = <NRF_PSEL(TWIM_SDA, 0, 25)>,
+				<NRF_PSEL(TWIM_SCL, 0, 26)>;
+			low-power-enable;
+		};
+	};
+
+	i2s0_hat_default: i2s0_hat_default {
+		group1 {
+			psels = <NRF_PSEL(I2S_SCK_S, 0, 4)>,
+				<NRF_PSEL(I2S_LRCK_S, 0, 5)>,
+				<NRF_PSEL(I2S_SDIN, 0, 6)>,
+				<NRF_PSEL(I2S_SDOUT, 0, 11)>;
+		};
+	};
+
+	i2s0_hat_sleep: i2s0_hat_sleep {
+		group1 {
+			psels = <NRF_PSEL(I2S_SCK_S, 0, 4)>,
+				<NRF_PSEL(I2S_LRCK_S, 0, 5)>,
+				<NRF_PSEL(I2S_SDIN, 0, 6)>,
+				<NRF_PSEL(I2S_SDOUT, 0, 11)>;
+			low-power-enable;
+		};
+	};
+};
+
+&i2c1 {
+	status = "okay";
+	clock-frequency = <I2C_BITRATE_STANDARD>;
+	pinctrl-0 = <&i2c1_hat_default>;
+	pinctrl-1 = <&i2c1_hat_sleep>;
+	pinctrl-names = "default", "sleep";
+};
+
+&i2s0 {
+	status = "okay";
+	pinctrl-0 = <&i2s0_hat_default>;
+	pinctrl-1 = <&i2s0_hat_sleep>;
+	pinctrl-names = "default", "sleep";
+};

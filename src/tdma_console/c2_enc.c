@@ -17,6 +17,9 @@
 
 #include "c2_enc.h"
 #include "clip_src.h"
+#ifdef CONFIG_SOAK_AUDIO_HAT
+#include "hat_audio.h"
+#endif
 
 /* codec2_encode keeps FFT and pitch buffers on the stack: 16 KB left only
  * 1.7 KB never touched (status enc=.../<unused>), so 20 KB.
@@ -44,6 +47,7 @@ static int create_result;
 /* Run parameters and codec, owned by the encoder thread while running. */
 static struct CODEC2 *codec;
 static uint32_t phase_us;
+static bool from_mic;		/* live HAT frames, not the PCM clip */
 static atomic_t running;
 static atomic_t run_id;		/* bumped by start/stop: a stale wait aborts */
 static atomic_t alive;		/* the thread holds the codec for a run */
@@ -87,9 +91,17 @@ bool c2_enc_pcm_ok(void)
 	       len % C2_ENC_CHUNK_PCM_BYTES == 0;
 }
 
-int c2_enc_start(uint32_t phase)
+int c2_enc_start(uint32_t phase, bool mic)
 {
-	if (!c2_enc_pcm_ok()) {
+	if (mic) {
+#ifdef CONFIG_SOAK_AUDIO_HAT
+		if (!hat_audio_ok()) {
+			return -ENODEV;
+		}
+#else
+		return -ENODEV;
+#endif
+	} else if (!c2_enc_pcm_ok()) {
 		return -EINVAL;
 	}
 
@@ -102,6 +114,12 @@ int c2_enc_start(uint32_t phase)
 	k_spin_unlock(&rec_lock, key);
 
 	phase_us = phase;
+	from_mic = mic;
+#ifdef CONFIG_SOAK_AUDIO_HAT
+	if (mic) {
+		hat_audio_capture_reset();
+	}
+#endif
 	atomic_inc(&run_id);
 	atomic_set(&alive, 1);
 	atomic_set(&running, 1);
@@ -157,9 +175,19 @@ void c2_enc_get_stats(struct c2_enc_stats *out)
 	k_spin_unlock(&rec_lock, key);
 }
 
-/* Encode frame k of chunk n (the PCM loops) into out. */
+/*
+ * Encode frame k of chunk n into out: from the PCM clip (it loops), or the
+ * next 20 ms of live audio, taken now that the frame is due.
+ */
 static void encode_frame(uint32_t n, int k, uint8_t *out)
 {
+#ifdef CONFIG_SOAK_AUDIO_HAT
+	if (from_mic) {
+		hat_audio_frame(frame_pcm, FRAME_SAMPLES);
+		codec2_encode(codec, out, frame_pcm);
+		return;
+	}
+#endif
 	uint32_t len;
 	const uint8_t *pcm = clip_src_data(&len);
 	uint32_t chunks = len / C2_ENC_CHUNK_PCM_BYTES;
@@ -180,7 +208,8 @@ static void put_header(uint32_t n, uint8_t out[TDMA_PAYLOAD_LEN])
 	out[0] = CLIP_MAGIC;
 	out[1] = CLIP_CODEC_3200;
 	sys_put_le16((uint16_t)n, &out[2]);
-	sys_put_le16((uint16_t)clip_src_crc(), &out[4]);
+	/* Live audio has no clip to name: clip_id 0. */
+	sys_put_le16(from_mic ? 0 : (uint16_t)clip_src_crc(), &out[4]);
 	out[6] = 0;
 	out[7] = 0;
 }

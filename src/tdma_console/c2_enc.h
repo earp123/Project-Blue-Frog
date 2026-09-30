@@ -41,11 +41,15 @@
 
 /*
  * Start encoding for a run: a fresh Codec 2 3200 state (created on the
- * encoder thread, which has the stack for it), the PCM in the clip buffer,
- * each chunk complete phase_us before its TX boundary. Returns 0, -ENOMEM if
- * the codec could not be created, or -EINVAL if the clip is not PCM-sized.
+ * encoder thread, which has the stack for it), each chunk complete phase_us
+ * before its TX boundary. The audio is the PCM in the clip buffer, or with
+ * mic (CONFIG_SOAK_AUDIO_HAT, payload mode MIC) live 20 ms frames from the
+ * WM8960 HAT (hat_audio.h), taken at the same frame times; their header
+ * carries clip_id 0. Returns 0, -ENOMEM if the codec could not be created,
+ * -EINVAL if the clip is not PCM-sized, or -ENODEV if the HAT is not
+ * running.
  */
-int c2_enc_start(uint32_t phase_us);
+int c2_enc_start(uint32_t phase_us, bool mic);
 
 /* Stop and free the codec state. Safe to call when not started. */
 void c2_enc_stop(void);

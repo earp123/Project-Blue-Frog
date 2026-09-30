@@ -704,11 +704,12 @@ static void soak_start(int64_t duration_ms, bool sd)
 	}
 
 #ifdef CONFIG_SOAK_C2_ENCODE
-	/* PCM mode: the on-device encoder, fresh state per run. It waits for
-	 * the engine to reach RUNNING before its first chunk.
+	/* PCM and MIC modes: the on-device encoder, fresh state per run. It
+	 * waits for the engine to reach RUNNING before its first chunk.
 	 */
-	if (mode == SOAK_PAYLOAD_PCM) {
-		rc = c2_enc_start(rtt_link_phase_us());
+	if (payload_is_c2(mode)) {
+		rc = c2_enc_start(rtt_link_phase_us(),
+				  mode == SOAK_PAYLOAD_MIC);
 		if (rc == 0) {
 			rc = c2_dec_start(my_slot, rtt_link_decx());
 			if (rc < 0) {
@@ -808,8 +809,7 @@ static void soak_data_step(void)
 		 * any derived accounting, so the file holds the raw evidence.
 		 */
 		soak_log_rx(&msg, tdma_get_telemetry()->sync_state);
-		if (PAYLOAD_PCM_LINKED &&
-		    soak.payload_mode == SOAK_PAYLOAD_PCM) {
+		if (payload_is_c2(soak.payload_mode)) {
 			payload_rx_pcm(msg.slot_id, msg.payload);
 		}
 
@@ -882,8 +882,7 @@ static void soak_data_step(void)
 		bool have = true;
 		bool staged = false;
 
-		if (PAYLOAD_PCM_LINKED &&
-		    soak.payload_mode == SOAK_PAYLOAD_PCM) {
+		if (payload_is_c2(soak.payload_mode)) {
 			/* The encoder stages its chunks itself, the moment
 			 * the last frame is encoded; here we only pick up
 			 * what it staged, for the TX record.
