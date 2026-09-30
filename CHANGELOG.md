@@ -33,10 +33,13 @@ _Last updated: 2026-09-29._
 - **Live audio** ([`docs/live_audio_wm8960.md`](docs/live_audio_wm8960.md),
   WM8960 HATs) **has passed G0, the CPU budget.** After the Codec 2 speed
   fixes, encode is 12.2 ms and decode 13.2 ms per 80 ms chunk. Four units
-  take ~64 % of the core, with every peer decoded.
+  take ~64 % of the core, with every peer decoded. **G1 has passed too:**
+  the WM8960 HAT runs on one DK (8 kHz, −5 ppm), with a one-bit DAC
+  alignment bug found and fixed in software.
 - **Next, in order of payoff:**
-  1. G1–G4, once the HATs are wired: WM8960 bring-up, live mic,
-     three-unit playout, and mouth-to-ear latency.
+  1. G2–G4: live mic into the per-frame encoder (in progress), then
+     three-unit playout (the other two HATs, with I2C pull-ups) and
+     mouth-to-ear latency.
   2. In reserve if the live pipeline needs CPU: fast sin/cos/atan2 in
      synthesis (~2 ms per decode).
   3. Settle Codec 2's LGPL licensing for the product. It is test-only
@@ -68,6 +71,27 @@ Exactly one `main()` is linked, chosen by the Kconfig choice in
 Four other variants were retired on 2026-09-25: LoRa send, the telemetry
 console, the TDMA UART-shell test and the UART soak harness (see "Streamlined
 to two unit types"). Their sections below are kept as history.
+
+### WM8960 HAT bring-up: live audio G1 passes (2026-09-29)
+
+One HAT on one TFT DK, with a standalone smoke-test app,
+[`apps/wm8960_smoke`](apps/wm8960_smoke/README.md). Details:
+[`docs/live_audio_wm8960.md`](docs/live_audio_wm8960.md) ("G1 result").
+
+- **Clock:** the codec is the I2S master, its PLL on the HAT's 24 MHz
+  crystal. LRCLK measured 7999.96 Hz (−5 ppm).
+- **Playback bug found and fixed:** the codec reads each DAC word one bit
+  clock early, which turned speech into a full-scale square of its sign.
+  `pack_tx()` pre-shifts each word and carries the next sample's sign in
+  bit 0 (one frame, 125 µs, of delay). THD went from ~−10 dB, independent
+  of level, to −25 to −39 dB, and speech now plays clean. I2S words are
+  24-bit, since the codec's 48 BCLKs per frame fit exactly two of them.
+- **The HAT has no I2C pull-ups.** The nRF's internal ones work with
+  retries; real units need 2.2–4.7 kΩ external.
+- **Speech on the small speaker:** 300–3400 Hz band-limited clips sound
+  clearly better than raw ones.
+- **Mics:** loopback to headphones is clean by ear. Decision 3 is revised:
+  keep both mics and encode a selectable mono mix (average by default).
 
 ### Codec 2 speed fixes: live audio G0 passes (2026-09-29)
 

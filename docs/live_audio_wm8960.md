@@ -1,7 +1,7 @@
 # Live audio smoke test: WM8960 HAT, three units
 
-**Status:** task, 2026-09-29. **G0 failed, then passed after Codec 2
-speed fixes (2026-09-29)**, results at the end; G1–G4 not started. **Follows:**
+**Status:** task, 2026-09-29. **G0 passed after Codec 2 speed fixes; G1
+passed (2026-09-29)**, results at the end; G2–G4 not started. **Follows:**
 [`c2_encode_test.md`](c2_encode_test.md) (on-device encode, ~100 ms first
 sample to peer DIO1). **Supersedes** the CHANGELOG's "Next #1" plan of an
 I2S amp/DAC breakout: the audio front end is now a WM8960 codec board.
@@ -87,8 +87,11 @@ this part). Eight jumpers, HAT 40-pin header to the DK's P0 GPIO headers:
    - **Playout side:** an elastic buffer. Hold its fill between two
      watermarks by dropping or repeating one sample. Count every
      correction.
-3. **Capture one mic (left), mono.** Drop the right channel in the ISR or
-   configure the codec for mono ADC.
+3. **Capture both mics; encode a mono mix.** *(Revised after G1; was
+   "capture one mic (left), mono".)* The capture ring keeps left and right;
+   the encoder gets left, right, or their average (the default), selectable
+   at run time. Both channels stay available for noise suppression or
+   beamforming later.
 4. **Receive mix:** decode each peer's chunk (two peers with three units)
    into its own 80 ms buffer, sum with saturation, feed playout. A missing
    or bad chunk plays as silence for that peer only. Keep the 8-byte test
@@ -349,3 +352,47 @@ encode 12.1–12.2 ms average (13.2 max), decode 12.9–13.2 ms average
   sample to peer.
 - **In reserve, if the live pipeline needs more:** fast `sinf`/`cosf`/
   `atan2f` in phase synthesis and synthesis (~2 ms of libm per decode).
+
+## G1 result (2026-09-29): PASS
+
+Done on one TFT DK with the standalone smoke-test app
+[`apps/wm8960_smoke`](../apps/wm8960_smoke/README.md), not the unit firmware.
+Findings that the unit firmware (G2 onward) has to carry over:
+
+- **The HAT has no I2C pull-ups** (a Pi supplies its own). Without any, the
+  bus idles low and nothing ACKs. With the nRF's internal pull-ups the codec
+  answers, but writes still fail now and then: 15 retries across one boot's
+  ~30 writes. `wm8960_write()` retries up to 5 times. **Real units need
+  2.2–4.7 kΩ pull-ups to 3.3 V on SDA and SCL.**
+- **Clock: pass.** The codec is the I2S master; its PLL runs from the 24 MHz
+  crystal (SYSCLK 12.288 MHz, ADC and DAC /6 = 8 kHz). LRCLK measured
+  **7999.96–7999.97 Hz (−5 ppm)** over 31 s against the DK's 32 kHz crystal.
+  0 I2S restarts or timeouts.
+- **I2S words are 24-bit.** The codec's BCLK is SYSCLK / 32 = 384 kHz, 48
+  clocks per frame; that holds exactly two 24-bit words.
+- **The codec reads each DAC word one bit clock early.** Its MSB is the last
+  bit of the previous slot. Unfixed, every zero crossing of the audio
+  becomes a full-scale step: speech plays as a loud square of its sign,
+  recognisable but garbled and static-filled, while a tone sounds nearly
+  normal.
+  - Found by a tone-level sweep through the speaker into the HAT's own mic.
+    The output did not change with the digital level (−30 to −2 dBFS) and
+    THD was ~−10 dB; the DAC's soft mute removed it (so not crosstalk); a
+    tone on a DC offset, which never changes sign, came through clean.
+  - Fix, `pack_tx()`: each word carries its sample shifted up one bit, and
+    its bit 0 carries the next sample's sign. The stream is delayed one
+    frame (125 µs) so the next sample is known at a block's end. After the
+    fix the output follows the level (−30 → −18 dBFS: +11.7 dB) and THD is
+    −25 to −39 dB.
+  - The ADC direction (codec → nRF) is aligned and needs no fix.
+- **Speech playback: pass.** The engineer judged the clips clean on the
+  HAT's speaker after the fix. Clips band-limited to 300–3400 Hz sound
+  clearly better on the small speaker than the raw ones; about half the raw
+  clips' energy is below 300 Hz (`apps/wm8960_smoke/tools/speech_filter.py`).
+- **Mic loopback: pass.** Mic → headphones "works really well" by ear, on
+  each mic alone and on both, at Waveshare's default gains (PGA +12 dB,
+  boost +29 dB). The idle floor is dominated by rumble below 300 Hz.
+- **Decision 3 revised:** the engineer wants both mics kept, so the capture
+  ring holds both channels and the encoder gets a selectable mono mix
+  (left, right, or the average, the default). Both channels stay available
+  for noise suppression or beamforming later.
