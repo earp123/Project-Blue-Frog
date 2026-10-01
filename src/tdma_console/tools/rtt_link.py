@@ -23,6 +23,8 @@ Usage:
     rtt_link.py --sn N phase 20000            # pcm: chunk ready 20 ms before TX
     rtt_link.py --sn N decx 1                 # pcm: one extra decode stream
     rtt_link.py --sn N bench 100              # isolated encode/decode timing
+    rtt_link.py --sn N sdls [/DRAWER0]        # list the unit's SD card
+    rtt_link.py --sn N sdget /X_001.BIN -o x.bin   # copy a file off it
     rtt_link.py --sn N clip clip_F.c2         # "clip <n> <crc>" + the bytes
     rtt_link.py --sn N capture -o m.bin [--minutes M] [--soak M [--sd]]
     rtt_link.py --all capture -o soaks/rtt/ [--soak M]
@@ -290,6 +292,46 @@ def cmd_capture(link, args):
     return 0 if cnt.gaps == 0 else 1
 
 
+def cmd_sdls(link, args):
+    """List a directory on the unit's card ("/" by default)."""
+    r = link.command("sdls %s" % args.dir if args.dir else "sdls")
+    for line in r.splitlines():
+        if line.startswith("ok sdls end"):
+            continue
+        if line.startswith("ok sdls "):
+            kind, size, name = line[8:].split(" ", 2)
+            print("%s %10s  %s" % (kind, size if kind == "f" else "", name))
+        else:
+            print(line)
+    return 0
+
+
+def cmd_sdget(link, args):
+    """Copy a file off the unit's card, 512 bytes per command."""
+    path = args.out or os.path.basename(args.path)
+    off = 0
+    t0 = time.monotonic()
+    with open(path, "wb") as f:
+        while True:
+            r = link.command("sdget %s %d 512" % (args.path, off)).splitlines()
+            line = r[0] if r else ""
+            if not line.startswith("ok sdget "):
+                sys.exit("[%s] %s at offset %d" % (link.sn, line, off))
+            n_s, _, hexdata = line[9:].partition(" ")
+            data = bytes.fromhex(hexdata)
+            if len(data) != int(n_s):
+                sys.exit("[%s] short reply at offset %d" % (link.sn, off))
+            f.write(data)
+            off += len(data)
+            if off % (64 * 1024) < 512:
+                print("[%s] %d KB" % (link.sn, off // 1024), flush=True)
+            if len(data) < 512:
+                break
+    print("[%s] %s: %d B in %.0f s -> %s" % (link.sn, args.path, off,
+                                            time.monotonic() - t0, path))
+    return 0
+
+
 def cmd_clip(link, args):
     with open(args.file, "rb") as f:
         data = f.read()
@@ -333,6 +375,10 @@ def run_one(args):
             return 0 if r.startswith("ok") else 1
         elif args.cmd == "clip":
             return cmd_clip(link, args)
+        elif args.cmd == "sdls":
+            return cmd_sdls(link, args)
+        elif args.cmd == "sdget":
+            return cmd_sdget(link, args)
         elif args.cmd == "capture":
             return cmd_capture(link, args)
         r = link.command(line)
@@ -413,6 +459,11 @@ def main(argv=None):
     p.add_argument("us", type=int,
                    help="stage each payload this many us before the unit's "
                         "TX boundary, from the next soak (0 = at once)")
+    p = sub.add_parser("sdls")
+    p.add_argument("dir", nargs="?", help="directory on the card (default /)")
+    p = sub.add_parser("sdget")
+    p.add_argument("path", help="file on the card, e.g. /DRAWER0/X_001.BIN")
+    p.add_argument("-o", "--out", help="local file (default: its name)")
     p = sub.add_parser("clip")
     p.add_argument("file", help="Codec 2 clip, a multiple of 32 B")
     p = sub.add_parser("capture")

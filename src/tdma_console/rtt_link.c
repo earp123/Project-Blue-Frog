@@ -17,6 +17,10 @@
 
 #include "rtt_link.h"
 #include "soak_log.h"
+#ifdef CONFIG_FAT_FILESYSTEM_ELM
+#include <zephyr/fs/fs.h>
+#include "sd_log.h"
+#endif
 #include "payload_src.h"
 #ifdef CONFIG_SOAK_C2_PROFILE
 #include "c2_prof.h"
@@ -185,6 +189,94 @@ bool rtt_link_write_rec(const void *rec, uint32_t len)
 /* One reply line. Whole or nothing, like the records: a host that is not
  * reading loses the reply, never gets half of one.
  */
+static void reply(const char *fmt, ...);
+
+#ifdef CONFIG_FAT_FILESYSTEM_ELM
+/*
+ * Card access for the host (sdls / sdget): the soak logs off a unit without
+ * pulling its card. These run in handle_line(), which rtt_link_poll() calls
+ * on the soak_log writer thread, the one thread that may touch FatFs.
+ */
+#define SDGET_MAX	512	/* bytes per sdget: 1 KB of hex in one reply */
+
+static void sd_path(char *out, size_t len, const char *p)
+{
+	snprintf(out, len, "%s%s%s", SD_MOUNT_POINT, (p[0] == '/') ? "" : "/",
+		 (strcmp(p, "/") == 0) ? "" : p);
+}
+
+static void cmd_sdls(const char *dir)
+{
+	static struct fs_dir_t d;
+	static struct fs_dirent e;
+	char path[64];
+	int n = 0;
+	int rc = sd_log_mount();
+
+	if (rc < 0) {
+		reply("err sd mount %d", rc);
+		return;
+	}
+	sd_path(path, sizeof(path), dir);
+	fs_dir_t_init(&d);
+	rc = fs_opendir(&d, path);
+	if (rc < 0) {
+		reply("err sd open %d", rc);
+		return;
+	}
+	while (fs_readdir(&d, &e) == 0 && e.name[0] != '\0') {
+		reply("ok sdls %c %u %s",
+		      (e.type == FS_DIR_ENTRY_DIR) ? 'd' : 'f',
+		      (unsigned int)e.size, e.name);
+		n++;
+		if ((n % 16) == 0) {
+			k_msleep(20);	/* let the host drain the reply buffer */
+		}
+	}
+	fs_closedir(&d);
+	reply("ok sdls end %d", n);
+}
+
+static void cmd_sdget(const char *file, uint32_t off, uint32_t len)
+{
+	static struct fs_file_t f;
+	static uint8_t data[SDGET_MAX];
+	static char line[16 + 2 * SDGET_MAX + 2];
+	static const char hex[] = "0123456789abcdef";
+	char path[64];
+	int rc = sd_log_mount();
+
+	if (rc < 0) {
+		reply("err sd mount %d", rc);
+		return;
+	}
+	sd_path(path, sizeof(path), file);
+	fs_file_t_init(&f);
+	rc = fs_open(&f, path, FS_O_READ);
+	if (rc < 0) {
+		reply("err sd open %d", rc);
+		return;
+	}
+	rc = fs_seek(&f, off, FS_SEEK_SET);
+	ssize_t got = (rc < 0) ? rc : fs_read(&f, data, MIN(len, SDGET_MAX));
+
+	fs_close(&f);
+	if (got < 0) {
+		reply("err sd read %d", (int)got);
+		return;
+	}
+
+	int n = snprintf(line, sizeof(line), "ok sdget %d ", (int)got);
+
+	for (ssize_t i = 0; i < got; i++) {
+		line[n++] = hex[data[i] >> 4];
+		line[n++] = hex[data[i] & 0xF];
+	}
+	line[n++] = '\n';
+	(void)SEGGER_RTT_Write(CH_REPLY, line, (unsigned int)n);
+}
+#endif
+
 static void reply(const char *fmt, ...)
 {
 	char buf[256];	/* the encode build's status line is ~150 chars */
@@ -375,6 +467,13 @@ static void handle_line(char *s)
 		/* Earpiece volume: 0x79 = 0 dB, 1 dB steps. */
 		hat_audio_hp_vol((uint8_t)lead);
 		reply("ok vol %u", lead);
+#endif
+#ifdef CONFIG_FAT_FILESYSTEM_ELM
+	} else if (strcmp(tok[0], "sdls") == 0 && n <= 2) {
+		cmd_sdls(n == 2 ? tok[1] : "/");
+	} else if (strcmp(tok[0], "sdget") == 0 && n == 4 &&
+		   parse_u32(tok[2], &minutes) && parse_u32(tok[3], &lead)) {
+		cmd_sdget(tok[1], minutes, lead);
 #endif
 	} else if (strcmp(tok[0], "phase") == 0 && n == 2 &&
 		   parse_u32(tok[1], &lead) && lead <= LEAD_MAX_US) {

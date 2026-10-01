@@ -497,3 +497,37 @@ the talker.
   32 bytes per 80 ms. This is an engine and airtime decision. G3's formal
   5-minute run and G4 continue in parallel. A two-unit range test away
   from the bench comes first, with the intercom build.
+
+### Range smoke test, two rooms (2026-10-01): works; the link is at its floor
+
+Two TFT units with HATs in separate rooms on USB power, no PC: the intercom
+build (mic mode at boot), +22 dBm, SF5/BW500, SD cards logging. About 3.5
+minutes, the engineer talking. Logs came off the cards over J-Link
+(`rtt_link.py sdls` / `sdget`, new): `soaks/range1/`.
+
+| | SEC 1 (960166366) | MASTER (960170130) |
+|---|---|---|
+| PER (peer's packets lost) | 17.9 % | 18.1 % |
+| RSSI min / median / max | −106 / −100 / −94 dBm | −106 / −100 / −91 dBm |
+| SNR min / median | −5 / 4 dB | −4 / 4 dB |
+| Loss runs: 1 / 2–4 / 5–12 / 13–25 / 26+ frames | 36 / 25 / 10 / 5 / 4 | 41 / 22 / 14 / 5 / 4 |
+| Longest outage | 64 frames (5.1 s) | 64 frames (5.1 s) |
+| Sync | RUNNING throughout (6 SYNCING records at the start) | master |
+
+- **It works off the bench:** live speech both ways between rooms with no
+  PC, and every outage recovered by itself. The engineer heard "drops
+  that leave a few seconds of total silence on the line, but it comes back
+  on its own".
+- **The silences are packet loss, not lost sync:** the secondary held
+  sync through every outage. Over half the lost frames are in the 9
+  outages per direction longer than 1 s. Just before them the SNR was −1
+  to −5 dB, which is SF5's demodulation floor; the median RSSI was −100 dBm
+  (sensitivity is about −110). The two directions match, so it is the path,
+  not one unit.
+- **Already at +22 dBm,** so more range has to come from a more sensitive
+  modulation (a higher SF or narrower BW, about 2.5–3 dB per step, each
+  costing airtime) or from the antennas. Airtime is also what a
+  bigger payload for a better codec needs, so the two belong in one
+  decision.
+- Mic peaks hit full scale during the test (talking close at +41 dB of
+  gain); lower the boost for the next run.

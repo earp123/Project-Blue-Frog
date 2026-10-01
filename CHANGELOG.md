@@ -41,9 +41,10 @@ _Last updated: 2026-09-29._
   is intelligible but robotic; an A/B shows Codec 2 at 3200 bit/s is the
   limit.
 - **Next, in order of payoff:**
-  1. A two-unit range test away from the bench with the intercom build.
-     Then a bigger payload for a higher-rate codec (Codec 2 3200 is the
-     quality limit), and G3's formal 5-minute run and G4 latency.
+  1. One airtime decision covering range and voice quality. The
+     two-room test lost ~18 % of packets at SF5's floor, and Codec 2 3200
+     is the quality limit. A more sensitive modulation and a bigger payload
+     both cost airtime. Then G3's formal 5-minute run and G4 latency.
   2. In reserve if the live pipeline needs CPU: fast sin/cos/atan2 in
      synthesis (~2 ms per decode).
   3. Settle Codec 2's LGPL licensing for the product. It is test-only
@@ -75,6 +76,24 @@ Exactly one `main()` is linked, chosen by the Kconfig choice in
 Four other variants were retired on 2026-09-25: LoRa send, the telemetry
 console, the TDMA UART-shell test and the UART soak harness (see "Streamlined
 to two unit types"). Their sections below are kept as history.
+
+### Two-room range smoke test; logs off the SD card over J-Link (2026-10-01)
+
+Two TFT units with HATs, in separate rooms, no PC, +22 dBm, SF5/BW500.
+Details: [`docs/live_audio_wm8960.md`](docs/live_audio_wm8960.md) ("Range
+smoke test").
+
+- **The intercom works off the bench.** Speech both ways, recovering from
+  every outage on its own.
+- **PER ~18 % each way** at a median RSSI of −100 dBm. The losses come in
+  bursts: the longest silences were 5.1 s, and the SNR was down to −5 dB,
+  SF5's floor. The secondary never lost sync. Range now has to come from a
+  more sensitive modulation (airtime) or the antennas. That is the same
+  airtime budget a bigger codec payload needs, so decide them together.
+- **New: `rtt_link.py sdls [dir]` and `sdget <file> -o <out>`** list and
+  copy files on a unit's SD card over J-Link (~4 KB/s), so logs come off
+  without pulling the card. On Git Bash, write card paths without a
+  leading `/` (MSYS rewrites them).
 
 ### Three-unit intercom: playout works, Codec 2 is the quality limit (2026-10-01)
 
