@@ -41,15 +41,18 @@ _Last updated: 2026-09-29._
   is intelligible but robotic; an A/B shows Codec 2 at 3200 bit/s is the
   limit.
 - **Next, in order of payoff:**
-  1. One airtime decision covering range and voice quality. The
-     two-room test lost ~18 % of packets at SF5's floor, and Codec 2 3200
-     is the quality limit. A more sensitive modulation and a bigger payload
-     both cost airtime. Then G3's formal 5-minute run and G4 latency.
-  2. In reserve if the live pipeline needs CPU: fast sin/cos/atan2 in
+  1. G3's formal 5-minute run once decent wired earphones are in hand,
+     then G4 latency.
+  2. Field soak tests before pulling any design lever. Range (the
+     two-room test lost ~18 % of packets at SF5's floor) and voice quality
+     (Codec 2 3200 is the limit) both come down to airtime: a more
+     sensitive modulation and a bigger payload each cost it. Decide them
+     together, on field data.
+  3. In reserve if the live pipeline needs CPU: fast sin/cos/atan2 in
      synthesis (~2 ms per decode).
-  3. Settle Codec 2's LGPL licensing for the product. It is test-only
+  4. Settle Codec 2's LGPL licensing for the product. It is test-only
      today, behind `CONFIG_SOAK_C2_ENCODE`.
-  4. The four-unit soak (card #23 first).
+  5. The four-unit soak (card #23 first).
 - **Open questions:**
   - One acquisition in 400 had not locked at 3 s after the sync fix. It
     was not re-checked, so it is unknown whether it was slow or stuck.
