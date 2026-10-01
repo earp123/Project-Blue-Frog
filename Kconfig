@@ -118,6 +118,10 @@ config SOAK_AUDIO_HAT
 	  of the PCM clip. Needs boards/audio_hat.overlay after the unit's
 	  own overlay. G2 of the live audio task; no playout yet.
 
+# A fourth RTT up channel for the raw mic stream ("rawmic on", rtt_link.c).
+configdefault SEGGER_RTT_MAX_NUM_UP_BUFFERS
+	default 4 if SOAK_AUDIO_HAT
+
 config SOAK_C2_ARM_FFT
 	bool "Codec 2 FFTs through CMSIS-DSP"
 	default y

@@ -19,6 +19,7 @@
 #include "clip_src.h"
 #ifdef CONFIG_SOAK_AUDIO_HAT
 #include "hat_audio.h"
+#include "rtt_link.h"
 #endif
 
 /* codec2_encode keeps FFT and pitch buffers on the stack: 16 KB left only
@@ -184,6 +185,10 @@ static void encode_frame(uint32_t n, int k, uint8_t *out)
 #ifdef CONFIG_SOAK_AUDIO_HAT
 	if (from_mic) {
 		hat_audio_frame(frame_pcm, FRAME_SAMPLES);
+		if (rtt_link_raw_on()) {
+			/* What the encoder is fed, for comparison. */
+			rtt_link_raw_frame(n, k, frame_pcm, FRAME_SAMPLES);
+		}
 		codec2_encode(codec, out, frame_pcm);
 		return;
 	}

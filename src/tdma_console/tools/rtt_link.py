@@ -17,6 +17,8 @@ Usage:
     rtt_link.py --sn N mode ramp|tone|clip|pcm|mic   # mic: WM8960 HAT builds
     rtt_link.py --sn N mix avg|left|right     # mic: the encoder's mono mix
     rtt_link.py --sn N vol 0x6D               # mic: earpiece volume (0x79 = 0 dB)
+    rtt_link.py --sn N listen 0|1|2|3|all     # mic, test: earpieces play one peer
+    rtt_link.py --sn N rawmic on|off          # mic: capture also saves <file>.raw
     rtt_link.py --sn N lead 20000             # stage 20 ms before TX; 0 = at once
     rtt_link.py --sn N phase 20000            # pcm: chunk ready 20 ms before TX
     rtt_link.py --sn N decx 1                 # pcm: one extra decode stream
@@ -49,6 +51,7 @@ import zlib
 
 DEVICE = "nRF5340_xxAA_APP"
 UP_SOAK, UP_CTL, DOWN_CTL = 1, 2, 1
+UP_RAW = 3              # raw mic frames (HAT builds, "rawmic on")
 REC_SIZE = 64
 REC_META = 1
 POLL_S = 0.005          # up-buffer drain period
@@ -98,6 +101,7 @@ class Link:
                 f"J-Link {sn}: RTT has {n_up} up / {n_down} down buffers; "
                 "the bench port needs 3 / 2 (CONFIG_SOAK_RTT build?)")
         self.sn = sn
+        self.has_raw = n_up > UP_RAW
         self._reply_buf = b""
 
     def close(self):
@@ -212,6 +216,13 @@ def cmd_capture(link, args):
     # Stale records from before this capture would open the file mid-run.
     while link.read(UP_SOAK):
         pass
+    # HAT builds: the raw mic channel, saved next to the soak file if the
+    # unit sends anything on it ("rawmic on"; tools/raw_mic_wav.py).
+    raw_f = None
+    raw_bytes = 0
+    if link.has_raw:
+        while link.read(UP_RAW):
+            pass
 
     cnt = RecCounter()
     t0 = last_data = last_print = time.monotonic()
@@ -222,6 +233,14 @@ def cmd_capture(link, args):
     try:
         with open(path, "wb") as f:
             while True:
+                if link.has_raw:
+                    raw = link.read(UP_RAW, 16384)
+                    if raw:
+                        if raw_f is None:
+                            raw_f = open(path.rsplit(".", 1)[0] + ".raw",
+                                         "wb")
+                        raw_f.write(raw)
+                        raw_bytes += len(raw)
                 data = link.read(UP_SOAK)
                 now = time.monotonic()
                 if data:
@@ -259,6 +278,10 @@ def cmd_capture(link, args):
                     break
     except KeyboardInterrupt:
         pass
+    if raw_f is not None:
+        raw_f.close()
+        print(f"[{link.sn}] raw mic: {raw_bytes} B "
+              f"(~{raw_bytes / 16400:.0f} s)", flush=True)
 
     el = max(time.monotonic() - t0, 1e-9)
     print(f"[{link.sn}] done ({why}): {cnt.records} records in {el:.0f} s, "
@@ -292,6 +315,10 @@ def run_one(args):
             line = f"lead {args.us}"
         elif args.cmd == "phase":
             line = f"phase {args.us}"
+        elif args.cmd == "listen":
+            line = f"listen {args.slot}"
+        elif args.cmd == "rawmic":
+            line = f"rawmic {args.state}"
         elif args.cmd == "vol":
             line = f"vol {int(args.code, 0)}"
         elif args.cmd == "mix":
@@ -361,6 +388,13 @@ def main(argv=None):
     p = sub.add_parser("mix")
     p.add_argument("mix", choices=["avg", "left", "right"],
                    help="mic mode: the mono mix the encoder gets (HAT builds)")
+    p = sub.add_parser("listen")
+    p.add_argument("slot", help="test: play only this peer slot (0-3) to "
+                   "the earpieces, or 'all' (mic builds; all still decode)")
+    p = sub.add_parser("rawmic")
+    p.add_argument("state", choices=["on", "off"],
+                   help="stream the encoder's input frames on RTT up 3; "
+                        "capture saves them as <file>.raw")
     p = sub.add_parser("vol")
     p.add_argument("code", help="mic builds: earpiece volume, 0x30-0x7F "
                    "(0x79 = 0 dB, 1 dB steps)")

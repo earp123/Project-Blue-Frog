@@ -77,6 +77,17 @@ struct peer_play {
 static struct peer_play peer_play[TDMA_SLOT_COUNT];
 
 static struct hat_play_stats pst;
+static atomic_t listen_slot = ATOMIC_INIT(-1);	/* -1: every peer */
+
+void hat_audio_set_listen(int slot)
+{
+	atomic_set(&listen_slot, slot);
+}
+
+int hat_audio_get_listen(void)
+{
+	return (int)atomic_get(&listen_slot);
+}
 
 /* Pre-shifted DAC words (G1): see pack_tx(). */
 static void pack_tx(uint32_t *w, const int16_t *mono);
@@ -233,9 +244,12 @@ void hat_audio_play_chunk(uint8_t slot, uint16_t idx, const int16_t *pcm,
 	k_spin_unlock(&st.lock, key);
 
 	/* Outside the lock: the play cursor is at least 8 samples (1 ms)
-	 * behind, and this loop takes microseconds.
+	 * behind, and this loop takes microseconds. A peer that is not being
+	 * listened to (test) keeps its cursor but adds nothing.
 	 */
-	for (size_t i = 0; i < n; i++) {
+	int lsn = (int)atomic_get(&listen_slot);
+
+	for (size_t i = 0; (lsn < 0 || lsn == slot) && i < n; i++) {
 		int16_t *d = &play[(p->cur + i) & (PLAY_RING - 1)];
 		int32_t v = (int32_t)*d + pcm[i];
 

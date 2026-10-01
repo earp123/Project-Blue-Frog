@@ -7,6 +7,7 @@
 #include <zephyr/kernel.h>
 #include <zephyr/init.h>
 #include <zephyr/sys/atomic.h>
+#include <zephyr/sys/byteorder.h>
 #include <SEGGER_RTT.h>
 #include <errno.h>
 #include <stdarg.h>
@@ -32,6 +33,13 @@
 static uint8_t soak_buf[8192];
 static uint8_t reply_buf[2048];	/* bench + profile: ~10 lines at once */
 static uint8_t ctl_buf[1024];
+#ifdef CONFIG_SOAK_AUDIO_HAT
+#define CH_RAW		3	/* up: raw mic frames */
+/* 12 frames, 240 ms: the host drains every 5 ms. */
+static uint8_t raw_buf[4096];
+static atomic_t raw_on;
+static uint32_t raw_skipped;
+#endif
 
 /* Longest command line; anything longer is discarded as malformed. */
 #define LINE_MAX	64
@@ -121,8 +129,37 @@ static int rtt_link_init(void)
 				  SEGGER_RTT_MODE_NO_BLOCK_SKIP);
 	SEGGER_RTT_ConfigDownBuffer(CH_CTL, "ctl", ctl_buf, sizeof(ctl_buf),
 				    SEGGER_RTT_MODE_NO_BLOCK_SKIP);
+#ifdef CONFIG_SOAK_AUDIO_HAT
+	SEGGER_RTT_ConfigUpBuffer(CH_RAW, "raw", raw_buf, sizeof(raw_buf),
+				  SEGGER_RTT_MODE_NO_BLOCK_SKIP);
+#endif
 	return 0;
 }
+
+#ifdef CONFIG_SOAK_AUDIO_HAT
+bool rtt_link_raw_on(void)
+{
+	return atomic_get(&raw_on) != 0;
+}
+
+void rtt_link_raw_frame(uint32_t n, int k, const int16_t *pcm,
+			uint32_t samples)
+{
+	/* Encoder thread only, so one static frame buffer will do. */
+	static uint8_t f[8 + 2 * 160];
+
+	samples = MIN(samples, 160U);
+	f[0] = 'R';
+	f[1] = 'M';
+	f[2] = (uint8_t)k;
+	f[3] = 0;
+	sys_put_le32(n, &f[4]);
+	memcpy(&f[8], pcm, samples * 2);	/* the M33 is little-endian */
+	if (SEGGER_RTT_Write(CH_RAW, f, 8 + samples * 2) == 0) {
+		raw_skipped++;
+	}
+}
+#endif
 
 /* Before the writer thread starts: static threads start after APPLICATION. */
 SYS_INIT(rtt_link_init, APPLICATION, 0);
@@ -308,6 +345,18 @@ static void handle_line(char *s)
 				  tok[1][0] == 'l' ? HAT_MIX_LEFT :
 						     HAT_MIX_RIGHT);
 		reply("ok mix %s", tok[1]);
+	} else if (strcmp(tok[0], "rawmic") == 0 && n == 2 &&
+		   (strcmp(tok[1], "on") == 0 || strcmp(tok[1], "off") == 0)) {
+		atomic_set(&raw_on, tok[1][1] == 'n');
+		reply("ok rawmic %s", tok[1]);
+	} else if (strcmp(tok[0], "listen") == 0 && n == 2 &&
+		   (strcmp(tok[1], "all") == 0 ||
+		    (parse_u32(tok[1], &lead) && lead < TDMA_SLOT_COUNT))) {
+		/* Test only: every peer is still decoded; only the chosen one
+		 * reaches the earpieces. Takes effect at once.
+		 */
+		hat_audio_set_listen(tok[1][0] == 'a' ? -1 : (int)lead);
+		reply("ok listen %s", tok[1]);
 	} else if (strcmp(tok[0], "vol") == 0 && n == 2 &&
 		   parse_u32(tok[1], &lead) && lead >= 0x30 && lead <= 0x7F) {
 		/* Earpiece volume: 0x79 = 0 dB, 1 dB steps. */
@@ -480,10 +529,19 @@ static void do_status(const struct rtt_link_ops *ops)
 	/* play = chunks/starts/missing/dup/resync; corr = drop/repeat;
 	 * lead = min/max samples between write and play (target 320).
 	 */
-	reply("ok play %u/%u/%u/%u/%u corr=%u/%u lead=%d/%d", ps.chunks,
-	      ps.starts, ps.missing, ps.dup, ps.resync, ps.corr_drop,
-	      ps.corr_rep, ps.chunks ? ps.lead_min : 0,
-	      ps.chunks ? ps.lead_max : 0);
+	int lsn = hat_audio_get_listen();
+	char lbuf[4];
+
+	snprintf(lbuf, sizeof(lbuf), "%d", lsn);
+	/* listen = all, or the one slot played (test); rawmic = on/off and
+	 * frames skipped (RTT buffer full).
+	 */
+	reply("ok play %u/%u/%u/%u/%u corr=%u/%u lead=%d/%d listen=%s "
+	      "rawmic=%s/%u", ps.chunks, ps.starts, ps.missing, ps.dup,
+	      ps.resync, ps.corr_drop, ps.corr_rep,
+	      ps.chunks ? ps.lead_min : 0, ps.chunks ? ps.lead_max : 0,
+	      lsn < 0 ? "all" : lbuf, rtt_link_raw_on() ? "on" : "off",
+	      raw_skipped);
 #endif
 #else
 	reply("ok status %s sync=%s soak=%s mode=%s clip=%u/%08x lead=%u "

@@ -97,6 +97,12 @@ struct hat_play_stats {
 
 void hat_audio_get_play_stats(struct hat_play_stats *out);
 
+/* Test only: play just peer slot (0..3) to the earpieces, or -1 for all.
+ * Every peer is still decoded either way.
+ */
+void hat_audio_set_listen(int slot);
+int hat_audio_get_listen(void);
+
 /* Earpiece (headphone) volume, LOUT1/ROUT1 code: 0x79 = 0 dB, 1 dB steps. */
 void hat_audio_hp_vol(uint8_t code);
 
