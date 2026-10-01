@@ -37,10 +37,13 @@ _Last updated: 2026-09-29._
   the WM8960 HAT runs on one DK (8 kHz, −5 ppm), with a one-bit DAC
   alignment bug found and fixed in software. **And G2:** live speech from
   the HAT mics crosses the link intact (743 of 743 chunks, one minute).
+  **G3 so far:** three-unit playout works and boots as an intercom. Speech
+  is intelligible but robotic; an A/B shows Codec 2 at 3200 bit/s is the
+  limit.
 - **Next, in order of payoff:**
-  1. G3–G4: decode + playout on three units (the other two HATs, with
-     I2C pull-ups; playout needs G1's `pack_tx()`), then mouth-to-ear
-     latency.
+  1. A two-unit range test away from the bench with the intercom build.
+     Then a bigger payload for a higher-rate codec (Codec 2 3200 is the
+     quality limit), and G3's formal 5-minute run and G4 latency.
   2. In reserve if the live pipeline needs CPU: fast sin/cos/atan2 in
      synthesis (~2 ms per decode).
   3. Settle Codec 2's LGPL licensing for the product. It is test-only
@@ -72,6 +75,33 @@ Exactly one `main()` is linked, chosen by the Kconfig choice in
 Four other variants were retired on 2026-09-25: LoRa send, the telemetry
 console, the TDMA UART-shell test and the UART soak harness (see "Streamlined
 to two unit types"). Their sections below are kept as history.
+
+### Three-unit intercom: playout works, Codec 2 is the quality limit (2026-10-01)
+
+Each HAT unit now decodes its peers, mixes them and plays them to an
+earpiece, and boots ready to use as an intercom. Details:
+[`docs/live_audio_wm8960.md`](docs/live_audio_wm8960.md) ("G3 progress").
+
+- **Playout** (`hat_audio.c`): each peer is mixed into a ring ~40 ms ahead
+  of playback. A lost chunk is silence for that peer only. Drift is held
+  by counted one-sample corrections. Earpieces only; the speaker is muted.
+- **Bench, three units, 1-minute runs:** every unit played both peers,
+  ~1490 chunks a minute. 0 drift corrections, 0 resyncs; chunks went
+  missing only where the radio lost them; 0 late stages.
+- **Bug fixed:** playback discarded the master's whole stream on every
+  second run after a boot. The previous run's last chunk (the one stale
+  re-send) arrives first, and the index then drops back to 0.
+- **Intercom defaults:** HAT builds boot in mic mode at the 12 ms phase,
+  so starting a soak from the unit's own controls talks and listens with
+  no PC attached.
+- **Test aids:** `listen <slot>|all` (the earpiece plays one peer) and
+  `rawmic on` (the encoder's input over RTT; `raw_mic_wav.py` makes raw,
+  coded and A/B WAVs).
+- **Quality:** intelligible, but robotic. The raw mic "sounded the best by
+  far" against the same audio through Codec 2, so **Codec 2 at 3200
+  bit/s is the bottleneck**, not the mic or HAT. On a shared bench, each
+  mix also carries a second copy of the talker from the other mics, only
+  5–7 dB down. **Next: a bigger payload for a higher-rate codec.**
 
 ### Live mic over the air: live audio G2 passes (2026-09-29)
 

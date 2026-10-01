@@ -65,7 +65,14 @@ static uint32_t bin_crc;
 static const char *bin_err;	/* NULL = loading into clip_src */
 static int64_t bin_last_ms;
 
+/* A HAT unit boots as an intercom: a soak started from the unit's own
+ * controls, no PC attached, talks and listens (mic mode).
+ */
+#ifdef CONFIG_SOAK_AUDIO_HAT
+static atomic_t next_mode = ATOMIC_INIT(SOAK_PAYLOAD_MIC);
+#else
 static atomic_t next_mode = ATOMIC_INIT(PAYLOAD_DEFAULT_MODE);
+#endif
 static atomic_t next_lead_us;
 
 /* Longest staging lead: a frame; anything longer is just "at once". */
@@ -76,8 +83,14 @@ uint32_t rtt_link_lead_us(void)
 	return (uint32_t)atomic_get(&next_lead_us);
 }
 
-/* A generous default: a whole 20 ms slot for the encoder. */
+/* A generous default: a whole 20 ms slot for the encoder. HAT builds use
+ * 12 ms, clean on the bench with live audio (G2): less delay.
+ */
+#ifdef CONFIG_SOAK_AUDIO_HAT
+static atomic_t next_phase_us = ATOMIC_INIT(12000);
+#else
 static atomic_t next_phase_us = ATOMIC_INIT(20000);
+#endif
 
 uint32_t rtt_link_phase_us(void)
 {

@@ -1,7 +1,8 @@
 # Live audio smoke test: WM8960 HAT, three units
 
 **Status:** task, 2026-09-29. **G0 passed after Codec 2 speed fixes; G1 and
-G2 passed (2026-09-29)**, results at the end; G3–G4 not started. **Follows:**
+G2 passed (2026-09-29); G3 playout works, quality open (2026-10-01)**,
+results at the end; G3's formal run and G4 not done. **Follows:**
 [`c2_encode_test.md`](c2_encode_test.md) (on-device encode, ~100 ms first
 sample to peer DIO1). **Supersedes** the CHANGELOG's "Next #1" plan of an
 I2S amp/DAC breakout: the audio front end is now a WM8960 codec board.
@@ -440,3 +441,59 @@ west build -b nrf5340dk/nrf5340/cpuapp -d build-hat-tft . -- \
     100–150 Hz high-pass ahead of the encoder (the idle floor is
     rumble), and mic gain staging.
   - One run, one talker, one listener. G3 adds a third unit and playout.
+
+## G3 progress (2026-10-01): playout works; quality is the open problem
+
+Not the formal 5-minute run yet. Three units, each with a WM8960 HAT and
+an earpiece, all in mic mode on one bench, in several 1-minute runs.
+
+**Firmware** (`07084a7`, `050deed`, plus boot defaults):
+- `hat_audio.c` decodes every peer, adds each peer's chunks into a mono
+  mix ring at that peer's own write position (~40 ms ahead of playback),
+  and plays the ring to the earpieces through G1's `pack_tx()`. A lost
+  chunk is 80 ms of silence for that peer only. Clock drift is held
+  within ±15 ms by counted one-sample corrections. The speaker is muted
+  (decision 6).
+- A HAT unit boots in mic mode at the 12 ms phase. A soak started from
+  the unit's own controls is a working intercom, with no PC attached.
+- Test aids: `listen <slot>|all` (the earpiece plays one peer; all are
+  still decoded) and `rawmic on` (the encoder's input frames streamed
+  over RTT, saved by `capture` as `.raw`; `raw_mic_wav.py` makes raw,
+  coded and A/B WAVs aligned by chunk).
+
+**Measured** (1-minute runs, three units):
+
+| | Result |
+|---|---|
+| Playback | Every unit played both peers continuously: ~1490 chunks a minute each |
+| Write-to-play lead | 240–360 samples (30–45 ms) around the 320 target; 0 drift corrections, 0 resyncs |
+| Missing chunks | Only where the radio lost packets. One run had PER 0.7–1.8 % with RSSI down to −106 dBm |
+| Encoder | 0 late stages; worst frame 4.1 ms at the 12 ms phase |
+| Mic clocks | 0 slips; LRCLK 7999.96–7999.99 Hz on all three |
+
+**Bug found and fixed:** a peer's first packet of a run can be its
+previous run's last chunk, still in its radio's TX buffer (the "one stale
+re-send" every run logs). Its index then drops back to 0. Playback took
+that as old duplicates and discarded the master's whole stream on every
+second run after a boot. A large index jump now re-anchors the peer.
+
+**Quality, by ear:** "intelligible, but only just", "very robotic and
+sort of modified", and now and then the playback seems to "drag" behind
+the talker.
+- **The A/B settles where the quality goes.** In the raw (pre-codec) vs
+  Codec 2 recordings of the same speech, the raw one "sounded the best by
+  far". The mic and HAT are good enough; **Codec 2 at 3200 bit/s is the
+  bottleneck.** The input was healthy (−19 to −24 dBFS RMS, no clipping).
+- **Duplicate copies in one room:** every mic hears the talker. The
+  non-talking units' mics picked the voice up only 5–7 dB below the
+  talker's mic, so each listener's mix carries a second, differently coded
+  copy. That smears the sound on the bench; separate rooms (as G3 specifies)
+  or `listen <slot>` avoid it.
+- **"Drag":** playback timing held steady (no corrections, lead within one
+  block of target), so this is most likely hearing one's own voice
+  ~150 ms late. G4 will measure the delay.
+- **Next:** raise the payload size (agreed in principle with the engineer)
+  so a higher-rate codec fits, e.g. Opus at 6–8 kbit/s, ~2–2.5x today's
+  32 bytes per 80 ms. This is an engine and airtime decision. G3's formal
+  5-minute run and G4 continue in parallel. A two-unit range test away
+  from the bench comes first, with the intercom build.
