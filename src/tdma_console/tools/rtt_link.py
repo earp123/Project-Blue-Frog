@@ -16,6 +16,7 @@ Usage:
     rtt_link.py --sn N stop
     rtt_link.py --sn N mode ramp|tone|clip|pcm|mic   # mic: WM8960 HAT builds
     rtt_link.py --sn N mix avg|left|right     # mic: the encoder's mono mix
+    rtt_link.py --sn N vol 0x6D               # mic: earpiece volume (0x79 = 0 dB)
     rtt_link.py --sn N lead 20000             # stage 20 ms before TX; 0 = at once
     rtt_link.py --sn N phase 20000            # pcm: chunk ready 20 ms before TX
     rtt_link.py --sn N decx 1                 # pcm: one extra decode stream
@@ -291,6 +292,8 @@ def run_one(args):
             line = f"lead {args.us}"
         elif args.cmd == "phase":
             line = f"phase {args.us}"
+        elif args.cmd == "vol":
+            line = f"vol {int(args.code, 0)}"
         elif args.cmd == "mix":
             line = f"mix {args.mix}"
         elif args.cmd == "decx":
@@ -358,6 +361,9 @@ def main(argv=None):
     p = sub.add_parser("mix")
     p.add_argument("mix", choices=["avg", "left", "right"],
                    help="mic mode: the mono mix the encoder gets (HAT builds)")
+    p = sub.add_parser("vol")
+    p.add_argument("code", help="mic builds: earpiece volume, 0x30-0x7F "
+                   "(0x79 = 0 dB, 1 dB steps)")
     p = sub.add_parser("decx")
     p.add_argument("n", type=int, help="pcm mode: extra decode streams "
                    "(0-2) from the next soak, to size a bigger kit")

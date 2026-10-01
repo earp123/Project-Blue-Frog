@@ -13,6 +13,7 @@
 #include <string.h>
 
 #include "hat_audio.h"
+#include "tdma.h"
 #include "wm8960.h"
 
 #define FS		8000
@@ -42,6 +43,43 @@
  */
 #define AUDIO_PRIO	K_PRIO_COOP(7)
 #define AUDIO_STACK	1536
+
+/*
+ * Playout (G3). One mono mix ring at 8 kHz: the audio thread plays it out
+ * block by block and zeroes what it played; each peer's decoded chunks are
+ * added (saturating) at that peer's own write cursor, which runs ahead of
+ * the play cursor. PLAY_TARGET is the lead a chunk is written at, so the
+ * audio is about PLAY_TARGET (plus the I2S queue) behind its arrival.
+ *
+ * The cursor follows the chunk index: a lost chunk leaves 80 ms of that
+ * peer's audio silent. Chunks come at the TDMA frame rate (the master's
+ * crystal) and the DAC runs on the HAT's crystal, so the lead drifts. It
+ * also jitters by a block (5 ms) plus decode queueing, so it is held
+ * between PLAY_TARGET +- PLAY_WIN: outside, the cursor moves one sample
+ * (a one-sample overlap or gap at a chunk joint), counted as a correction.
+ * A chunk that would land behind the play cursor, or a stream restart,
+ * re-anchors the peer ("resync").
+ */
+#define PLAY_RING	4096				/* 512 ms, power of 2 */
+#define PLAY_TARGET	320				/* 40 ms */
+#define PLAY_WIN	120				/* 15 ms */
+#define PLAY_GAP_MAX	4	/* missing chunks bridged before a resync */
+
+static int16_t play[PLAY_RING];
+static atomic_t play_pos;		/* samples played */
+
+struct peer_play {
+	bool live;
+	uint16_t last_idx;
+	uint32_t cur;			/* next write position */
+};
+
+static struct peer_play peer_play[TDMA_SLOT_COUNT];
+
+static struct hat_play_stats pst;
+
+/* Pre-shifted DAC words (G1): see pack_tx(). */
+static void pack_tx(uint32_t *w, const int16_t *mono);
 
 K_MEM_SLAB_DEFINE_STATIC(i2s_slab, BLOCK_BYTES, NUM_BLOCKS, 4);
 static const struct device *const i2s = DEVICE_DT_GET(DT_NODELABEL(i2s0));
@@ -128,6 +166,99 @@ void hat_audio_frame(int16_t *pcm, size_t n)
 	st.frames++;
 }
 
+void hat_audio_play_reset(void)
+{
+	k_spinlock_key_t key = k_spin_lock(&st.lock);
+
+	memset(peer_play, 0, sizeof(peer_play));
+	memset(&pst, 0, sizeof(pst));
+	pst.lead_min = INT32_MAX;
+	pst.lead_max = INT32_MIN;
+	k_spin_unlock(&st.lock, key);
+}
+
+void hat_audio_play_chunk(uint8_t slot, uint16_t idx, const int16_t *pcm,
+			  size_t n)
+{
+	if (!hat_audio_ok() || slot >= TDMA_SLOT_COUNT) {
+		return;
+	}
+
+	uint32_t r = (uint32_t)atomic_get(&play_pos);
+	k_spinlock_key_t key = k_spin_lock(&st.lock);
+	struct peer_play *p = &peer_play[slot];
+
+	if (p->live) {
+		uint16_t d = (uint16_t)(idx - p->last_idx);
+
+		uint16_t back = (uint16_t)(p->last_idx - idx);
+
+		if (d == 0 || back <= PLAY_GAP_MAX) {
+			pst.dup++;		/* repeat or just behind: ignore */
+			k_spin_unlock(&st.lock, key);
+			return;
+		}
+		if (d > PLAY_GAP_MAX) {
+			/* A long outage, or the stream restarted: a peer's first
+			 * packet of a run can be its previous run's last chunk,
+			 * still in its radio's TX buffer (the run's one stale
+			 * re-send), and then its index drops back to 0.
+			 */
+			p->live = false;
+		} else if (d > 1) {
+			pst.missing += d - 1;
+			p->cur += (d - 1) * n;
+		}
+	}
+
+	int32_t lead = (int32_t)(p->cur - r);
+
+	if (!p->live) {
+		p->cur = r + PLAY_TARGET;
+		p->live = true;
+		pst.starts++;
+	} else if (lead < 8 || lead > PLAY_RING - (int32_t)n - 8) {
+		p->cur = r + PLAY_TARGET;	/* late, or far ahead */
+		pst.resync++;
+	} else if (lead > PLAY_TARGET + PLAY_WIN) {
+		p->cur--;			/* overlap one sample */
+		pst.corr_drop++;
+	} else if (lead < PLAY_TARGET - PLAY_WIN) {
+		p->cur++;			/* gap of one sample */
+		pst.corr_rep++;
+	}
+	lead = (int32_t)(p->cur - r);
+	pst.lead_min = MIN(pst.lead_min, lead);
+	pst.lead_max = MAX(pst.lead_max, lead);
+	k_spin_unlock(&st.lock, key);
+
+	/* Outside the lock: the play cursor is at least 8 samples (1 ms)
+	 * behind, and this loop takes microseconds.
+	 */
+	for (size_t i = 0; i < n; i++) {
+		int16_t *d = &play[(p->cur + i) & (PLAY_RING - 1)];
+		int32_t v = (int32_t)*d + pcm[i];
+
+		*d = (int16_t)CLAMP(v, INT16_MIN, INT16_MAX);
+	}
+	p->cur += n;
+	p->last_idx = idx;
+	pst.chunks++;
+}
+
+void hat_audio_get_play_stats(struct hat_play_stats *out)
+{
+	k_spinlock_key_t key = k_spin_lock(&st.lock);
+
+	*out = pst;
+	k_spin_unlock(&st.lock, key);
+}
+
+void hat_audio_hp_vol(uint8_t code)
+{
+	(void)wm8960_hp_vol(code);
+}
+
 void hat_audio_get_stats(struct hat_audio_stats *out)
 {
 	k_spinlock_key_t key = k_spin_lock(&st.lock);
@@ -168,7 +299,7 @@ static int i2s_start(void)
 	if (err) {
 		return err;
 	}
-	/* Silence queued ahead of the start (playout is G3). */
+	/* Silence queued ahead of the start: the output's lead, 10 ms. */
 	for (int i = 0; i < 2; i++) {
 		void *b;
 
@@ -219,6 +350,44 @@ static void on_block(const uint32_t *words)
 	k_spin_unlock(&st.lock, key);
 }
 
+/*
+ * The WM8960 reads each DAC word one bit clock early (G1, apps/wm8960_smoke):
+ * its MSB is the last bit of the previous slot. So each 24-bit word carries
+ * its sample shifted up one bit, and its bit 0 the MSB of the next sample.
+ * To know the next sample at a block's end, the stream runs one frame (two
+ * words, so L and R keep their slots) late: 125 us.
+ */
+static void pack_tx(uint32_t *w, const int16_t *mono)
+{
+	static int16_t hist[2];		/* last frame of the previous block */
+	const int n = BLOCK_FRAMES * 2;
+
+	for (int j = 0; j < n; j++) {
+		int16_t e = j < 2 ? hist[j] : mono[(j - 2) / 2];
+		int16_t next = j + 1 < 2 ? hist[j + 1] : mono[(j - 1) / 2];
+		uint32_t v = (uint32_t)(int32_t)e << 8;
+
+		w[j] = ((v << 1) & 0xFFFFFE) | (next < 0 ? 1 : 0);
+	}
+	hist[0] = hist[1] = mono[BLOCK_FRAMES - 1];
+}
+
+/* The next block of the mix ring, zeroed behind it, into tx. */
+static void play_block(void *tx)
+{
+	int16_t mono[BLOCK_FRAMES];
+	uint32_t r = (uint32_t)atomic_get(&play_pos);
+
+	for (int i = 0; i < BLOCK_FRAMES; i++) {
+		int16_t *s = &play[(r + i) & (PLAY_RING - 1)];
+
+		mono[i] = *s;
+		*s = 0;
+	}
+	atomic_set(&play_pos, (atomic_val_t)(r + BLOCK_FRAMES));
+	pack_tx(tx, mono);
+}
+
 static void audio_thread(void *p1, void *p2, void *p3)
 {
 	ARG_UNUSED(p1);
@@ -238,6 +407,10 @@ static void audio_thread(void *p1, void *p2, void *p3)
 		k_msleep(500);
 	}
 	st.codec_ok = true;
+	/* Earpieces only (design decision 6): no acoustic path from the
+	 * speaker back into the HAT's own mics.
+	 */
+	(void)wm8960_spk_mute(true);
 	if (i2s_start() != 0) {
 		return;
 	}
@@ -257,9 +430,9 @@ static void audio_thread(void *p1, void *p2, void *p3)
 		on_block(rx);
 		k_mem_slab_free(&i2s_slab, rx);
 
-		/* Keep the DAC fed: silence until G3's playout. */
+		/* One block out per block in: the mix ring's next 5 ms. */
 		if (k_mem_slab_alloc(&i2s_slab, &tx, K_NO_WAIT) == 0) {
-			memset(tx, 0, BLOCK_BYTES);
+			play_block(tx);
 			if (i2s_write(i2s, tx, BLOCK_BYTES) != 0) {
 				k_mem_slab_free(&i2s_slab, tx);
 				restart();

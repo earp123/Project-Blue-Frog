@@ -308,6 +308,11 @@ static void handle_line(char *s)
 				  tok[1][0] == 'l' ? HAT_MIX_LEFT :
 						     HAT_MIX_RIGHT);
 		reply("ok mix %s", tok[1]);
+	} else if (strcmp(tok[0], "vol") == 0 && n == 2 &&
+		   parse_u32(tok[1], &lead) && lead >= 0x30 && lead <= 0x7F) {
+		/* Earpiece volume: 0x79 = 0 dB, 1 dB steps. */
+		hat_audio_hp_vol((uint8_t)lead);
+		reply("ok vol %u", lead);
 #endif
 	} else if (strcmp(tok[0], "phase") == 0 && n == 2 &&
 		   parse_u32(tok[1], &lead) && lead <= LEAD_MAX_US) {
@@ -468,6 +473,17 @@ static void do_status(const struct rtt_link_ops *ops)
 	      hs.codec_ok, hs.i2c_retries, hs.blocks, hs.rate_mhz, hs.restarts,
 	      hs.timeouts, mix_name[hat_audio_get_mix()], hs.slip_short,
 	      hs.slip_drop, hs.frames, hs.peak[0], hs.peak[1]);
+
+	struct hat_play_stats ps;
+
+	hat_audio_get_play_stats(&ps);
+	/* play = chunks/starts/missing/dup/resync; corr = drop/repeat;
+	 * lead = min/max samples between write and play (target 320).
+	 */
+	reply("ok play %u/%u/%u/%u/%u corr=%u/%u lead=%d/%d", ps.chunks,
+	      ps.starts, ps.missing, ps.dup, ps.resync, ps.corr_drop,
+	      ps.corr_rep, ps.chunks ? ps.lead_min : 0,
+	      ps.chunks ? ps.lead_max : 0);
 #endif
 #else
 	reply("ok status %s sync=%s soak=%s mode=%s clip=%u/%08x lead=%u "

@@ -16,9 +16,10 @@
  * repeat) or "drop" (it fell behind; samples are skipped). At the
  * measured -5 ppm the window lasts over half an hour.
  *
- * The DAC side runs too, sending silence for now; playout is G3. The
- * WM8960 reads each DAC word one bit clock early (G1), so G3 must pack its
- * output as apps/wm8960_smoke's pack_tx() does.
+ * Playout (G3): the decoder mixes each peer's chunks into a ring that the
+ * same thread plays to the earpieces (hat_audio_play_chunk()). The speaker
+ * output is muted. The WM8960 reads each DAC word one bit clock early
+ * (G1), so the output words are pre-shifted (pack_tx()).
  *
  * SPDX-License-Identifier: Apache-2.0
  */
@@ -66,5 +67,37 @@ struct hat_audio_stats {
 
 /* Snapshot; clears the peaks. */
 void hat_audio_get_stats(struct hat_audio_stats *out);
+
+/* ---- Playout (G3) ---- */
+
+/* Start of a run: every peer re-anchors at its next chunk. */
+void hat_audio_play_reset(void);
+
+/*
+ * The decoder: chunk idx (the test header's chunk index) of peer slot,
+ * n samples of decoded audio, mixed into the earpiece output about 40 ms
+ * ahead of what is playing. A lost chunk is silence for that peer.
+ */
+void hat_audio_play_chunk(uint8_t slot, uint16_t idx, const int16_t *pcm,
+			  size_t n);
+
+struct hat_play_stats {
+	uint32_t chunks;	/* mixed in */
+	uint32_t starts;	/* peers anchored (first chunk, or after an
+				 * outage longer than PLAY_GAP_MAX) */
+	uint32_t missing;	/* chunk-index gaps bridged with silence */
+	uint32_t dup;		/* repeated or old chunks ignored */
+	uint32_t resync;	/* late (would play behind the cursor) or far
+				 * ahead: re-anchored, an audible glitch */
+	uint32_t corr_drop;	/* one-sample corrections, lead too long */
+	uint32_t corr_rep;	/* one-sample corrections, lead too short */
+	int32_t lead_min;	/* samples between write and play, this run */
+	int32_t lead_max;
+};
+
+void hat_audio_get_play_stats(struct hat_play_stats *out);
+
+/* Earpiece (headphone) volume, LOUT1/ROUT1 code: 0x79 = 0 dB, 1 dB steps. */
+void hat_audio_hp_vol(uint8_t code);
 
 #endif /* HAT_AUDIO_H_ */

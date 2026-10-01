@@ -20,6 +20,9 @@
 #include "c2_prof.h"
 #endif
 #include "clip_src.h"
+#ifdef CONFIG_SOAK_AUDIO_HAT
+#include "hat_audio.h"
+#endif
 
 /* codec2_decode synthesises through a 512-point inverse FFT on the stack,
  * like the encoder's analysis; same size, checked by stack_unused.
@@ -220,7 +223,19 @@ static void handle(const struct dec_item *it)
 		uint32_t dec = us_since(t0);
 		timing_t t1 = timing_counter_get();
 
+#ifdef CONFIG_SOAK_AUDIO_HAT
+		/* A real peer goes to the earpieces; a phantom stream is only
+		 * the cost of a fourth unit.
+		 */
+		if (i == 0) {
+			hat_audio_play_chunk(s, sys_get_le16(&p[2]), dec_pcm,
+					     C2_ENC_CHUNK_SAMPLES);
+		} else {
+			mix_chunk();
+		}
+#else
 		mix_chunk();
+#endif
 
 		uint32_t mix = us_since(t1);
 		k_spinlock_key_t key = k_spin_lock(&stats_lock);
@@ -393,6 +408,9 @@ static int bench(uint32_t chunks, struct c2_bench *out)
 
 int c2_dec_start(uint8_t own, uint32_t extra)
 {
+#ifdef CONFIG_SOAK_AUDIO_HAT
+	hat_audio_play_reset();
+#endif
 	c2_dec_stop();
 
 	k_spinlock_key_t key = k_spin_lock(&stats_lock);
