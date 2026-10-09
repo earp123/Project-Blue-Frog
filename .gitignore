@@ -5,3 +5,9 @@
 soaks/clips/*.wav
 # PCM excerpts for the encode test: regenerate with tools/c2clip.py pcm.
 soaks/clips/*.pcm
+
+# Earlier local soak results (pre-2026-10-08), kept off the branch.
+soaks/range1/
+soaks/rtt/
+soaks/wm8960/
+__pycache__/
