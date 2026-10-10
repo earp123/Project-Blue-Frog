@@ -103,8 +103,10 @@ temporal and now holds.
   counted as `busy_timeouts`).
 - `GPIO_DT_SPEC_GET(RADIO_NODE, dio1_gpios)` (P1.08) — exported to the port
   layer for the IRQ handover.
-- RF_SW (P1.00, `zephyr,user` `rf-sw-gpios`) is configured output-LOW first
-  thing in `tdma_radio_init()`, same as the console and lora-send variants.
+- RF_SW (P1.00, `zephyr,user` `rf-sw-gpios`) is the antenna switch's RX
+  enable. It is configured output-LOW first thing in `tdma_radio_init()`,
+  driven HIGH just before every SetRx and LOW before every SetTx and in
+  standby.
 
 Init details beyond the plan's M0 list, found necessary while verifying the
 driver:

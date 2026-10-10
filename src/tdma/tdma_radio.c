@@ -44,9 +44,21 @@ LOG_MODULE_REGISTER(tdma_radio, CONFIG_LOG_DEFAULT_LEVEL);
 
 static const struct device *const lora_dev = DEVICE_DT_GET(RADIO_NODE);
 
-/* RF_SW (P1.00): this shield's antenna switch control — output, held LOW. */
+/*
+ * RF_SW (P1.00): the Wio-SX1262 antenna switch's RX enable. DIO2 drives the
+ * TX side on its own; RF_SW must be HIGH while receiving and LOW otherwise
+ * (Meshtastic's seeed_xiao_nrf52840_kit: SX126X_RXEN, TXEN not connected).
+ * Held LOW, the receiver hears through the switch's isolation: measured
+ * 32 dB down on both unit types (2026-10-09). Not left HIGH during TX, so
+ * both switch arms are never on with the PA running.
+ */
 static const struct gpio_dt_spec rf_sw =
 	GPIO_DT_SPEC_GET(DT_PATH(zephyr_user), rf_sw_gpios);
+
+static inline void rf_sw_rx(bool rx)
+{
+	(void)gpio_pin_set_dt(&rf_sw, rx ? 1 : 0);
+}
 
 #define SLOT_TIMEOUT_TICKS SX126X_TIMEOUT_TICKS_FROM_US(TDMA_SLOT_ACTIVE_US)
 
@@ -258,6 +270,8 @@ int tdma_radio_slot_tx_enter(void)
 {
 	int ret;
 
+	rf_sw_rx(false);
+
 	ret = sx126x_cmd_clear_irq_status(SX126X_IRQ_ALL);
 	if (ret < 0) {
 		return ret;
@@ -299,6 +313,7 @@ int tdma_radio_slot_rx_enter(void)
 	 * vs evt/slot tallies). Consequence: RX slots no longer raise
 	 * RX_TX_TIMEOUT, so slot_timeouts only counts TX-side timeouts now.
 	 */
+	rf_sw_rx(true);
 	return sx126x_cmd_set_rx(SX126X_RX_CONTINUOUS);
 }
 
@@ -384,6 +399,8 @@ int tdma_radio_standby(void)
 {
 	int ret;
 
+	rf_sw_rx(false);
+
 	ret = sx126x_cmd_clear_irq_status(SX126X_IRQ_ALL);
 	if (ret < 0) {
 		return ret;
@@ -420,6 +437,7 @@ int tdma_radio_manual_tx(uint8_t slot_id, uint16_t frame_ctr,
 		return ret;
 	}
 
+	rf_sw_rx(false);
 	ret = sx126x_cmd_set_tx(SX126X_TIMEOUT_TICKS_FROM_US(500000));
 	if (ret < 0) {
 		return ret;
@@ -448,6 +466,7 @@ int tdma_radio_manual_rx(uint32_t timeout_ms, struct tdma_radio_event *ev)
 		return ret;
 	}
 
+	rf_sw_rx(true);
 	ret = sx126x_cmd_set_rx(SX126X_TIMEOUT_TICKS_FROM_US(
 					(uint64_t)timeout_ms * 1000U));
 	if (ret < 0) {

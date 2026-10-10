@@ -112,8 +112,8 @@ Both types behave the same way:
 - **SOAK:** pick 5 min, 30 min, 2 h or continuous. Live pages show elapsed
   time, TX/stale, RX with missed/duplicate frames, phase error and ppm,
   RSSI/SNR, the log file, and the staging-latency gauge.
-- **TX power:** −9…+22 dBm, applied from the next packet. The TFT unit boots
-  at +22 dBm and the shield unit at +0 dBm.
+- **TX power:** −9…+22 dBm, applied from the next packet. Both unit types
+  boot at +22 dBm.
 - **SD logging:** every soak writes `<PWR>_<DUR>_NNN.BIN` (e.g.
   `P0_5M_000.BIN`) with one 64-byte record per packet. Decode with
   [`src/tdma_console/tools/decode_soak_log.py`](src/tdma_console/tools/decode_soak_log.py).
@@ -163,9 +163,10 @@ keeps exactly the same radio pins.
 
 Notes:
 
-- **RF_SW** (P1.00) is driven by the firmware as a GPIO output and held LOW
-  (at GND) for both TX and RX on this module. This is the correct level for the
-  Wio-SX1262 antenna switch — it does not need to be toggled.
+- **RF_SW** (P1.00) is the Wio-SX1262 antenna switch's RX enable. The
+  firmware drives it HIGH while the radio receives and LOW otherwise; DIO2
+  drives the TX side. Held LOW, the receiver hears through the switch's
+  isolation, 32 dB down (measured 2026-10-09 on both unit types).
 - **DIO2** is internally bridged to TXEN on the Wio-SX1262 — no external wiring.
   `dio2-tx-enable` in the overlay lets the chip drive TXEN itself.
 - **DIO3** drives the onboard TCXO — no external wiring; configured via

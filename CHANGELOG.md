@@ -12,7 +12,7 @@ For hardware wiring, build/flash instructions, and SDK setup, see
 
 On-device radio-evaluation tooling for the nRF5340 DK + Wio-SX1262 (SX1262),
 plus the first slice of the wireless-intercom firmware (TDMA radio layer).
-_Last updated: 2026-09-29._
+_Last updated: 2026-10-09._
 
 ### Where things stand (2026-09-29)
 
@@ -43,8 +43,9 @@ _Last updated: 2026-09-29._
 - **Next, in order of payoff:**
   1. G3's formal 5-minute run once decent wired earphones are in hand,
      then G4 latency.
-  2. Field soak tests before pulling any design lever. Range (the
-     two-room test lost ~18 % of packets at SF5's floor) and voice quality
+  2. Field soak tests before pulling any design lever, re-run with the
+     RF_SW fix (2026-10-09, +32 dB on receive). Range (the two-room test
+     lost ~18 % of packets at SF5's floor, before that fix) and voice quality
      (Codec 2 3200 is the limit) both come down to airtime: a more
      sensitive modulation and a bigger payload each cost it. Decide them
      together, on field data.
@@ -79,6 +80,45 @@ Exactly one `main()` is linked, chosen by the Kconfig choice in
 Four other variants were retired on 2026-09-25: LoRa send, the telemetry
 console, the TDMA UART-shell test and the UART soak harness (see "Streamlined
 to two unit types"). Their sections below are kept as history.
+
+### RF_SW is the RX enable: +32 dB on receive; shield unit boots at +22 dBm (2026-10-09)
+
+The PM suspected ~40 dB missing in the RF chain. Bench: shield unit
+1050080691 and TFT unit 960170130, antennas 5 in apart, nothing between.
+At +22 dBm the shield unit received the TFT unit at only −41 dBm.
+
+- **Cause: RF_SW (P1.00) was held LOW.** It is the Wio-SX1262 antenna
+  switch's RX enable (DIO2 drives the TX side), so the receiver was
+  hearing through the switch's isolation. Meshtastic's
+  `seeed_xiao_nrf52840_kit` defines the same pin as `SX126X_RXEN`, with
+  TXEN not connected. Driving it HIGH over J-Link during a soak raised
+  each unit's own RX by 32 dB on both unit types, and setting it LOW took
+  the gain away again. Switching one unit at a time showed it only affects
+  that unit's RX. Its TX was unchanged.
+- **Fix:** `tdma_radio.c` drives RF_SW HIGH before every SetRx and LOW
+  before every SetTx and in standby. It is not left HIGH through TX, so
+  both switch arms are never on with the PA running, matching what
+  RadioLib does. Sampled during a soak, the pin is HIGH 75–77 % of the
+  time, i.e. the three RX slots of four.
+- **The shield unit now boots at +22 dBm** (`FIELD_TX_POWER_DBM`, was
+  +0). The D'Angelo Park smoke test (2026-10-08,
+  `soaks/DangeloPark_1008/`) had its master at +0 dBm because of it.
+- **Result, both units really at +22 dBm, 1-minute soak:** the shield unit
+  receives at −8.8 dBm (was −41) and the TFT unit at −7.6 dBm. 0 packets
+  missed either way, no slot timeouts. A 3-minute soak on the fix showed
+  the same engine and sync figures as before it (phase error −11..+24 µs),
+  so the extra pin writes do not disturb slot timing.
+- **There is no direction asymmetry.** A ~20 dB gap seen mid-investigation
+  was the shield unit still transmitting at its +0 dBm boot default: the
+  bench poke set the `tx_power_dbm` variable, which only labels the log;
+  the radio's power changes only through `tdma_set_tx_power()` (boot, or
+  the TX PWR menu). The TFT unit's RX at −29 dBm then plus 22 dB matches
+  the −7.6 dBm now.
+- **Every range result before this entry is ~32 dB pessimistic on
+  receive**, including the two-room test below. Re-run range before
+  deciding on a more sensitive modulation.
+- **Not shown yet:** these are strong-signal bench numbers. The sensitivity
+  gain needs a range soak, or attenuators, to confirm.
 
 ### Two-room range smoke test; logs off the SD card over J-Link (2026-10-01)
 

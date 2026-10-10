@@ -102,7 +102,7 @@ Buttons keep the console's mapping: B1 UP, B2 DOWN, B3 OK, B4 BACK.
 - **HOME** (menu rows, header shows role + card state):
   - `SOAK` → sub-pick 5 min / 30 min / 2 h / continuous, OK starts.
   - `TX PWR` → UP/DOWN steps the value (−9…+22 dBm, clamp), stored for the
-    next soak via `tdma_set_tx_power()`; default +0 dBm.
+    next soak via `tdma_set_tx_power()`; default +22 dBm (+0 until 2026-10-09).
   - `SD` → count of `.BIN` files in the root, the newest file name, and free
     space if `fs_statvfs` is cheap to add as one more `sd_fsop` op on the
     writer thread. Read-only. Listing goes through `sd_fsop_submit(SD_FSOP_LIST,

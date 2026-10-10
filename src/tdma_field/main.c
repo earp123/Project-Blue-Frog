@@ -18,7 +18,7 @@
  * UP/DOWN cycles, OK acts, B4 goes back. HOME cycles three items:
  *   SOAK     cycle 5 min / 30 min / 2 h / continuous, OK starts. The live
  *            screen cycles pages: time, RX, TX, phase, link, log, latency.
- *   TX PWR   OK to edit: UP/DOWN steps -9..+22 dBm, default +0 dBm
+ *   TX PWR   OK to edit: UP/DOWN steps -9..+22 dBm, default +22 dBm
  *   SD CARD  pages: .BIN count + newest file, free space, card-detect
  * Buttons: B1 UP, B2 DOWN, B3 OK, B4 BACK. B4 also stops a running soak.
  * Entering HOME rescans the card on the soak_log writer thread; the UI
@@ -62,7 +62,7 @@
 LOG_MODULE_REGISTER(tdma_field, LOG_LEVEL_INF);
 
 /* Boot TX power for this variant (the engine's own default is +22 dBm). */
-#define FIELD_TX_POWER_DBM	0
+#define FIELD_TX_POWER_DBM	22
 
 /* Live soak repaint cadence: <= 2 Hz keeps the I2C cost off the budget. */
 #define SOAK_DRAW_PERIOD_MS	500
@@ -1483,8 +1483,9 @@ int main(void)
 {
 	LOG_INF("TDMA field unit: rev 2 shield (SSD1306 + microSD + SX1262)");
 
-	/* Engine default is +22 dBm; this variant boots at +0. Latched now,
-	 * applied before the first transmit of the first soak.
+	/* Boots at +22 dBm, the engine's default and the TFT unit's (it was
+	 * +0 until 2026-10-09). Latched now, applied before the first transmit
+	 * of the first soak.
 	 */
 	(void)tdma_set_tx_power(FIELD_TX_POWER_DBM);
 
