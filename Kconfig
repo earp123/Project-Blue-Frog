@@ -118,6 +118,19 @@ config SOAK_AUDIO_HAT
 	  of the PCM clip. Needs boards/audio_hat.overlay after the unit's
 	  own overlay. G2 of the live audio task; no playout yet.
 
+config SOAK_MIC_DSP
+	bool "Mic DSP front end: HPF + SpeexDSP noise suppression + AGC"
+	depends on SOAK_C2_ENCODE
+	help
+	  Condition each 20 ms frame before Codec 2 encodes it, in mic and
+	  pcm modes: a 150 Hz high-pass, then the SpeexDSP preprocessor's
+	  noise suppression and AGC (external/speexdsp, BSD) on 10 ms
+	  sub-frames, adding ~10 ms of delay and ~1.7 ms of CPU per 20 ms
+	  frame. On by default once built in; switchable over RTT ("dsp
+	  on|off", "dsp hpf|ns|agc on|off"), and off the encoder sees exactly
+	  the frames it saw before. Off by default: D1 passed in stationary
+	  crowd roar but not in babble (docs/mic_dsp_frontend.md).
+
 # A fourth RTT up channel for the raw mic stream ("rawmic on", rtt_link.c).
 configdefault SEGGER_RTT_MAX_NUM_UP_BUFFERS
 	default 4 if SOAK_AUDIO_HAT

@@ -12,7 +12,7 @@ For hardware wiring, build/flash instructions, and SDK setup, see
 
 On-device radio-evaluation tooling for the nRF5340 DK + Wio-SX1262 (SX1262),
 plus the first slice of the wireless-intercom firmware (TDMA radio layer).
-_Last updated: 2026-10-09._
+_Last updated: 2026-10-10._
 
 ### Where things stand (2026-09-29)
 
@@ -40,11 +40,17 @@ _Last updated: 2026-10-09._
   **G3 so far:** three-unit playout works and boots as an intercom. Speech
   is intelligible but robotic; an A/B shows Codec 2 at 3200 bit/s is the
   limit.
+- **Mic DSP front end** ([`docs/mic_dsp_frontend.md`](docs/mic_dsp_frontend.md),
+  2026-10-10): HPF + SpeexDSP noise suppression + AGC ahead of Codec 2.
+  It raises Codec 2's STOI by +0.078 in stationary crowd roar, but not in
+  babble or wind, and costs 1.7 ms per 20 ms frame. Off by default
+  (`CONFIG_SOAK_MIC_DSP`), kept for a field A/B by ear.
 - **Next, in order of payoff:**
   1. G3's formal 5-minute run once decent wired earphones are in hand,
      then G4 latency.
   2. Field soak tests before pulling any design lever, re-run with the
-     RF_SW fix (2026-10-09, +32 dB on receive). Range (the two-room test
+     RF_SW fix (2026-10-09, +32 dB on receive). Bring one HAT unit built
+     with `CONFIG_SOAK_MIC_DSP=y` for an A/B by ear in real crowd noise. Range (the two-room test
      lost ~18 % of packets at SF5's floor, before that fix) and voice quality
      (Codec 2 3200 is the limit) both come down to airtime: a more
      sensitive modulation and a bigger payload each cost it. Decide them
@@ -80,6 +86,76 @@ Exactly one `main()` is linked, chosen by the Kconfig choice in
 Four other variants were retired on 2026-09-25: LoRa send, the telemetry
 console, the TDMA UART-shell test and the UART soak harness (see "Streamlined
 to two unit types"). Their sections below are kept as history.
+
+### Mic DSP front end: helps in crowd roar only; off by default (2026-10-10)
+
+HPF + SpeexDSP noise suppression + AGC on each 20 ms frame before Codec 2,
+behind `CONFIG_SOAK_MIC_DSP` (default off). Task and results:
+[`docs/mic_dsp_frontend.md`](docs/mic_dsp_frontend.md).
+
+- **Build:**
+  - SpeexDSP 1.2.1's preprocessor is vendored unmodified in
+    `external/speexdsp` (BSD).
+  - Its state lives in a static 13 KB arena (12,840 B used), with no heap.
+  - A 2nd-order 150 Hz HPF sits in front.
+  - It runs in mic and pcm modes and is switchable over RTT (`dsp on|off`,
+    `dsp hpf|ns|agc on|off`).
+  - The `rawmic` stream gains a second tap, "RC", the frame after the DSP;
+    `raw_mic_wav.py` writes it as `_cond.wav`.
+  - Added delay: 12 ms measured.
+- **D0, CPU: over budget.**
+  - 1.67–1.82 ms per 20 ms frame (avg), against 1.5 ms.
+  - Speex's float build calls double-precision libm, which the M33 does in
+    software: 10.7 ms until `port/float_math.h` mapped it to the float
+    functions.
+  - The rest of the cost is spread evenly over its per-bin loops; KISS FFT
+    and `-ffast-math` did not help.
+  - Levers, if the stage is kept: Bark-resolution gains, a 160-sample Speex
+    frame, or running the library from RAM.
+- **D1, intelligibility: split.** This is a new pcm-mode A/B,
+  `tools/mic_dsp_ab.py`:
+  - 8 s clips: clean speech, or speech plus babble, roar or wind at a set
+    SNR.
+  - Encoded on the unit with the DSP off, then on.
+  - Scored with STOI against the sample-aligned clean speech.
+
+  Results:
+
+  | Condition | Codec 2 STOI, DSP off → on | Δ |
+  |---|---|---|
+  | Stationary crowd roar, 0 dB | 0.491 → 0.569 | **+0.078**, a pass |
+  | Babble (+5 / 0 dB, male) | | +0.016 / +0.016 |
+  | Babble 0 dB, female | | −0.004 |
+  | Wind | | −0.015 |
+  | Quiet, −22 dBFS | | within 0.011 |
+  | Soft talker, −34 dBFS | | −0.027 |
+
+  - Noise suppression alone gives the roar gain (+0.070), and is also what
+    costs the soft talker (−0.047).
+  - The AGC lands speech at −20 to −22.5 dBFS from inputs of −22 and
+    −34 dBFS. No run clipped.
+  - The A/B WAVs are in `soaks/mic_dsp_d1/*_ab.wav`. The by-ear check is
+    still open.
+- **D2, timing: passes on two units.** Mic mode, DSP on, 1 minute:
+  - 0 late stages, PER 0, `stale_retx` 1, 0 slips.
+  - Pre-TX margin minimum 1.694 ms, against a floor of 1.69 (G2: 1.73).
+  - The third unit (960166366) was not on USB.
+  - In an idle room the AGC sits at its +20 dB maximum and brings room
+    noise up. A future VOX gate, not the AGC, must decide when the mic is
+    live.
+- **Decision:** off by default, per the gate rule. A referee's stadium
+  noise is mostly roar, the case it helps, so the deciding test is a field
+  A/B by ear (`-DCONFIG_SOAK_MIC_DSP=y` on one unit).
+- **Doc fixes from review:**
+  - D2's pass marks now match how G2 measured: `stale_retx` ≤ 1, margin
+    ≥ 1.69 ms.
+  - The FFT is 160 points (50 Hz bins), so CMSIS cannot do it.
+  - `mdf.c` is stubbed.
+  - Speex's AGC has no max-attenuation setting.
+- **Also:**
+  - `rtt_link.py dsp ...`.
+  - A third-party table in the README.
+  - In pcm mode, `rawmic on` now also streams the "RM" tap.
 
 ### RF_SW is the RX enable: +32 dB on receive; shield unit boots at +22 dBm (2026-10-09)
 

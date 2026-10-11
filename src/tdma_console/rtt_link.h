@@ -35,6 +35,10 @@
  *   lead <us>               stage each payload this long before the unit's
  *                           TX boundary, from the next soak (0 = at once,
  *                           right after TxDone; the default)
+ *   dsp on|off              mic DSP (CONFIG_SOAK_MIC_DSP): the front end,
+ *   dsp hpf|ns|agc on|off   or one stage of it, from the next frame;
+ *   dsp level <n>           AGC target and noise attenuation from the
+ *   dsp nsdb <dB>           next soak (mic_dsp.h)
  *   soak <minutes> [sd]     start a soak (0 = continuous); sd adds the card
  *   stop                    stop the running soak
  *
@@ -110,13 +114,17 @@ uint32_t rtt_link_decx(void);
 
 /*
  * Raw mic stream (CONFIG_SOAK_AUDIO_HAT, "rawmic on"): up channel 3 carries
- * every 20 ms mono frame the encoder is fed, as an 8-byte header ("RM",
- * frame k of the chunk, 0, chunk index n uint32 LE) and 160 int16 LE
- * samples. A frame that does not fit is skipped whole. rtt_link.py capture
- * saves the channel next to the soak file (.raw); tools/raw_mic_wav.py
- * turns it into a WAV aligned with the decoded chunks.
+ * every 20 ms mono frame of the encoder's input, mic or pcm mode, as an
+ * 8-byte header ("R" + tap, frame k of the chunk, 0, chunk index n uint32
+ * LE) and 160 int16 LE samples. Tap 'M' is the frame as captured; with the
+ * mic DSP running (CONFIG_SOAK_MIC_DSP) tap 'C' follows it, the frame
+ * after the DSP, which is what Codec 2 encodes. A frame that does not fit
+ * is skipped whole. rtt_link.py capture saves the channel next to the soak
+ * file (.raw); tools/raw_mic_wav.py turns it into WAVs aligned with the
+ * decoded chunks.
  */
 bool rtt_link_raw_on(void);
-void rtt_link_raw_frame(uint32_t n, int k, const int16_t *pcm, uint32_t samples);
+void rtt_link_raw_frame(char tap, uint32_t n, int k, const int16_t *pcm,
+			uint32_t samples);
 
 #endif /* RTT_LINK_H_ */

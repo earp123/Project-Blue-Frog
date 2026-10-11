@@ -338,3 +338,15 @@ builds against a clean SDK:
 > `scripts/setup_sdk.sh` and do a pristine build. Patch 2 changes a
 > devicetree binding, which is only picked up on a CMake reconfigure
 > (`-p always`).
+
+---
+
+## Third-party code
+
+| Path | What | Licence | Linked into |
+|---|---|---|---|
+| `external/zephyr-lora-driver/` | Zephyr's newer `drivers/lora/` (native SX126x) | Apache-2.0 | every build (through the SDK) |
+| `external/codec2/` | Codec 2 speech codec, subset | LGPL-2.1 | `CONFIG_SOAK_C2_ENCODE` builds only (test firmware; product licensing not settled) |
+| `external/speexdsp/` | SpeexDSP preprocessor (noise suppression + AGC), subset | BSD-3-Clause | `CONFIG_SOAK_MIC_DSP` builds ([`docs/mic_dsp_frontend.md`](docs/mic_dsp_frontend.md)) |
+
+Each directory's README says where it came from and what was changed.

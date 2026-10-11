@@ -444,6 +444,11 @@ west build -b nrf5340dk/nrf5340/cpuapp -d build-hat-tft . -- \
 
 ## G3 progress (2026-10-01): playout works; quality is the open problem
 
+> **Follow-up (2026-10-10):** a mic DSP front end (HPF + SpeexDSP noise
+> suppression + AGC) ahead of Codec 2 helps only in stationary crowd roar.
+> It is off by default, kept for a field A/B. See
+> [`mic_dsp_frontend.md`](mic_dsp_frontend.md).
+
 Not the formal 5-minute run yet. Three units, each with a WM8960 HAT and
 an earpiece, all in mic mode on one bench, in several 1-minute runs.
 

@@ -1,0 +1,58 @@
+{
+ "quiet_M": {
+  "talker": "M",
+  "noise": null,
+  "snr_db": null,
+  "speech_dbfs": -22.0,
+  "crc32": "f232c582"
+ },
+ "quiet_F": {
+  "talker": "F",
+  "noise": null,
+  "snr_db": null,
+  "speech_dbfs": -22.0,
+  "crc32": "f7e09fc9"
+ },
+ "soft_M": {
+  "talker": "M",
+  "noise": null,
+  "snr_db": null,
+  "speech_dbfs": -34.0,
+  "crc32": "ab1ce7d4"
+ },
+ "crowd5_M": {
+  "talker": "M",
+  "noise": "crowd",
+  "snr_db": 5.0,
+  "speech_dbfs": -22.0,
+  "crc32": "d4694bdf"
+ },
+ "crowd0_M": {
+  "talker": "M",
+  "noise": "crowd",
+  "snr_db": 0.0,
+  "speech_dbfs": -22.0,
+  "crc32": "a26a3df0"
+ },
+ "crowd0_F": {
+  "talker": "F",
+  "noise": "crowd",
+  "snr_db": 0.0,
+  "speech_dbfs": -22.0,
+  "crc32": "adf5d3dc"
+ },
+ "wind0_M": {
+  "talker": "M",
+  "noise": "wind",
+  "snr_db": 0.0,
+  "speech_dbfs": -22.0,
+  "crc32": "9504a096"
+ },
+ "roar0_M": {
+  "talker": "M",
+  "noise": "roar",
+  "snr_db": 0.0,
+  "speech_dbfs": -22.0,
+  "crc32": "5caf81f7"
+ }
+}

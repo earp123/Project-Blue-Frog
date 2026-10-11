@@ -80,6 +80,30 @@ if(CONFIG_SOAK_C2_ENCODE)
   target_link_libraries(app PRIVATE codec2)
   target_sources(app PRIVATE src/tdma_console/c2_enc.c
     src/tdma_console/c2_dec.c)
+  # Mic DSP front end (CONFIG_SOAK_MIC_DSP): the vendored SpeexDSP
+  # preprocessor subset in external/speexdsp (BSD, see its README) as its
+  # own static library. Same -O2 pragma and single-precision constants as
+  # Codec 2, and float_math.h maps its double libm calls to the float ones;
+  # config.h and the allocator hooks are in external/speexdsp/port.
+  if(CONFIG_SOAK_MIC_DSP)
+    add_library(speexdsp STATIC
+      external/speexdsp/libspeexdsp/preprocess.c
+      external/speexdsp/libspeexdsp/filterbank.c
+      external/speexdsp/libspeexdsp/fftwrap.c
+      external/speexdsp/libspeexdsp/smallft.c
+      external/speexdsp/port/echo_stub.c)
+    target_link_libraries(speexdsp PRIVATE zephyr_interface)
+    target_compile_definitions(speexdsp PRIVATE HAVE_CONFIG_H)
+    # SHELL: keeps CMake from merging the two -include flags into one.
+    target_compile_options(speexdsp PRIVATE -w -fsingle-precision-constant
+      "SHELL:-include ${CMAKE_CURRENT_SOURCE_DIR}/external/codec2_opt.h"
+      "SHELL:-include ${CMAKE_CURRENT_SOURCE_DIR}/external/speexdsp/port/float_math.h")
+    target_include_directories(speexdsp PRIVATE external/speexdsp/port
+      external/speexdsp/libspeexdsp)
+    target_include_directories(speexdsp PUBLIC external/speexdsp/include)
+    target_link_libraries(app PRIVATE speexdsp)
+    target_sources(app PRIVATE src/tdma_console/mic_dsp.c)
+  endif()
   # The WM8960 HAT as the microphone (CONFIG_SOAK_AUDIO_HAT).
   target_sources_ifdef(CONFIG_SOAK_AUDIO_HAT app PRIVATE
     src/tdma_console/hat_audio.c src/tdma_console/wm8960.c)

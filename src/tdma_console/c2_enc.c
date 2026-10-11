@@ -21,6 +21,9 @@
 #include "hat_audio.h"
 #include "rtt_link.h"
 #endif
+#ifdef CONFIG_SOAK_MIC_DSP
+#include "mic_dsp.h"
+#endif
 
 /* codec2_encode keeps FFT and pitch buffers on the stack: 16 KB left only
  * 1.7 KB never touched (status enc=.../<unused>), so 20 KB.
@@ -178,30 +181,45 @@ void c2_enc_get_stats(struct c2_enc_stats *out)
 
 /*
  * Encode frame k of chunk n into out: from the PCM clip (it loops), or the
- * next 20 ms of live audio, taken now that the frame is due.
+ * next 20 ms of live audio, taken now that the frame is due. The mic DSP
+ * (CONFIG_SOAK_MIC_DSP) conditions either before the encode.
  */
 static void encode_frame(uint32_t n, int k, uint8_t *out)
 {
 #ifdef CONFIG_SOAK_AUDIO_HAT
 	if (from_mic) {
 		hat_audio_frame(frame_pcm, FRAME_SAMPLES);
-		if (rtt_link_raw_on()) {
-			/* What the encoder is fed, for comparison. */
-			rtt_link_raw_frame(n, k, frame_pcm, FRAME_SAMPLES);
+	} else
+#endif
+	{
+		uint32_t len;
+		const uint8_t *pcm = clip_src_data(&len);
+		uint32_t chunks = len / C2_ENC_CHUNK_PCM_BYTES;
+		const uint8_t *src = pcm +
+				     (n % chunks) * C2_ENC_CHUNK_PCM_BYTES +
+				     k * FRAME_SAMPLES * 2;
+
+		for (int i = 0; i < FRAME_SAMPLES; i++) {
+			frame_pcm[i] = (int16_t)sys_get_le16(&src[i * 2]);
 		}
-		codec2_encode(codec, out, frame_pcm);
-		return;
+	}
+#ifdef CONFIG_SOAK_AUDIO_HAT
+	if (rtt_link_raw_on()) {
+		/* The frame as captured, for comparison ("RM"). */
+		rtt_link_raw_frame('M', n, k, frame_pcm, FRAME_SAMPLES);
 	}
 #endif
-	uint32_t len;
-	const uint8_t *pcm = clip_src_data(&len);
-	uint32_t chunks = len / C2_ENC_CHUNK_PCM_BYTES;
-	const uint8_t *src = pcm + (n % chunks) * C2_ENC_CHUNK_PCM_BYTES +
-			     k * FRAME_SAMPLES * 2;
-
-	for (int i = 0; i < FRAME_SAMPLES; i++) {
-		frame_pcm[i] = (int16_t)sys_get_le16(&src[i * 2]);
+#ifdef CONFIG_SOAK_MIC_DSP
+	if (mic_dsp_frame(frame_pcm, FRAME_SAMPLES)) {
+#ifdef CONFIG_SOAK_AUDIO_HAT
+		if (rtt_link_raw_on()) {
+			/* What the encoder is fed after the DSP ("RC"). */
+			rtt_link_raw_frame('C', n, k, frame_pcm,
+					   FRAME_SAMPLES);
+		}
+#endif
 	}
+#endif
 	codec2_encode(codec, out, frame_pcm);
 }
 
@@ -371,6 +389,13 @@ static void enc_thread_fn(void *p1, void *p2, void *p3)
 
 		codec = codec2_create(CODEC2_MODE_3200);
 		create_result = (codec != NULL) ? 0 : -ENOMEM;
+#ifdef CONFIG_SOAK_MIC_DSP
+		if (codec != NULL && mic_dsp_start() < 0) {
+			codec2_destroy(codec);
+			codec = NULL;
+			create_result = -ENOMEM;
+		}
+#endif
 		k_sem_give(&enc_ready);
 		if (codec == NULL) {
 			continue;

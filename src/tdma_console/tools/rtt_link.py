@@ -19,6 +19,8 @@ Usage:
     rtt_link.py --sn N vol 0x6D               # mic: earpiece volume (0x79 = 0 dB)
     rtt_link.py --sn N listen 0|1|2|3|all     # mic, test: earpieces play one peer
     rtt_link.py --sn N rawmic on|off          # mic: capture also saves <file>.raw
+    rtt_link.py --sn N dsp on|off             # mic DSP (CONFIG_SOAK_MIC_DSP)
+    rtt_link.py --sn N dsp ns off             # one stage: hpf, ns or agc
     rtt_link.py --sn N lead 20000             # stage 20 ms before TX; 0 = at once
     rtt_link.py --sn N phase 20000            # pcm: chunk ready 20 ms before TX
     rtt_link.py --sn N decx 1                 # pcm: one extra decode stream
@@ -361,6 +363,8 @@ def run_one(args):
             line = f"listen {args.slot}"
         elif args.cmd == "rawmic":
             line = f"rawmic {args.state}"
+        elif args.cmd == "dsp":
+            line = "dsp " + " ".join(args.args)
         elif args.cmd == "vol":
             line = f"vol {int(args.code, 0)}"
         elif args.cmd == "mix":
@@ -441,6 +445,10 @@ def main(argv=None):
     p.add_argument("state", choices=["on", "off"],
                    help="stream the encoder's input frames on RTT up 3; "
                         "capture saves them as <file>.raw")
+    p = sub.add_parser("dsp")
+    p.add_argument("args", nargs="+",
+                   help="on|off, hpf|ns|agc on|off, level <n> or nsdb <dB> "
+                        "(docs/mic_dsp_frontend.md)")
     p = sub.add_parser("vol")
     p.add_argument("code", help="mic builds: earpiece volume, 0x30-0x7F "
                    "(0x79 = 0 dB, 1 dB steps)")

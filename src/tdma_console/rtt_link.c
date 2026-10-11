@@ -25,6 +25,9 @@
 #ifdef CONFIG_SOAK_C2_PROFILE
 #include "c2_prof.h"
 #endif
+#ifdef CONFIG_SOAK_MIC_DSP
+#include "mic_dsp.h"
+#endif
 
 #define CH_SOAK		1	/* up: record stream */
 #define CH_CTL		1	/* down: commands */
@@ -40,7 +43,8 @@ static uint8_t ctl_buf[1024];
 #ifdef CONFIG_SOAK_AUDIO_HAT
 #define CH_RAW		3	/* up: raw mic frames */
 /* 12 frames, 240 ms: the host drains every 5 ms. */
-static uint8_t raw_buf[4096];
+/* With the mic DSP, two taps (raw and conditioned) at 16.4 KB/s each. */
+static uint8_t raw_buf[IS_ENABLED(CONFIG_SOAK_MIC_DSP) ? 8192 : 4096];
 static atomic_t raw_on;
 static uint32_t raw_skipped;
 #endif
@@ -159,7 +163,7 @@ bool rtt_link_raw_on(void)
 	return atomic_get(&raw_on) != 0;
 }
 
-void rtt_link_raw_frame(uint32_t n, int k, const int16_t *pcm,
+void rtt_link_raw_frame(char tap, uint32_t n, int k, const int16_t *pcm,
 			uint32_t samples)
 {
 	/* Encoder thread only, so one static frame buffer will do. */
@@ -167,7 +171,7 @@ void rtt_link_raw_frame(uint32_t n, int k, const int16_t *pcm,
 
 	samples = MIN(samples, 160U);
 	f[0] = 'R';
-	f[1] = 'M';
+	f[1] = (uint8_t)tap;
 	f[2] = (uint8_t)k;
 	f[3] = 0;
 	sys_put_le32(n, &f[4]);
@@ -383,6 +387,51 @@ static void clip_begin(const char *len_s, const char *crc_s)
 	}
 }
 
+#ifdef CONFIG_SOAK_MIC_DSP
+/*
+ * dsp on|off                  the whole front end, at the next frame
+ * dsp hpf|ns|agc on|off       one stage, at the next frame
+ * dsp level <n>               AGC target (Speex units), from the next soak
+ * dsp nsdb <dB>               noise attenuation, from the next soak
+ */
+static void cmd_dsp(char **tok, int n)
+{
+	static const char *const stage_name[] = { "hpf", "ns", "agc" };
+	uint32_t v;
+
+	if (n == 2 && (strcmp(tok[1], "on") == 0 ||
+		       strcmp(tok[1], "off") == 0)) {
+		mic_dsp_set_on(tok[1][1] == 'n');
+		reply("ok dsp %s", tok[1]);
+		return;
+	}
+	if (n == 3 && strcmp(tok[1], "level") == 0 && parse_u32(tok[2], &v) &&
+	    v >= 1 && v <= 32768) {
+		mic_dsp_set_agc_level(v);
+		reply("ok dsp level %u", v);
+		return;
+	}
+	if (n == 3 && strcmp(tok[1], "nsdb") == 0 && parse_u32(tok[2], &v) &&
+	    v <= 40) {
+		mic_dsp_set_ns_db(v);
+		reply("ok dsp nsdb %u", v);
+		return;
+	}
+	for (int i = 0; i < (int)ARRAY_SIZE(stage_name); i++) {
+		if (n == 3 && strcmp(tok[1], stage_name[i]) == 0 &&
+		    (strcmp(tok[2], "on") == 0 || strcmp(tok[2], "off") == 0)) {
+			uint32_t m = mic_dsp_get_stages();
+
+			m = (tok[2][1] == 'n') ? (m | BIT(i)) : (m & ~BIT(i));
+			mic_dsp_set_stages(m);
+			reply("ok dsp %s %s", tok[1], tok[2]);
+			return;
+		}
+	}
+	reply("err cmd");
+}
+#endif
+
 static void handle_line(char *s)
 {
 	char *tok[4];
@@ -467,6 +516,10 @@ static void handle_line(char *s)
 		/* Earpiece volume: 0x79 = 0 dB, 1 dB steps. */
 		hat_audio_hp_vol((uint8_t)lead);
 		reply("ok vol %u", lead);
+#endif
+#ifdef CONFIG_SOAK_MIC_DSP
+	} else if (strcmp(tok[0], "dsp") == 0 && n >= 2) {
+		cmd_dsp(tok, n);
 #endif
 #ifdef CONFIG_FAT_FILESYSTEM_ELM
 	} else if (strcmp(tok[0], "sdls") == 0 && n <= 2) {
@@ -654,6 +707,24 @@ static void do_status(const struct rtt_link_ops *ops)
 	      ps.chunks ? ps.lead_min : 0, ps.chunks ? ps.lead_max : 0,
 	      lsn < 0 ? "all" : lbuf, rtt_link_raw_on() ? "on" : "off",
 	      raw_skipped);
+#endif
+#ifdef CONFIG_SOAK_MIC_DSP
+	struct mic_dsp_stats dsp;
+
+	mic_dsp_get_stats(&dsp);
+	/* dsp = on/off, stages applied (h/n/a), frames this run, us per 20 ms
+	 * frame avg/max, arena used/size (B), AGC gain (dB), noise estimate
+	 * (dB), speech probability (%), samples at full scale, peak since the
+	 * last status.
+	 */
+	reply("ok dsp %s %c%c%c frames=%u us=%u/%u state=%u/%u gain=%d "
+	      "noise=%d speech=%u clip=%u peak=%d",
+	      dsp.on ? "on" : "off",
+	      (dsp.stages & MIC_DSP_HPF) ? 'h' : '-',
+	      (dsp.stages & MIC_DSP_NS) ? 'n' : '-',
+	      (dsp.stages & MIC_DSP_AGC) ? 'a' : '-', dsp.frames, dsp.us_avg,
+	      dsp.us_max, dsp.state_bytes, dsp.arena_bytes, dsp.agc_gain_db,
+	      dsp.noise_db, dsp.speech_pct, dsp.clipped, dsp.peak);
 #endif
 #else
 	reply("ok status %s sync=%s soak=%s mode=%s clip=%u/%08x lead=%u "

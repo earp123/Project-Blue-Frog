@@ -1,11 +1,13 @@
 #!/usr/bin/env python3
 """Raw mic stream (.raw, "rawmic on") -> WAV, with an A/B against Codec 2.
 
-In mic mode with "rawmic on", a HAT unit streams every 20 ms mono frame its
-encoder is fed (rtt_link.h: "RM", frame k, 0, chunk n uint32, 160 int16), and
-rtt_link.py capture saves them as <capture>.raw next to the soak file.
+With "rawmic on", a HAT unit streams every 20 ms mono frame of its encoder's
+input (rtt_link.h: "R" + tap, frame k, 0, chunk n uint32, 160 int16), and
+rtt_link.py capture saves them as <capture>.raw next to the soak file. Tap
+"RM" is the frame as captured; with the mic DSP running, tap "RC" is the same
+frame after it, which is what Codec 2 encodes (docs/mic_dsp_frontend.md).
 
-    raw_mic_wav.py S1_x.raw                  # -> S1_x_raw.wav
+    raw_mic_wav.py S1_x.raw                  # -> S1_x_raw.wav (+ _cond.wav)
     raw_mic_wav.py S1_x.raw --log S1_x.bin   # also S1_x_ab.wav
 
 Frames are placed by (chunk, frame), so a skipped frame (RTT buffer full)
@@ -34,19 +36,34 @@ REC = 8 + 2 * FRAME
 FRAMES_PER_CHUNK = SAMPLES_PER_CHUNK // FRAME
 
 
-def parse_raw(blob):
-    """{(n, k): samples}, plus the count of bytes skipped resyncing."""
+TAPS = (b"RM", b"RC")
+
+
+def parse_raw(blob, tap=b"RM"):
+    """{(n, k): samples} of one tap, plus the count of bytes skipped
+    resyncing. Frames of the other tap are stepped over whole."""
     frames, skipped, i = {}, 0, 0
     while i + REC <= len(blob):
-        if blob[i:i + 2] != b"RM" or blob[i + 2] >= FRAMES_PER_CHUNK:
+        if blob[i:i + 2] not in TAPS or blob[i + 2] >= FRAMES_PER_CHUNK:
             i += 1
             skipped += 1
             continue
-        k = blob[i + 2]
-        (n,) = struct.unpack_from("<I", blob, i + 4)
-        frames[(n, k)] = np.frombuffer(blob, "<i2", FRAME, i + 8)
+        if blob[i:i + 2] == tap:
+            k = blob[i + 2]
+            (n,) = struct.unpack_from("<I", blob, i + 4)
+            frames[(n, k)] = np.frombuffer(blob, "<i2", FRAME, i + 8)
         i += REC
     return frames, skipped
+
+
+def timeline(frames, lo, nch):
+    """Frames placed by (chunk, frame) from chunk lo; gaps are silence."""
+    out = np.zeros(nch * SAMPLES_PER_CHUNK, np.int16)
+    for (n, k), s in frames.items():
+        if lo <= n < lo + nch:
+            off = (n - lo) * SAMPLES_PER_CHUNK + k * FRAME
+            out[off:off + FRAME] = s
+    return out
 
 
 def tx_decoded(path):
@@ -78,16 +95,14 @@ def main():
     args = ap.parse_args()
 
     with open(args.raw, "rb") as f:
-        frames, skipped = parse_raw(f.read())
+        blob = f.read()
+    frames, skipped = parse_raw(blob)
     if not frames:
         sys.exit("no raw mic frames in %s" % args.raw)
     lo = min(n for n, _ in frames)
     hi = max(n for n, _ in frames)
     nch = hi - lo + 1
-    raw = np.zeros(nch * SAMPLES_PER_CHUNK, np.int16)
-    for (n, k), s in frames.items():
-        off = (n - lo) * SAMPLES_PER_CHUNK + k * FRAME
-        raw[off:off + FRAME] = s
+    raw = timeline(frames, lo, nch)
     stem = args.raw.rsplit(".", 1)[0]
     write_wav(stem + "_raw.wav", raw, c2codec.FS)
     missing = nch * FRAMES_PER_CHUNK - len(frames)
@@ -96,6 +111,15 @@ def main():
           "peak %d, rms %.1f dBFS -> %s_raw.wav"
           % (lo, hi, len(frames), missing, skipped, int(np.abs(raw).max()),
              20 * np.log10(max(rms, 0.5) / 32768), stem))
+
+    cond_frames, _ = parse_raw(blob, b"RC")
+    if cond_frames:
+        cond = timeline(cond_frames, lo, nch)
+        write_wav(stem + "_cond.wav", cond, c2codec.FS)
+        crms = np.sqrt(np.mean(cond.astype(float) ** 2))
+        print("cond: %d frames after the mic DSP, peak %d, rms %.1f dBFS "
+              "-> %s_cond.wav" % (len(cond_frames), int(np.abs(cond).max()),
+                                 20 * np.log10(max(crms, 0.5) / 32768), stem))
 
     if args.log:
         dec = tx_decoded(args.log)

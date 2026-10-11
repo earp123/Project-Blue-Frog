@@ -11,3 +11,12 @@ soaks/range1/
 soaks/rtt/
 soaks/wm8960/
 __pycache__/
+
+# Mic DSP D1 (tools/mic_dsp_ab.py): the clips regenerate with "make"; the raw
+# taps and per-clip WAVs are large. Logs, scores and the A/B WAVs are kept.
+soaks/mic_dsp_d1/*.pcm
+soaks/mic_dsp_d1/*.raw
+soaks/mic_dsp_d1/*_in.wav
+soaks/mic_dsp_d1/*_clean.wav
+soaks/mic_dsp_d1/*_cond.wav
+soaks/mic_dsp_d1/*_raw.wav

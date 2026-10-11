@@ -1,0 +1,5 @@
+ok status role=S slot=1 sync=RUN soak=run mode=mic clip=0/00000000 lead=0 rtt_drop=0 pretx=749/749/1694/1759 phase=12000 enc=749/0/0/5950/6037/195/10144/0
+ok dec 752/0/1/0/24495/26180/335/7408/82720 cpu=595/249/226/6/11
+ok hat 1/4/13656/7999979/0/0 mix=avg slip=0/0/2997 peak=4485/9095
+ok play 752/1/0/0/0 corr=0/0 lead=240/320 listen=all rawmic=off/0
+ok dsp on hna frames=2997 us=1928/2255 state=12840/16384 gain=20 noise=21 speech=66 clip=0 peak=9193

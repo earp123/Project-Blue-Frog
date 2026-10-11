@@ -1,0 +1,5 @@
+ok status role=M slot=0 sync=IDLE soak=idle mode=pcm clip=4000/9504a096 lead=0 rtt_drop=0 pretx=5998/3745/1740/1764 phase=12000 enc=751/0/0/5770/5640/192/10144/0
+ok dec 0/0/0/0/0/0/0/0/82720 cpu=357/243/0/4/10
+ok hat 1/4/131998/7999978/0/0 mix=avg slip=0/0/0 peak=11082/23007
+ok play 0/0/0/0/0 corr=0/0 lead=0/0 listen=all rawmic=on/0
+ok dsp on hna frames=3005 us=1816/1990 state=12840/16384 gain=2 noise=10 speech=96 clip=0 peak=28905
