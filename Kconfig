@@ -33,7 +33,7 @@ config APP_TDMA_FIELD
 	bool "Shield unit: TDMA field unit (rev 2 shield: OLED + microSD)"
 	select COUNTER
 	help
-	  The same soak runner on the rev 2 shield: an SSD1306 128x64 OLED on
+	  The same soak runner on the rev 2 shield: an SSD1306 128x32 OLED on
 	  i2c1, a microSD card on spi4, and the SX1262 on spi2 / port 1. Apply
 	  boards/nrf5340dk_nrf5340_cpuapp_shield.overlay and
 	  boards/nrf5340dk_nrf5340_cpuapp_shield.conf. Buttons only, with an
@@ -42,6 +42,36 @@ config APP_TDMA_FIELD
 	  bring-up.
 
 endchoice
+
+config SOAK_UNIT_SLOT
+	int "Unit to boot as: TX slot 0 (MASTER) to 3, or -1 to pick at power-on"
+	default -1
+	range -1 3
+	depends on APP_TDMA_CONSOLE || APP_TDMA_FIELD
+	help
+	  Preset the unit for field runs, so it boots without the power-on
+	  unit pick: splash (unit and TX power), an SD card check, then
+	  straight into the soak menu. 0 is the MASTER, 1-3 are SEC 1-3; give
+	  every unit in a kit its own value, e.g.
+	  -DCONFIG_SOAK_UNIT_SLOT=0 on one unit. -1 keeps the power-on pick.
+
+config SOAK_BOOT_TX_POWER_DBM
+	int "TX power at boot (dBm)"
+	default 22
+	range -9 22
+	depends on APP_TDMA_CONSOLE || APP_TDMA_FIELD
+	help
+	  TX power each unit starts at; still adjustable from HOME (TX PWR).
+
+config SOAK_TOUCH_CAL
+	bool "TFT unit: power-on touch calibration"
+	default y
+	depends on APP_TDMA_CONSOLE
+	help
+	  Run the mandatory touch calibration at power-on. Say n to drive the
+	  console from the DK buttons only (B1 UP, B2 DOWN, B3 OK, B4 BACK):
+	  calibration is skipped and touch input is ignored, since uncalibrated
+	  taps land in the wrong place.
 
 choice SOAK_PAYLOAD
 	prompt "Soak payload"

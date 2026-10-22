@@ -12,7 +12,7 @@ For hardware wiring, build/flash instructions, and SDK setup, see
 
 On-device radio-evaluation tooling for the nRF5340 DK + Wio-SX1262 (SX1262),
 plus the first slice of the wireless-intercom firmware (TDMA radio layer).
-_Last updated: 2026-10-10._
+_Last updated: 2026-10-22._
 
 ### Where things stand (2026-09-29)
 
@@ -86,6 +86,56 @@ Exactly one `main()` is linked, chosen by the Kconfig choice in
 Four other variants were retired on 2026-09-25: LoRa send, the telemetry
 console, the TDMA UART-shell test and the UART soak harness (see "Streamlined
 to two unit types"). Their sections below are kept as history.
+
+### Field-run presets, 128x32 OLED UI, boot SD check (2026-10-22)
+
+For today's three-unit range test: each unit boots straight into the soak
+menu with its unit and TX power preset. The mic DSP stays off.
+
+- **The shield's OLED is 128x32**, Adafruit's SSD1306, not 128x64 as
+  configured since 2026-09-24. The overlay now matches Zephyr's
+  `ssd1306_128x32` shield (`multiplex-ratio = <31>`, `com-sequential`). Two
+  of the three bench units are now shield units: 1050080691 and 960166366.
+- **New OLED layout for 32 px:** an inverted 8x8 caption bar, one item in
+  the 10x16 font, and an 8x8 detail line (16 characters). A running soak
+  opens on a new summary page:
+  - state, unit and run time;
+  - each peer's last RSSI, or `--` once it has been quiet for 2 s;
+  - RX count and loss %;
+  - TX count and log state.
+
+  The one-value pages follow, as before.
+- **Presets (Kconfig, both unit types):**
+  - `SOAK_UNIT_SLOT` (0–3, default −1 = pick at power-on).
+  - `SOAK_BOOT_TX_POWER_DBM` (default +22).
+  - `SOAK_TOUCH_CAL` (TFT, default y). Set to n, it skips calibration and
+    ignores touch, so the console runs on the DK buttons only.
+- **Boot sequence:** a splash (unit and TX power), then calibration and unit
+  pick unless preset, then an SD check, then the soak menu.
+  - The SD check runs a summary scan on the writer thread and shows
+    `CARD OK` with the log count and free space, or the failing step.
+  - A failure stays up for 5 s; any button skips.
+  - The soak menu's caption carries unit and power, and its detail line the
+    card state.
+- **Images flashed for the range test:**
+
+  | Unit | Probe | Preset |
+  |---|---|---|
+  | Shield | 1050080691 | MASTER |
+  | Shield | 960166366 | SEC 1 |
+  | TFT | 960170130 | SEC 2, no touch cal |
+
+  All at +22 dBm.
+- **Bench, 1-minute three-unit RTT soak:** PER 0.000 % on every unit, with
+  0 missed, 0 duplicates, 0 CRC errors and 0 stale re-sends. Phase error
+  stayed within ±24 µs, and RSSI was −28 to −44 dBm.
+- **960166366's SD card did not mount:** `fs mount error (-19)` with the
+  card detected and answering, so it had no FAT32/exFAT volume. The boot
+  check caught it. A freshly formatted card mounts.
+- **Build host:** NCS v3.2.1 installed at `C:/ncs` with nrfutil
+  sdk-manager, plus J-Link V9.88. Probe 1050080691 then came up as a plain
+  J-Link (USB PID 0101) with no driver until SEGGER's `JLink.inf` was
+  installed.
 
 ### Mic DSP front end: helps in crowd roar only; off by default (2026-10-10)
 

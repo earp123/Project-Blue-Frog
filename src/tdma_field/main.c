@@ -1,6 +1,6 @@
 /*
  * Intercom TDMA field unit (CONFIG_APP_TDMA_FIELD): variant entry point for
- * the rev 2 shield. SSD1306 128x64 OLED on i2c1, microSD on spi4, Wio-SX1262
+ * the rev 2 shield. SSD1306 128x32 OLED on i2c1, microSD on spi4, Wio-SX1262
  * on spi2 (boards/nrf5340dk_nrf5340_cpuapp_shield.overlay).
  *
  * The TDMA field console's soak runner on a buttons-only, essentials-only UI.
@@ -10,22 +10,28 @@
  * Record logging uses the console's sd_log / soak_log, which do not depend
  * on the display (linked from src/tdma_console, see CMakeLists.txt).
  *
- * One image serves every unit. Power-on goes straight to UNIT, which is
- * mandatory: MASTER (slot 0) or SEC 1..3, one TX slot per unit. The choice
- * locks at the first tdma_init(); reboot to change it.
+ * Power-on: a splash with the unit and TX power, then UNIT, then an SD card
+ * check, then straight into the soak menu. UNIT is MASTER (slot 0) or SEC
+ * 1..3, one TX slot per unit. With CONFIG_SOAK_UNIT_SLOT set (field runs) it
+ * is preset at build time and the pick is skipped; otherwise it is a
+ * mandatory pick. Either way it locks at the first tdma_init(); reboot to
+ * change it.
  *
- * The UI is a cycle menu: one item per screen, drawn as large as it fits.
- * UP/DOWN cycles, OK acts, B4 goes back. HOME cycles three items:
+ * The UI is a cycle menu on the 128x32 panel: an inverted caption bar (8 px),
+ * one item in the 10x16 font, and a detail line (8 px). UP/DOWN cycles, OK
+ * acts, B4 goes back. HOME (B4 from the soak menu) cycles three items:
  *   SOAK     cycle 5 min / 30 min / 2 h / continuous, OK starts. The live
- *            screen cycles pages: time, RX, TX, phase, link, log, latency.
+ *            screen opens on a four-line summary (per-peer RSSI, RX and loss,
+ *            TX and log), then cycles one-value pages: time, RX, TX, phase,
+ *            link, log, latency.
  *   TX PWR   OK to edit: UP/DOWN steps -9..+22 dBm, default +22 dBm
  *   SD CARD  pages: .BIN count + newest file, free space, card-detect
  * Buttons: B1 UP, B2 DOWN, B3 OK, B4 BACK. B4 also stops a running soak.
  * Entering HOME rescans the card on the soak_log writer thread; the UI
  * never calls FatFs itself.
  *
- * Drawing goes through CFB, which rebuilds the whole 1 KB frame and pushes
- * it every time. At 400 kHz that is ~25 ms of I2C on this thread and nowhere
+ * Drawing goes through CFB, which rebuilds the whole 512 B frame and pushes
+ * it every time. At 400 kHz that is ~13 ms of I2C on this thread and nowhere
  * else. The soak data thread outranks it and never touches a bus, so a
  * repaint cannot delay a payload. The live soak screen repaints at 2 Hz.
  *
@@ -61,13 +67,24 @@
 
 LOG_MODULE_REGISTER(tdma_field, LOG_LEVEL_INF);
 
-/* Boot TX power for this variant (the engine's own default is +22 dBm). */
-#define FIELD_TX_POWER_DBM	22
+/* Boot TX power (Kconfig, default +22 dBm, the engine's own default). */
+#define FIELD_TX_POWER_DBM	CONFIG_SOAK_BOOT_TX_POWER_DBM
 
 /* Live soak repaint cadence: <= 2 Hz keeps the I2C cost off the budget. */
 #define SOAK_DRAW_PERIOD_MS	500
 
-#define SPLASH_MS		1200
+#define SPLASH_MS		1500
+
+/* Power-on SD check: how long to wait for the scan, then how long the result
+ * stays up before the soak menu (any button skips). A failure stays longer,
+ * so nobody walks off with a unit that will not log.
+ */
+#define SD_SCAN_TIMEOUT_MS	10000
+#define SD_OK_HOLD_MS		1500
+#define SD_ERR_HOLD_MS		5000
+
+/* A peer not heard for this long shows as "--" on the soak summary. */
+#define PEER_STALE_MS		2000
 
 /* ---- Navigation (posted by the button callback, consumed in main) ---- */
 enum nav_action {
@@ -81,7 +98,8 @@ static atomic_t nav_event = ATOMIC_INIT(NAV_NONE);
 
 /* ---- Screen state machine ---- */
 enum screen_id {
-	SCR_ROLE_PICK = 0,	/* power-on, mandatory */
+	SCR_ROLE_PICK = 0,	/* power-on, unless the unit is preset */
+	SCR_BOOT_SD,		/* power-on SD check, then the soak menu */
 	SCR_HOME,
 	SCR_SOAK_PICK,
 	SCR_SOAK,
@@ -105,7 +123,8 @@ static char pick_msg[20] = "";
 
 /* The live soak and SD screens are cycles of one-value pages. */
 enum soak_page {
-	SP_TIME = 0,
+	SP_SUM = 0,	/* four-line summary, the default */
+	SP_TIME,
 	SP_RX,
 	SP_TX,
 	SP_SYNC,
@@ -219,6 +238,10 @@ static struct {
 	uint32_t tx_lead_us;	/* and how long before its TX boundary */
 	uint32_t lead_us;	/* staging lead, latched at start (0 = at once) */
 	uint32_t tx_enc_us;	/* PCM mode: the armed chunk's encode time */
+
+	/* Per peer, for the summary page: last RSSI and when it was heard. */
+	int16_t peer_rssi[TDMA_SLOT_COUNT];
+	int64_t peer_rx_ms[TDMA_SLOT_COUNT];
 } soak;
 
 static int64_t soak_last_draw_ms;
@@ -310,13 +333,11 @@ INPUT_CALLBACK_DEFINE(DEVICE_DT_GET(DT_PATH(buttons)), button_cb, NULL);
 /* ---------------------------------------------------------------------------
  * OLED (CFB): the cycle UI
  *
- * Every screen is one card: a caption line on top, one item in the middle,
- * and a detail line at the bottom. UP/DOWN cycles, OK acts, B4 goes back.
- *
- * The edge lines use the 16 px font (12 characters) so they stay readable;
- * the 8x8 font is only a fallback for a runtime value too long for that.
- * The middle item is capped at 24 px and centred in the 32 px left between
- * the edges, so it never crowds them.
+ * Every screen is one card on the 128x32 panel: an inverted caption bar on
+ * top (8x8 font, 16 characters), one item in the middle (the tallest font
+ * that fits the 16 px band, so 10x16 for up to 12 characters) and a detail
+ * line at the bottom (8x8). UP/DOWN cycles, OK acts, B4 goes back. The soak
+ * summary page uses the same bar over three plain 8x8 rows instead.
  * ------------------------------------------------------------------------- */
 static const struct device *const disp = DEVICE_DT_GET(DT_CHOSEN(zephyr_display));
 
@@ -331,10 +352,9 @@ static struct {
 	uint8_t w, h;
 } fonts[FONTS_MAX];
 static int n_fonts;
+static int font_sm;		/* index into fonts[] of the 8 px font */
 
-#define EDGE_H		16	/* caption and detail line height */
-#define MID_GAP		4	/* minimum clearance between middle and edges */
-#define CAP_GAP		4	/* minimum gap between the caption's halves */
+#define ROW_H		8	/* caption bar, detail line, summary rows */
 
 static bool display_init(void)
 {
@@ -387,10 +407,11 @@ static bool display_init(void)
 		fonts[j].h = h;
 	}
 
-	if (n_fonts == 0 || fonts[n_fonts - 1].h > EDGE_H) {
-		LOG_ERR("OLED: no font of %d px or less", EDGE_H);
+	if (n_fonts == 0 || fonts[n_fonts - 1].h > ROW_H) {
+		LOG_ERR("OLED: no font of %d px or less", ROW_H);
 		return false;
 	}
+	font_sm = n_fonts - 1;
 
 	cfb_framebuffer_clear(disp, true);
 	LOG_INF("OLED %dx%d, %d fonts, smallest %dx%d", disp_w, disp_h,
@@ -422,40 +443,54 @@ static void d_text(int f, int x, int y, const char *s)
 	cfb_draw_text(disp, s, MAX(0, x), y);
 }
 
+/*
+ * One 8 px row: l flush left, r flush right, in the small font. If the two
+ * would touch, l is cut short so r (the value that changes) stays whole.
+ */
+static void d_row(int y, const char *l, const char *r)
+{
+	int cols = disp_w / fonts[font_sm].w;
+	int rl = (r != NULL) ? (int)strlen(r) : 0;
+	char lbuf[32];
+
+	if (l != NULL && l[0]) {
+		int room = (rl > 0) ? cols - rl - 1 : cols;
+
+		snprintf(lbuf, sizeof(lbuf), "%.*s", MAX(0, room), l);
+		d_text(font_sm, 0, y, lbuf);
+	}
+	if (rl > 0) {
+		d_text(font_sm, disp_w - MIN(rl, cols) * fonts[font_sm].w, y, r);
+	}
+}
+
+/* The caption bar: a row drawn white-on-black, then inverted. */
+static void d_bar(const char *l, const char *r)
+{
+	d_row(0, l, r);
+	cfb_invert_area(disp, 0, 0, disp_w, ROW_H);
+}
+
 /* One whole screen. Any part may be NULL or empty. */
 static void draw_card(const char *top_l, const char *top_r, const char *mid,
 		      const char *bottom)
 {
-	int band = disp_h - 2 * EDGE_H;
+	int band = disp_h - 2 * ROW_H;
 	int f;
 
-	top_l = (top_l != NULL) ? top_l : "";
-	top_r = (top_r != NULL) ? top_r : "";
-
 	cfb_framebuffer_clear(disp, false);
-
-	/* Caption: both halves in one font, the tallest that fits them side by
-	 * side with at least CAP_GAP between, so they never overlap.
-	 */
-	for (f = 0; f < n_fonts - 1; f++) {
-		if (fonts[f].h <= EDGE_H &&
-		    text_w(f, top_l) + CAP_GAP + text_w(f, top_r) <= disp_w) {
-			break;
-		}
-	}
-	d_text(f, 0, 0, top_l);
-	d_text(f, disp_w - text_w(f, top_r), 0, top_r);
+	d_bar(top_l, top_r);
 
 	if (mid != NULL && mid[0]) {
-		f = font_fit(mid, band - 2 * MID_GAP);
+		f = font_fit(mid, band);
 		d_text(f, (disp_w - text_w(f, mid)) / 2,
-		       EDGE_H + (band - fonts[f].h) / 2, mid);
+		       ROW_H + (band - fonts[f].h) / 2, mid);
 	}
 
 	if (bottom != NULL && bottom[0]) {
-		f = font_fit(bottom, EDGE_H);
-		d_text(f, (disp_w - text_w(f, bottom)) / 2,
-		       disp_h - fonts[f].h, bottom);
+		f = font_sm;
+		d_text(f, (disp_w - text_w(f, bottom)) / 2, disp_h - ROW_H,
+		       bottom);
 	}
 
 	cfb_framebuffer_finalize(disp);
@@ -830,6 +865,8 @@ static void soak_data_step(void)
 		soak.rx_ok++;
 		soak.last_rssi = msg.rssi;
 		soak.last_snr = msg.snr;
+		soak.peer_rssi[s] = msg.rssi;
+		soak.peer_rx_ms[s] = k_uptime_get();
 	}
 
 	if (!soak.active) {
@@ -958,7 +995,7 @@ static void soak_begin(int pick)
 {
 	LOG_INF("soak start: %s, %s, %+d dBm", role_str(),
 		soak_durations[pick].label, tx_power_dbm);
-	soak_page = SP_TIME;
+	soak_page = SP_SUM;
 	soak_start(soak_durations[pick].ms, true);
 	if (screen != SCR_SOAK) {
 		LOG_ERR("soak did not start: %s", home_msg);
@@ -1020,7 +1057,7 @@ static int rtt_soak_start(uint32_t minutes, bool sd)
 	LOG_INF("soak start (rtt): %s, %u min, %+d dBm%s", role_str(),
 		minutes, tx_power_dbm, sd ? ", +SD" : "");
 	tx_edit = false;
-	soak_page = SP_TIME;
+	soak_page = SP_SUM;
 	soak_start((int64_t)minutes * 60 * 1000, sd);
 	if (!soak.active) {
 		LOG_ERR("soak did not start: %s", home_msg);
@@ -1047,7 +1084,7 @@ static const struct rtt_link_ops rtt_ops = {
 #endif /* CONFIG_SOAK_RTT */
 
 /* ---------------------------------------------------------------------------
- * Screens. Edge strings are kept to 12 characters so they fit the 16 px font.
+ * Screens. Caption and detail strings are kept to 16 characters (8x8 font).
  * ------------------------------------------------------------------------- */
 
 /* Log file name without its directory or extension: "P0_5M_000". */
@@ -1063,14 +1100,23 @@ static void file_stem(char *out, size_t n, const char *path)
 		 base);
 }
 
+/* Unit and TX power on the splash, so a preset unit can be checked at a
+ * glance before it goes in a bag.
+ */
 static void draw_splash(void)
 {
-	char sub[16];
+	char bottom[24];
 
-	snprintf(sub, sizeof(sub), "%uMHz %ums",
-		 (unsigned)(TDMA_RF_FREQ_HZ / 1000000UL),
-		 TDMA_SLOT_DURATION_US / 1000);
-	draw_card("rev 2 shield", NULL, "TDMA FIELD", sub);
+	snprintf(bottom, sizeof(bottom), "%+ddBm  %uMHz", tx_power_dbm,
+		 (unsigned)(TDMA_RF_FREQ_HZ / 1000000UL));
+	if (CONFIG_SOAK_UNIT_SLOT >= 0) {
+		char slot[16];
+
+		snprintf(slot, sizeof(slot), "slot %u", my_slot);
+		draw_card("BLUE FROG", slot, role_str(), bottom);
+	} else {
+		draw_card("BLUE FROG", "TDMA", "FIELD UNIT", bottom);
+	}
 }
 
 /* Power-on unit pick: one item per slot, MASTER being slot 0. */
@@ -1079,8 +1125,57 @@ static void draw_role_pick(void)
 	char pos[24], bottom[24];
 
 	snprintf(pos, sizeof(pos), "%d/%d", role_sel + 1, TDMA_SLOT_COUNT);
-	snprintf(bottom, sizeof(bottom), "slot %d  OK", role_sel);
+	snprintf(bottom, sizeof(bottom), "slot %d   OK=set", role_sel);
 	draw_card("UNIT", pos, unit_name((uint8_t)role_sel), bottom);
+}
+
+/* Card state in 6 characters, for the soak menu and summary: "SD ok",
+ * "NO SD", "SD ERR", or "SD .." while a scan runs.
+ */
+static const char *sd_flag(void)
+{
+	if (sd_busy) {
+		return "SD ..";
+	}
+	if (det_ok && det_raw >= 0 && !det_logical) {
+		return "NO SD";
+	}
+	if (sd_res == 0) {
+		return "SD ok";
+	}
+	return (sd_res == SD_RES_NONE) ? "SD ?" : "SD ERR";
+}
+
+/* Power-on SD check: what the soak about to start will log to. */
+static void draw_boot_sd(void)
+{
+	char mid[24], bottom[24], fr[12];
+	bool no_card = det_ok && det_raw >= 0 && !det_logical;
+
+	if (sd_busy) {
+		snprintf(mid, sizeof(mid), "CHECKING");
+		snprintf(bottom, sizeof(bottom), "%s",
+			 no_card ? "no card in slot" : "card in slot");
+	} else if (sd_res == 0) {
+		snprintf(mid, sizeof(mid), "OK");
+		if (sd_sum.vfs_err == 0) {
+			fmt_mib(fr, sizeof(fr), sd_sum.free_mib);
+			snprintf(bottom, sizeof(bottom), "%u logs  %s",
+				 sd_sum.bin_count, fr);
+		} else {
+			snprintf(bottom, sizeof(bottom), "%u logs",
+				 sd_sum.bin_count);
+		}
+	} else {
+		snprintf(mid, sizeof(mid), "%s", no_card ? "NO CARD" : "SD ERROR");
+		if (sd_res < 0) {
+			snprintf(bottom, sizeof(bottom), "%s %d  NO LOG",
+				 sd_stage_short(), sd_res);
+		} else {
+			snprintf(bottom, sizeof(bottom), "NO LOG");
+		}
+	}
+	draw_card("SD CARD", role_str(), mid, bottom);
 }
 
 static const char *const home_label[HR_COUNT] = {
@@ -1119,21 +1214,124 @@ static void draw_home(void)
 	draw_card(role_str(), NULL, home_label[home_sel], bottom);
 }
 
+/* The menu a field unit boots into: unit and power in the caption, the card
+ * state on the detail line.
+ */
 static void draw_soak_pick(void)
 {
-	char pos[24];
+	char top_l[24], top_r[12], bottom[24];
 
-	snprintf(pos, sizeof(pos), "%d/%d", pick_sel + 1, PICK_COUNT);
-	draw_card("SOAK", pos, soak_durations[pick_sel].label,
-		  pick_msg[0] ? pick_msg : "OK = start");
+	snprintf(top_l, sizeof(top_l), "SOAK %s", role_str());
+	snprintf(top_r, sizeof(top_r), "%+ddBm", tx_power_dbm);
+	if (pick_msg[0]) {
+		snprintf(bottom, sizeof(bottom), "%s", pick_msg);
+	} else {
+		snprintf(bottom, sizeof(bottom), "OK=start  %s", sd_flag());
+	}
+	draw_card(top_l, top_r, soak_durations[pick_sel].label, bottom);
 }
 
-/* Live stats: one value per page, UP/DOWN cycles. The caption's right side
- * is the run state and unit on every page.
+/* Run time so far, frozen once the run is done. */
+static int64_t soak_elapsed_ms(void)
+{
+	if (soak.done) {
+		return soak_last_draw_ms - soak.start_ms;
+	}
+	return soak.active ? k_uptime_get() - soak.start_ms : 0;
+}
+
+/* Each peer heard this run, by tag and last RSSI: "M -98  S2 -101", or
+ * "M --" once it has been quiet for PEER_STALE_MS. Falls back to bare slot
+ * digits ("M-98 2-101 3-87") when three peers will not fit.
+ */
+static void fmt_peers(char *out, size_t n, bool compact)
+{
+	static const char *const tag[2][TDMA_SLOT_COUNT] = {
+		{ "M ", "S1 ", "S2 ", "S3 " },
+		{ "M", "1", "2", "3" },
+	};
+	int64_t now = k_uptime_get();
+	size_t len = 0;
+
+	out[0] = '\0';
+	for (int s = 0; s < TDMA_SLOT_COUNT && len < n; s++) {
+		if (s == my_slot || !soak.have_ctr[s]) {
+			continue;
+		}
+		bool stale = soak.done ||
+			     now - soak.peer_rx_ms[s] > PEER_STALE_MS;
+
+		if (stale) {
+			len += snprintf(out + len, n - len, "%s%s--",
+					len ? (compact ? " " : "  ") : "",
+					tag[compact][s]);
+		} else {
+			len += snprintf(out + len, n - len, "%s%s%d",
+					len ? (compact ? " " : "  ") : "",
+					tag[compact][s], soak.peer_rssi[s]);
+		}
+	}
+}
+
+/*
+ * Summary page, the one to watch on a range walk:
+ *   RUN M       4:59     state, unit, run time
+ *   S1 -98  S2 -101      each peer's last RSSI ("--" = gone quiet)
+ *   RX 14832    0.4%     frames received, frames missed as a share
+ *   TX 7416    SD ok     frames sent, log state
+ */
+static void draw_soak_summary(const char *st)
+{
+	const struct tdma_telemetry *t = tdma_get_telemetry();
+	struct soak_log_status ls;
+	char l[24], r[24], peers[40];
+	uint32_t seen = soak.rx_ok + soak.missed;
+
+	cfb_framebuffer_clear(disp, false);
+
+	snprintf(l, sizeof(l), "%s %s", st, unit_tag());
+	fmt_clock(r, sizeof(r), soak_elapsed_ms());
+	d_bar(l, r);
+
+	fmt_peers(peers, sizeof(peers), false);
+	if (strlen(peers) > (size_t)(disp_w / fonts[font_sm].w)) {
+		fmt_peers(peers, sizeof(peers), true);
+	}
+	d_row(ROW_H, peers[0] ? peers : "no peers yet", NULL);
+
+	snprintf(l, sizeof(l), "RX %u", soak.rx_ok);
+	if (seen) {
+		uint32_t pm = (uint32_t)((uint64_t)soak.missed * 1000U / seen);
+
+		snprintf(r, sizeof(r), "%u.%u%%", pm / 10U, pm % 10U);
+	} else {
+		r[0] = '\0';
+	}
+	d_row(2 * ROW_H, l, r);
+
+	soak_log_get_status(&ls);
+	snprintf(l, sizeof(l), "TX %u", t->tx_done - soak.snap.tx_done);
+	if (ls.sd && ls.err) {
+		snprintf(r, sizeof(r), "LOG ERR");
+	} else if (ls.path[0]) {
+		snprintf(r, sizeof(r), "%s", ls.dropped ? "SD drop" : "SD ok");
+	} else if (ls.active) {
+		snprintf(r, sizeof(r), "SD ..");
+	} else {
+		snprintf(r, sizeof(r), "NO LOG");
+	}
+	d_row(3 * ROW_H, l, r);
+
+	cfb_framebuffer_finalize(disp);
+}
+
+/* Live stats: the summary, then one value per page; UP/DOWN cycles. The
+ * caption's right side is the run state and unit on every page.
  */
 static void draw_soak(void)
 {
 	static const char *const page_name[SP_COUNT] = {
+		[SP_SUM] = "SUM",
 		[SP_TIME] = "TIME",
 		[SP_RX] = "RX",
 		[SP_TX] = "TX",
@@ -1159,18 +1357,17 @@ static void draw_soak(void)
 				   : state_str[t->sync_state %
 					       ARRAY_SIZE(state_str)];
 
+	if (soak_page == SP_SUM) {
+		draw_soak_summary(st);
+		return;
+	}
+
 	snprintf(top_r, sizeof(top_r), "%s %s", st, unit_tag());
 	bottom[0] = '\0';
 
 	switch (soak_page) {
 	case SP_TIME: {
-		int64_t elapsed = soak.active || soak.done
-					  ? (soak.done ? soak_last_draw_ms
-						       : k_uptime_get()) -
-						    soak.start_ms
-					  : 0;
-
-		fmt_clock(mid, sizeof(mid), elapsed);
+		fmt_clock(mid, sizeof(mid), soak_elapsed_ms());
 		if (soak.duration_ms) {
 			fmt_clock(lim, sizeof(lim), soak.duration_ms);
 			snprintf(bottom, sizeof(bottom), "of %s", lim);
@@ -1186,7 +1383,7 @@ static void draw_soak(void)
 		snprintf(mid, sizeof(mid), "%u", soak.rx_ok);
 		snprintf(bottom, sizeof(bottom), "miss %u dup %u", soak.missed,
 			 soak.dup);
-		if (strlen(bottom) > 12) {
+		if (strlen(bottom) > 16) {
 			snprintf(bottom, sizeof(bottom), "m%u d%u", soak.missed,
 				 soak.dup);
 		}
@@ -1338,6 +1535,9 @@ static void draw_current(void)
 	case SCR_ROLE_PICK:
 		draw_role_pick();
 		break;
+	case SCR_BOOT_SD:
+		draw_boot_sd();
+		break;
 	case SCR_HOME:
 		draw_home();
 		break;
@@ -1377,6 +1577,50 @@ static int cycle(int i, int n, enum nav_action a)
 	return (a == NAV_UP) ? (i + n - 1) % n : (i + 1) % n;
 }
 
+/* The unit by TX slot; the role follows (slot 0 is the master). */
+static void unit_set(uint8_t slot)
+{
+	my_slot = slot;
+	role = (my_slot == 0) ? TDMA_ROLE_MASTER : TDMA_ROLE_SECONDARY;
+	LOG_INF("unit: %s (slot %u)%s", role_str(), my_slot,
+		(CONFIG_SOAK_UNIT_SLOT >= 0) ? ", preset" : "");
+}
+
+/* ---- Power-on SD check (SCR_BOOT_SD), stepped from the UI loop ---- */
+static int64_t boot_sd_t0;
+static int64_t boot_sd_hold_until;	/* 0 while the scan runs */
+
+static void soak_menu_enter(void)
+{
+	pick_sel = 0;
+	pick_msg[0] = '\0';
+	screen = SCR_SOAK_PICK;
+}
+
+static void boot_sd_enter(void)
+{
+	screen = SCR_BOOT_SD;
+	boot_sd_t0 = k_uptime_get();
+	boot_sd_hold_until = 0;
+	sd_request_scan();
+}
+
+static void boot_sd_step(void)
+{
+	int64_t now = k_uptime_get();
+
+	if (boot_sd_hold_until == 0) {
+		if (sd_busy && now - boot_sd_t0 < SD_SCAN_TIMEOUT_MS) {
+			return;
+		}
+		boot_sd_hold_until = now + ((sd_res == 0) ? SD_OK_HOLD_MS
+							   : SD_ERR_HOLD_MS);
+		mark_dirty();
+	} else if (now >= boot_sd_hold_until) {
+		soak_menu_enter();
+	}
+}
+
 static void handle_nav(enum nav_action a)
 {
 	bool updown = (a == NAV_UP || a == NAV_DOWN);
@@ -1389,12 +1633,14 @@ static void handle_nav(enum nav_action a)
 		if (updown) {
 			role_sel = cycle(role_sel, TDMA_SLOT_COUNT, a);
 		} else if (a == NAV_OK) {
-			my_slot = (uint8_t)role_sel;
-			role = (my_slot == 0) ? TDMA_ROLE_MASTER
-					      : TDMA_ROLE_SECONDARY;
-			LOG_INF("unit: %s (slot %u)", role_str(), my_slot);
-			screen = SCR_HOME;
+			unit_set((uint8_t)role_sel);
+			boot_sd_enter();
 		}
+		break;
+
+	case SCR_BOOT_SD:
+		/* Any button skips the wait. */
+		soak_menu_enter();
 		break;
 
 	case SCR_HOME:
@@ -1483,11 +1729,16 @@ int main(void)
 {
 	LOG_INF("TDMA field unit: rev 2 shield (SSD1306 + microSD + SX1262)");
 
-	/* Boots at +22 dBm, the engine's default and the TFT unit's (it was
-	 * +0 until 2026-10-09). Latched now, applied before the first transmit
-	 * of the first soak.
+	/* Boots at CONFIG_SOAK_BOOT_TX_POWER_DBM, +22 dBm by default, the
+	 * engine's default and the TFT unit's (it was +0 until 2026-10-09).
+	 * Latched now, applied before the first transmit of the first soak.
 	 */
 	(void)tdma_set_tx_power(FIELD_TX_POWER_DBM);
+
+#if CONFIG_SOAK_UNIT_SLOT >= 0
+	/* Preset for field runs: no power-on pick. */
+	unit_set(CONFIG_SOAK_UNIT_SLOT);
+#endif
 
 	det_init();
 	det_poll();	/* log the boot level (bench test step 3) */
@@ -1503,11 +1754,16 @@ int main(void)
 	draw_splash();
 	k_msleep(SPLASH_MS);
 
-	/* Power-on unit pick. It starts on the fail-safe default (SEC 1), so
-	 * OK without moving never makes a second master.
-	 */
-	role_sel = my_slot;
-	screen = SCR_ROLE_PICK;
+	if (CONFIG_SOAK_UNIT_SLOT >= 0) {
+		boot_sd_enter();
+	} else {
+		/* Power-on unit pick. It starts on the fail-safe default
+		 * (SEC 1), so OK without moving never makes a second master.
+		 */
+		role_sel = my_slot;
+		screen = SCR_ROLE_PICK;
+	}
+	(void)atomic_set(&nav_event, NAV_NONE); /* presses during the splash */
 	draw_current();
 
 	enum screen_id last = screen;
@@ -1533,6 +1789,9 @@ int main(void)
 #endif
 		sd_poll();
 		det_poll();
+		if (screen == SCR_BOOT_SD) {
+			boot_sd_step();
+		}
 
 		bool changed = (screen != last);
 

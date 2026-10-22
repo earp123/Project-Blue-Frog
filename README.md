@@ -36,7 +36,7 @@ DK.
 | Unit | Hardware | Firmware | Overlay + conf |
 |---|---|---|---|
 | **TFT unit** | Radio shield (rev 1) on Port 1, plus the Hiletgo ILI9341 TFT breakout (touch + microSD) jumper-wired to Port 0 | `CONFIG_APP_TDMA_CONSOLE`, [`src/tdma_console/`](src/tdma_console) | `boards/nrf5340dk_nrf5340_cpuapp_tft.{overlay,conf}` |
-| **Shield unit** | Rev 2 shield: SX1262 + SSD1306 128×64 OLED + microSD in one stack | `CONFIG_APP_TDMA_FIELD`, [`src/tdma_field/`](src/tdma_field) | `boards/nrf5340dk_nrf5340_cpuapp_shield.{overlay,conf}` |
+| **Shield unit** | Rev 2 shield: SX1262 + SSD1306 128×32 OLED + microSD in one stack | `CONFIG_APP_TDMA_FIELD`, [`src/tdma_field/`](src/tdma_field) | `boards/nrf5340dk_nrf5340_cpuapp_shield.{overlay,conf}` |
 
 - **TFT unit:** touch + DK-button UI on the TFT. Display-only: no UART.
 - **Shield unit:** button-only cycle-menu UI on the OLED. UART logging is on
@@ -64,6 +64,19 @@ west build -b nrf5340dk/nrf5340/cpuapp -p always -d build-shield -- \
 
 The board-named radio overlay (`nrf5340dk_nrf5340_cpuapp.overlay`) is applied
 automatically in both builds.
+
+**Field runs: one preset image per unit.** Add `-DCONFIG_SOAK_UNIT_SLOT=<0..3>`
+after the two files (0 = MASTER, 1–3 = SEC n; one per unit in the kit) and the
+unit boots through a splash (unit + TX power) and an SD card check straight
+into the soak menu, with no unit pick. On the TFT unit also add
+`-DCONFIG_SOAK_TOUCH_CAL=n` to skip the touch calibration and run on the DK
+buttons only. `-DCONFIG_SOAK_BOOT_TX_POWER_DBM=<dBm>` changes the boot power
+(default +22). For example:
+
+```sh
+west build -b nrf5340dk/nrf5340/cpuapp -p always -d build-shield-m --   -DEXTRA_DTC_OVERLAY_FILE=boards/nrf5340dk_nrf5340_cpuapp_shield.overlay   -DEXTRA_CONF_FILE=boards/nrf5340dk_nrf5340_cpuapp_shield.conf   -DCONFIG_SOAK_UNIT_SLOT=0
+west build -b nrf5340dk/nrf5340/cpuapp -p always -d build-tft-s2 --   -DEXTRA_DTC_OVERLAY_FILE=boards/nrf5340dk_nrf5340_cpuapp_tft.overlay   -DEXTRA_CONF_FILE=boards/nrf5340dk_nrf5340_cpuapp_tft.conf   -DCONFIG_SOAK_UNIT_SLOT=2 -DCONFIG_SOAK_TOUCH_CAL=n
+```
 
 For a **tone soak**, which carries a per-slot audio tone instead of the test
 ramp, add `-DCONFIG_SOAK_PAYLOAD_TONE=y` after the two files. Build every unit
@@ -104,14 +117,21 @@ west flash -d build-shield --dev-id <serial>
 
 Both types behave the same way:
 
-- **Power-on unit pick (mandatory).** Choose **MASTER** (slot 0) or **SEC 1**,
-  **SEC 2** or **SEC 3**. This sets the role and the TX slot together. The
-  master beacons the frame timing, and each secondary locks to it. Every
-  unit in a kit needs its own slot. The choice holds until reboot. The TFT
-  unit runs a touch calibration first.
+- **Power-on unit pick (mandatory unless preset).** Choose **MASTER**
+  (slot 0) or **SEC 1**, **SEC 2** or **SEC 3**. This sets the role and the
+  TX slot together. The master beacons the frame timing, and each secondary
+  locks to it. Every unit in a kit needs its own slot. The choice holds until
+  reboot. The TFT unit runs a touch calibration first. A unit built with
+  `CONFIG_SOAK_UNIT_SLOT` skips both and boots through its splash and an SD
+  check into the soak menu.
+- **SD check at boot:** `CARD OK` with the log count and free space, or the
+  failing step (`mnt -19` is a card with no FAT32/exFAT volume; the firmware
+  never formats one). A soak still runs without a card, unlogged.
 - **SOAK:** pick 5 min, 30 min, 2 h or continuous. Live pages show elapsed
   time, TX/stale, RX with missed/duplicate frames, phase error and ppm,
-  RSSI/SNR, the log file, and the staging-latency gauge.
+  RSSI/SNR, the log file, and the staging-latency gauge. The shield unit
+  opens on a summary page: each peer's last RSSI (`--` once quiet for 2 s),
+  RX count and loss, TX count and log state.
 - **TX power:** −9…+22 dBm, applied from the next packet. Both unit types
   boot at +22 dBm.
 - **SD logging:** every soak writes `<PWR>_<DUR>_NNN.BIN` (e.g.
@@ -208,7 +228,7 @@ All pins were traced in its netlist and confirmed on the bench.
 | Device | Bus | Pins (DK Arduino header) |
 |---|---|---|
 | microSD | spi4 | SCK **P1.14** (D12), MOSI P1.13 (D11), MISO **P1.15** (D13), CS P1.11 (D9), card-detect P1.12 (D10, active low) |
-| SSD1306 128×64 | i2c1 @ 400 kHz | SDA P0.25 (A4), SCL P0.26 (A5), RST P0.07 (A3), address 0x3C |
+| SSD1306 128×32 | i2c1 @ 400 kHz | SDA P0.25 (A4), SCL P0.26 (A5), RST P0.07 (A3), address 0x3C |
 
 - **SD SCK/MISO are the reverse of the DK's own `arduino_spi`.** That is how
   the board is routed.

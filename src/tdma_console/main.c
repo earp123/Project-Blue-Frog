@@ -15,12 +15,16 @@
  * TX power, which is adjustable from HOME (applied by the engine before the
  * next transmit).
  *
- * Power-on sequence, both steps mandatory and session-only: TOUCH CAL (the
- * transform is RAM-only in touch_cal, so every boot re-runs it) then SELECT
- * UNIT. Calibration comes first so the unit can be chosen by touch. HOME is
- * unreachable until both are done, so no soak can run uncalibrated or on an
- * unset unit. Neither is reachable from HOME afterwards — reboot to redo
- * either; the selected unit is shown in the HOME header.
+ * Power-on sequence: a splash (unit and TX power), TOUCH CAL (the transform
+ * is RAM-only in touch_cal, so every boot re-runs it), SELECT UNIT, an SD
+ * card check, then the soak menu. Calibration comes first so the unit can be
+ * chosen by touch. HOME is unreachable until both are done, so no soak can
+ * run uncalibrated or on an unset unit. Neither is reachable from HOME
+ * afterwards — reboot to redo either; the selected unit is shown in the HOME
+ * header. For field runs, CONFIG_SOAK_TOUCH_CAL=n drops calibration (the
+ * console then runs on the DK buttons only and ignores touch) and
+ * CONFIG_SOAK_UNIT_SLOT presets the unit, so the console boots straight
+ * through to the soak menu.
  *
  * Screens: HOME -> {SOAK PICK -> SOAK, TX PWR keypad, FILES}. The soak
  * screen shows per-soak deltas of the engine telemetry plus frame-counter
@@ -115,8 +119,17 @@ enum screen_id {
 	SCR_FILES,	/* SD file browser: list + new-drawer */
 	SCR_FILE_ACT,	/* per-file actions: delete / move / label */
 	SCR_FILE_MOVE,	/* move destination pick */
+	SCR_BOOT_SD,	/* power-on SD check, then the soak menu */
 };
 static enum screen_id screen = SCR_HOME;
+
+/* Power-on SD check: scan timeout, then how long the result stays up (any
+ * button skips). A failure stays longer so it is not missed.
+ */
+#define SPLASH_MS		1500
+#define SD_SCAN_TIMEOUT_MS	10000
+#define SD_OK_HOLD_MS		1500
+#define SD_ERR_HOLD_MS		5000
 
 /*
  * Touch calibration is a mandatory power-on step: the transform lives in RAM
@@ -125,7 +138,7 @@ static enum screen_id screen = SCR_HOME;
  * before anything else and this flag blocks cancelling out of it; it clears
  * once a fit is accepted. Session-only by design — no flash persistence.
  */
-static bool cal_required = true;
+static bool cal_required = IS_ENABLED(CONFIG_SOAK_TOUCH_CAL);
 
 /*
  * Unit selection (role + TX slot) is the second half of the power-on
@@ -133,9 +146,13 @@ static bool cal_required = true;
  * choice can be made by touch. Like the calibration pass there is no way out
  * but choosing — HOME is unreachable until this clears, so no soak can start
  * on an unset unit. role_sel indexes the slot: 0 = MASTER, 1-3 = SEC n.
+ * A unit preset with CONFIG_SOAK_UNIT_SLOT skips it.
  */
-static bool role_required = true;
+static bool role_required = (CONFIG_SOAK_UNIT_SLOT < 0);
 static int role_sel;
+
+/* Set until the power-on sequence reaches the soak menu. */
+static bool boot_pending = true;
 
 /* ---- Log destination + file browser state ----
  * dir index 0 is the card root; 1..SD_DRAWERS are the fixed drawer names. The
@@ -181,7 +198,7 @@ static enum tdma_role role = TDMA_ROLE_SECONDARY; /* fail-safe default: two
 						   * instead of colliding. */
 static uint8_t my_slot = 1;	/* SEC 1 until picked */
 static bool engine_inited;	/* unit locks once true */
-static int tx_power_dbm = TDMA_TX_POWER_DBM;
+static int tx_power_dbm = CONFIG_SOAK_BOOT_TX_POWER_DBM;
 
 /* ---- Soak test state ----
  * Split ownership: the soak data thread (below) owns every field while a
@@ -594,11 +611,13 @@ static const char *dir_label(int idx)
 	return (idx == 0) ? "/" : drawer_name[idx];
 }
 
+static const char *bsd_flag(void);
+
 static void draw_soak_pick(void)
 {
 	char hdr[28];
 
-	snprintf(hdr, sizeof(hdr), "SOAK: %s", role_str());
+	snprintf(hdr, sizeof(hdr), "SOAK: %s  %s", role_str(), bsd_flag());
 	draw_header(hdr);
 
 	for (int i = 0; i < (int)PICK_COUNT; i++) {
@@ -1393,22 +1412,177 @@ static void role_pick_start(void)
 	screen = SCR_ROLE_PICK;
 }
 
-static void role_activate(int i)
+/* ---------------------------------------------------------------------------
+ * SD CHECK (power-on, last step before the soak menu). A summary scan on the
+ * soak_log writer thread, polled like the browser's ops; its own busy flag,
+ * since the browser cannot be open yet.
+ * ------------------------------------------------------------------------- */
+#define BOOT_SD_NONE	1	/* never scanned */
+
+static struct sd_summary bsd_sum;	/* written by the writer mid-op */
+static int bsd_res = BOOT_SD_NONE;	/* 0 ok, < 0 errno */
+static bool bsd_busy;
+static int64_t bsd_t0;
+static int64_t bsd_hold_until;		/* 0 while the scan runs */
+
+static void soak_menu_enter(void)
 {
-	my_slot = (uint8_t)i;
-	role = (my_slot == 0) ? TDMA_ROLE_MASTER : TDMA_ROLE_SECONDARY;
-	role_required = false;
-	screen = SCR_HOME;
+	boot_pending = false;
+	pick_sel = 1;			/* the first duration, not the LOG row */
+	screen = SCR_SOAK_PICK;
 }
 
-/* Calibration accepted: hand off to role selection on the power-on pass,
- * otherwise straight back to HOME (a re-calibration started from HOME).
+static void boot_sd_enter(void)
+{
+	screen = SCR_BOOT_SD;
+	bsd_t0 = k_uptime_get();
+	bsd_hold_until = 0;
+	bsd_busy = (sd_fsop_submit_summary(SD_MOUNT_POINT, &bsd_sum) == 0);
+}
+
+static void boot_sd_step(void)
+{
+	int64_t now = k_uptime_get();
+	int res, cnt;
+
+	if (bsd_busy && sd_fsop_poll(&res, &cnt)) {
+		bsd_busy = false;
+		bsd_res = res;
+	}
+	if (bsd_hold_until == 0) {
+		if (bsd_busy && now - bsd_t0 < SD_SCAN_TIMEOUT_MS) {
+			return;
+		}
+		bsd_hold_until = now + ((bsd_res == 0) ? SD_OK_HOLD_MS
+						       : SD_ERR_HOLD_MS);
+		mark_dirty();
+	} else if (now >= bsd_hold_until) {
+		soak_menu_enter();
+	}
+}
+
+/* "118.4 GB" / "950 MB". */
+static void fmt_mib(char *out, size_t n, uint32_t mib)
+{
+	if (mib >= 1024U) {
+		snprintf(out, n, "%u.%u GB", mib / 1024U,
+			 (mib % 1024U) * 10U / 1024U);
+	} else {
+		snprintf(out, n, "%u MB", mib);
+	}
+}
+
+/* Card state for the soak menu's header: "SD ok", "SD ERR", "SD ?". */
+static const char *bsd_flag(void)
+{
+	if (bsd_busy) {
+		return "SD ..";
+	}
+	return (bsd_res == 0) ? "SD ok"
+	       : (bsd_res == BOOT_SD_NONE) ? "SD ?" : "SD ERR";
+}
+
+static void draw_boot_sd(void)
+{
+	int y = body_top();
+	int sp = ui_body_h() + 2;
+	char l[32], fr[16];
+
+	snprintf(l, sizeof(l), "SD CARD: %s", role_str());
+	draw_header(l);
+	ui_fill_rect(BORDER_PX, y, ui_disp_w() - 2 * BORDER_PX,
+		     body_bot() - y, COLOR_BLACK);
+
+	if (bsd_busy) {
+		ui_text_big(MARG, y, "CHECKING", COLOR_WHITE, COLOR_BLACK);
+	} else if (bsd_res == 0) {
+		ui_text_big(MARG, y, "CARD OK", COLOR_WHITE, COLOR_BLACK);
+		y += ui_title_h() + 6;
+		snprintf(l, sizeof(l), "%u logs in root", bsd_sum.bin_count);
+		ui_text(MARG, y, l, COLOR_WHITE, COLOR_BLACK);
+		if (bsd_sum.vfs_err == 0) {
+			y += sp;
+			fmt_mib(fr, sizeof(fr), bsd_sum.free_mib);
+			snprintf(l, sizeof(l), "%s free", fr);
+			ui_text(MARG, y, l, COLOR_WHITE, COLOR_BLACK);
+		}
+	} else {
+		const char *stage = sd_log_mount_stage();
+
+		ui_text_big(MARG, y, "NO CARD?", COLOR_WHITE, COLOR_BLACK);
+		y += ui_title_h() + 6;
+		snprintf(l, sizeof(l), "%s %d", stage[0] ? stage : "scan",
+			 bsd_res);
+		ui_text(MARG, y, l, COLOR_WHITE, COLOR_BLACK);
+		y += sp;
+		ui_text(MARG, y, "Soaks will NOT log", COLOR_WHITE, COLOR_BLACK);
+	}
+
+	draw_footer_text("any button: continue");
+}
+
+/* Power-on splash: unit and TX power, so a preset unit can be checked at a
+ * glance before it goes out.
+ */
+static void draw_splash(void)
+{
+	int y = body_top() + 20;
+	int sp = ui_body_h() + 6;
+	char l[32];
+
+	draw_header("PROJECT BLUE FROG");
+	ui_text_big(MARG, y, "TDMA FIELD", COLOR_WHITE, COLOR_BLACK);
+	y += ui_title_h() + 16;
+	if (role_required) {
+		snprintf(l, sizeof(l), "Unit: pick next");
+	} else {
+		snprintf(l, sizeof(l), "Unit: %s (slot %u)", role_str(),
+			 my_slot);
+	}
+	ui_text(MARG, y, l, COLOR_WHITE, COLOR_BLACK);
+	y += sp;
+	snprintf(l, sizeof(l), "TX power: %+d dBm", tx_power_dbm);
+	ui_text(MARG, y, l, COLOR_WHITE, COLOR_BLACK);
+	y += sp;
+	ui_text(MARG, y, IS_ENABLED(CONFIG_SOAK_TOUCH_CAL) ? "Touch + buttons"
+							   : "DK buttons only",
+		COLOR_WHITE, COLOR_BLACK);
+	draw_footer_summary();
+}
+
+/* Next step of the power-on sequence: calibration, unit, SD check. */
+static void boot_continue(void)
+{
+	if (cal_required) {
+		cal_start();
+	} else if (role_required) {
+		role_pick_start();
+	} else {
+		boot_sd_enter();
+	}
+}
+
+static void unit_set(uint8_t slot)
+{
+	my_slot = slot;
+	role = (my_slot == 0) ? TDMA_ROLE_MASTER : TDMA_ROLE_SECONDARY;
+}
+
+static void role_activate(int i)
+{
+	unit_set((uint8_t)i);
+	role_required = false;
+	boot_continue();
+}
+
+/* Calibration accepted: continue the power-on pass, otherwise straight back
+ * to HOME (a re-calibration started from HOME).
  */
 static void cal_accept(void)
 {
 	cal_required = false;
-	if (role_required) {
-		role_pick_start();
+	if (boot_pending) {
+		boot_continue();
 	} else {
 		screen = SCR_HOME;
 	}
@@ -2009,6 +2183,11 @@ static void handle_nav(enum nav_action a)
 		}
 		break;
 
+	case SCR_BOOT_SD:
+		/* Any button skips the wait. */
+		soak_menu_enter();
+		break;
+
 	case SCR_CALIBRATE:
 		/* While cal_required (the power-on pass), every exit path that
 		 * would leave the transform at identity is refused: the only
@@ -2224,6 +2403,9 @@ static void draw_current(void)
 	case SCR_FILE_MOVE:
 		draw_file_move();
 		break;
+	case SCR_BOOT_SD:
+		draw_boot_sd();
+		break;
 	default:
 		break;
 	}
@@ -2238,6 +2420,14 @@ int main(void)
 
 	touch_cal_init();
 
+	/* Latched now, applied by the engine before the first transmit. */
+	(void)tdma_set_tx_power((int8_t)tx_power_dbm);
+
+#if CONFIG_SOAK_UNIT_SLOT >= 0
+	/* Preset for field runs: no power-on pick. */
+	unit_set(CONFIG_SOAK_UNIT_SLOT);
+#endif
+
 	/* tdma_init() is deferred to the first soak start so the role stays
 	 * selectable on HOME until then.
 	 */
@@ -2249,12 +2439,20 @@ int main(void)
 		k_sleep(K_FOREVER);
 	}
 
-	/* Mandatory power-on calibration: the transform is RAM-only, so the
-	 * console opens on the CAL screen and cal_required keeps it there until
-	 * a fit is accepted. Collection uses the RAW samples, so it works
-	 * correctly from the identity mapping.
+	ui_clear(COLOR_BLACK);
+	draw_border();
+	draw_splash();
+	k_msleep(SPLASH_MS);
+
+	/* Mandatory power-on calibration (unless built out): the transform is
+	 * RAM-only, so the console opens on the CAL screen and cal_required
+	 * keeps it there until a fit is accepted. Collection uses the RAW
+	 * samples, so it works correctly from the identity mapping. Then the
+	 * unit pick (unless preset) and the SD check.
 	 */
-	cal_start();
+	boot_continue();
+	(void)atomic_set(&nav_event, NAV_NONE); /* presses during the splash */
+	(void)atomic_set(&tap_ready, 0);
 
 	ui_clear(COLOR_BLACK);
 	draw_border();
@@ -2265,7 +2463,11 @@ int main(void)
 	while (1) {
 		enum nav_action a = atomic_set(&nav_event, NAV_NONE);
 		int rawx = 0, rawy = 0, sx = 0, sy = 0;
-		bool tap = atomic_cas(&tap_ready, 1, 0);
+		/* Without calibration, taps would land in the wrong place:
+		 * buttons only.
+		 */
+		bool tap = atomic_cas(&tap_ready, 1, 0) &&
+			   IS_ENABLED(CONFIG_SOAK_TOUCH_CAL);
 
 		if (tap) {
 			rawx = tap_raw_x;
@@ -2301,6 +2503,9 @@ int main(void)
 
 		/* Browser card-op completions (writer thread finishes them). */
 		br_poll();
+		if (screen == SCR_BOOT_SD) {
+			boot_sd_step();
+		}
 
 		bool dirty = atomic_cas(&screen_dirty, 1, 0);
 		bool changed = (screen != last);

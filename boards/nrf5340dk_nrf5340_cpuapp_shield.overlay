@@ -9,7 +9,7 @@
  *
  *   microSD         spi4  SCK P1.14 (D12), MOSI P1.13 (D11), MISO P1.15 (D13),
  *                         CS P1.11 (D9), card-detect P1.12 (D10)
- *   SSD1306 128x64  i2c1  SDA P0.25 (A4), SCL P0.26 (A5), RST P0.07 (A3), 0x3C
+ *   SSD1306 128x32  i2c1  SDA P0.25 (A4), SCL P0.26 (A5), RST P0.07 (A3), 0x3C
  *
  * Pins as the shield's fabrication data routes them (ODB++ netlist in
  * Hardware/OLED-SD-SX1262-Shield_2026-08-16.zip): the socket's SCLK is on D12
@@ -135,28 +135,31 @@
 	clock-frequency = <I2C_BITRATE_FAST>;
 	/*
 	 * The SSD1306 driver sends each frame as two messages: a 1-byte
-	 * control prefix, then all 1024 pixel bytes. TWIM cannot chain
-	 * them, so the driver merges them in this RAM buffer, which
-	 * defaults to 16 bytes. With the default, every frame write
+	 * control prefix, then all the pixel bytes (512 at 128x32). TWIM
+	 * cannot chain them, so the driver merges them in this RAM buffer,
+	 * which defaults to 16 bytes. With the default, every frame write
 	 * failed on the bench (2026-09-24): init commands ACKed, the
-	 * screen stayed blank.
+	 * screen stayed blank. Sized for a 128x64 panel, so either fits.
 	 */
 	zephyr,concat-buf-size = <1025>;
 
-	/* From Zephyr's boards/shields/ssd1306/ssd1306_128x64.overlay, plus the
-	 * shield's reset line.
+	/* The panel is Adafruit's 128x32 SSD1306 (confirmed 2026-10-22; it was
+	 * configured as 128x64 until then). From Zephyr's
+	 * boards/shields/ssd1306/ssd1306_128x32.overlay, plus the shield's
+	 * reset line.
 	 */
 	ssd1306: ssd1306@3c {
 		compatible = "solomon,ssd1306fb";
 		reg = <0x3c>;
 		width = <128>;
-		height = <64>;
+		height = <32>;
 		segment-offset = <0>;
 		page-offset = <0>;
 		display-offset = <0>;
-		multiplex-ratio = <63>;
+		multiplex-ratio = <31>;
 		segment-remap;
 		com-invdir;
+		com-sequential;
 		prechargep = <0x22>;
 		reset-gpios = <&gpio0 7 GPIO_ACTIVE_LOW>;
 	};
