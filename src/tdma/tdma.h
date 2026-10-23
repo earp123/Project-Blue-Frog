@@ -284,4 +284,25 @@ extern struct k_msgq tdma_rx_msgq;
 int tdma_manual_tx(const uint8_t payload[TDMA_PAYLOAD_LEN]);
 int tdma_manual_rx(uint32_t timeout_ms, struct tdma_rx_msg *msg);
 
+/*
+ * Noise floor (engine must be stopped, -EBUSY otherwise; -EPERM before
+ * tdma_init()): park the receiver in continuous RX on the TDMA channel and
+ * sample GetRssiInst every millisecond. Levels are in tenths of a dBm at the
+ * chip's 0.5 dB step. Anything on air counts, so peers must be quiet; the
+ * p90 and max show bursty interference, p50 the floor.
+ */
+#define TDMA_NOISE_SAMPLES_MAX	10000
+
+struct tdma_noise {
+	uint32_t samples;
+	int16_t min_dbm10;		/* quietest sample */
+	int16_t p50_dbm10;
+	int16_t p90_dbm10;
+	int16_t max_dbm10;		/* loudest sample */
+	int16_t mean_dbm10;		/* mean of the dBm readings */
+	uint8_t rx_gain;		/* reg 0x08AC: 0x94 saving, 0x96 boosted */
+};
+
+int tdma_noise_floor(uint32_t samples, struct tdma_noise *out);
+
 #endif /* APP_TDMA_H_ */

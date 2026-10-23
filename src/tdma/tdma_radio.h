@@ -54,4 +54,7 @@ int tdma_radio_manual_tx(uint8_t slot_id, uint16_t frame_ctr,
 			 const uint8_t payload[TDMA_PAYLOAD_LEN]);
 int tdma_radio_manual_rx(uint32_t timeout_ms, struct tdma_radio_event *ev);
 
+/* Noise floor one-shot (engine stopped); see tdma_noise_floor(). */
+int tdma_radio_noise(uint32_t samples, struct tdma_noise *out);
+
 #endif /* APP_TDMA_RADIO_H_ */

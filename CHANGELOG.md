@@ -12,7 +12,7 @@ For hardware wiring, build/flash instructions, and SDK setup, see
 
 On-device radio-evaluation tooling for the nRF5340 DK + Wio-SX1262 (SX1262),
 plus the first slice of the wireless-intercom firmware (TDMA radio layer).
-_Last updated: 2026-10-22._
+_Last updated: 2026-10-23._
 
 ### Where things stand (2026-09-29)
 
@@ -86,6 +86,39 @@ Exactly one `main()` is linked, chosen by the Kconfig choice in
 Four other variants were retired on 2026-09-25: LoRa send, the telemetry
 console, the TDMA UART-shell test and the UART soak harness (see "Streamlined
 to two unit types"). Their sections below are kept as history.
+
+### Soccer pitch range test; boosted RX gain; `noise` command (2026-10-23)
+
+Logs in [`soaks/RangeTest_1022/`](soaks/RangeTest_1022): three units at
++22 dBm. One unit (S2, the TFT unit) stayed at a corner while the other two
+walked an urban soccer pitch in opposite directions, meeting at the far
+corner, ~120 m away. Walk 1 (`_000`) is two laps; walk 2 (`_001`) is one lap
+of a slightly larger pitch. `_002` is a short line-of-sight run, set aside.
+
+- **Range:** at ~120 m, with bodies in the way, the stationary links ran at
+  −102 to −104 dBm with SNR ≤ 0 and lost 60–94 % of packets per 20 s.
+  Loss starts near −95 dBm. Per-link loss over a whole walk was 7–29 %.
+  Why the signal is that weak is open: environment, body, antenna height,
+  antenna and TX output are not yet separated.
+- **Boosted RX gain was off.** The radio node never set `rx-boosted`, so
+  `lora_config()` left reg 0x08AC at power-saving gain. It is now set in
+  the base overlay (~+3 dB sensitivity, ~2 mA). Read back as 0x96 on all
+  three units; not yet measured over the air.
+- **`noise [samples]`** (RTT, `rtt_link.py noise`): the receiver's noise
+  floor. Continuous RX on the TDMA channel, GetRssiInst every 1 ms; replies
+  with min/p50/p90/max/mean dBm and the RX gain register. Needs the engine
+  stopped and initialized; the host tool does a momentary soak start/stop
+  on a unit that has not run one. Bench, boosted gain, all on USB, the
+  others quiet: master p50 −109 dBm, S1 −106 dBm, S2 −101 dBm (spikier).
+  Repeatable to 1 dB.
+- **No single unit stands out in the field.** Every link is symmetric to
+  within 1.5 dB over clean 5 s windows, so no unit transmits or receives
+  much weaker than the others. A deficit common to all three would not show
+  up this way. All three receivers reach SNR 0 at a packet RSSI of −102 to
+  −103 dBm, so the field noise each one saw was about the same, ~−105 dBm.
+  That is only a few dB above the master's own bench floor. S2's higher
+  bench floor did not show up in the field, so it is probably its bench
+  supply or setup; to check on battery.
 
 ### Field-run presets, 128x32 OLED UI, boot SD check (2026-10-22)
 

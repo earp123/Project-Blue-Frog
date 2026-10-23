@@ -39,6 +39,10 @@
  *   dsp hpf|ns|agc on|off   or one stage of it, from the next frame;
  *   dsp level <n>           AGC target and noise attenuation from the
  *   dsp nsdb <dB>           next soak (mic_dsp.h)
+ *   noise [samples]         no soak running, engine initialized by one soak
+ *                           start: receiver noise floor, 1 ms GetRssiInst
+ *                           samples (default 1000), dBm min/p50/p90/max/
+ *                           mean plus the RX gain register (tdma.h)
  *   soak <minutes> [sd]     start a soak (0 = continuous); sd adds the card
  *   stop                    stop the running soak
  *

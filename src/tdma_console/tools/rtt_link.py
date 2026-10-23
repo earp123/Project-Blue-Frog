@@ -25,6 +25,7 @@ Usage:
     rtt_link.py --sn N phase 20000            # pcm: chunk ready 20 ms before TX
     rtt_link.py --sn N decx 1                 # pcm: one extra decode stream
     rtt_link.py --sn N bench 100              # isolated encode/decode timing
+    rtt_link.py --sn N noise [2000]           # receiver noise floor, peers quiet
     rtt_link.py --sn N sdls [/DRAWER0]        # list the unit's SD card
     rtt_link.py --sn N sdget /X_001.BIN -o x.bin   # copy a file off it
     rtt_link.py --sn N clip clip_F.c2         # "clip <n> <crc>" + the bytes
@@ -334,6 +335,24 @@ def cmd_sdget(link, args):
     return 0
 
 
+def cmd_noise(link, args):
+    """Noise floor; a unit that has never run a soak is initialized first by
+    a momentary soak start/stop (one or two packets on air)."""
+    timeout = 5 + args.samples / 1000.0
+    r = link.command("noise %d" % args.samples, timeout=timeout)
+    if r.startswith("err noise init"):
+        print("[%s] engine not initialized: soak start/stop first" % link.sn,
+              file=sys.stderr)
+        for line in ("soak 0", "stop"):
+            rr = link.command(line)
+            if not rr.startswith("ok"):
+                print(rr)
+                return 1
+        r = link.command("noise %d" % args.samples, timeout=timeout)
+    print(r)
+    return 0 if r.startswith("ok") else 1
+
+
 def cmd_clip(link, args):
     with open(args.file, "rb") as f:
         data = f.read()
@@ -377,6 +396,8 @@ def run_one(args):
                              timeout=10 + 0.05 * args.chunks)
             print(r)
             return 0 if r.startswith("ok") else 1
+        elif args.cmd == "noise":
+            return cmd_noise(link, args)
         elif args.cmd == "clip":
             return cmd_clip(link, args)
         elif args.cmd == "sdls":
@@ -459,6 +480,11 @@ def main(argv=None):
     p.add_argument("chunks", type=int, nargs="?", default=100,
                    help="no soak running: time encode + decode + mix of this "
                         "many chunks of the loaded PCM (default 100)")
+    p = sub.add_parser("noise")
+    p.add_argument("samples", type=int, nargs="?", default=1000,
+                   help="no soak running, other units off or stopped: "
+                        "1 ms receiver RSSI samples (default 1000, max "
+                        "10000)")
     p = sub.add_parser("phase")
     p.add_argument("us", type=int,
                    help="pcm mode: each 80 ms chunk becomes available this "

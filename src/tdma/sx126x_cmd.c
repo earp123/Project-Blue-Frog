@@ -245,6 +245,14 @@ int sx126x_cmd_get_packet_status_lora(int16_t *rssi_dbm, int8_t *snr_db)
 	return ret;
 }
 
+int sx126x_cmd_get_rssi_inst(uint8_t *raw)
+{
+	/* GetRssiInst (DS 13.5.5): RX only; dBm = -raw/2. Raw is returned so
+	 * callers can histogram it at the chip's 0.5 dB resolution.
+	 */
+	return cmd_read(SX126X_CMD_GET_RSSI_INST, raw, 1);
+}
+
 int sx126x_cmd_write_buffer(uint8_t offset, const uint8_t *data, size_t len)
 {
 	/* WriteBuffer (DS 13.2.3): offset is absolute in the 256-byte buffer. */

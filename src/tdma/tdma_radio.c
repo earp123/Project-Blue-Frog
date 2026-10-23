@@ -490,3 +490,88 @@ int tdma_radio_manual_rx(uint32_t timeout_ms, struct tdma_radio_event *ev)
 
 	return ev->have_rx ? 0 : -EIO;
 }
+
+/* GetRssiInst raw (-dBm x 2) to tenths of a dBm. */
+static inline int16_t rssi_raw_dbm10(int raw)
+{
+	return (int16_t)(-raw * 5);
+}
+
+int tdma_radio_noise(uint32_t samples, struct tdma_noise *out)
+{
+	static uint16_t hist[256];	/* radio thread only */
+	uint32_t sum = 0;
+	uint8_t raw;
+	int ret;
+
+	memset(hist, 0, sizeof(hist));
+	memset(out, 0, sizeof(*out));
+
+	ret = sx126x_cmd_read_register(SX126X_REG_RX_GAIN, &out->rx_gain, 1);
+	if (ret < 0) {
+		return ret;
+	}
+
+	ret = sx126x_cmd_clear_irq_status(SX126X_IRQ_ALL);
+	if (ret < 0) {
+		return ret;
+	}
+
+	rf_sw_rx(true);
+	ret = sx126x_cmd_set_rx(SX126X_RX_CONTINUOUS);
+	if (ret < 0) {
+		goto park;
+	}
+
+	/* Let the receiver chain and its RSSI filter settle. */
+	k_msleep(5);
+
+	for (uint32_t i = 0; i < samples; i++) {
+		ret = sx126x_cmd_get_rssi_inst(&raw);
+		if (ret < 0) {
+			goto park;
+		}
+		hist[raw]++;
+		sum += raw;
+		k_msleep(1);
+	}
+
+	/* Walk from the quietest reading (largest raw) to the loudest. */
+	uint32_t cum = 0;
+	uint32_t p50_at = (samples + 1) / 2;
+	uint32_t p90_at = (samples * 9 + 9) / 10;
+	bool have_min = false, have_p50 = false, have_p90 = false;
+
+	for (int r = 255; r >= 0; r--) {
+		if (hist[r] == 0) {
+			continue;
+		}
+		if (!have_min) {
+			out->min_dbm10 = rssi_raw_dbm10(r);
+			have_min = true;
+		}
+		cum += hist[r];
+		if (!have_p50 && cum >= p50_at) {
+			out->p50_dbm10 = rssi_raw_dbm10(r);
+			have_p50 = true;
+		}
+		if (!have_p90 && cum >= p90_at) {
+			out->p90_dbm10 = rssi_raw_dbm10(r);
+			have_p90 = true;
+		}
+		out->max_dbm10 = rssi_raw_dbm10(r);
+	}
+	out->mean_dbm10 = (int16_t)(-(int32_t)((sum * 5U + samples / 2U) /
+					      samples));
+	out->samples = samples;
+
+park:
+	/* Standby also drops RF_SW and clears anything a passing packet
+	 * latched; a stray DIO1 edge is ignored while the engine is stopped.
+	 */
+	{
+		int rc = tdma_radio_standby();
+
+		return (ret < 0) ? ret : rc;
+	}
+}

@@ -72,13 +72,15 @@ enum tdma_manual_op {
 	TDMA_MANUAL_TX,
 	TDMA_MANUAL_RX,
 	TDMA_MANUAL_STANDBY,	/* used by tdma_stop() */
+	TDMA_MANUAL_NOISE,	/* tdma_noise_floor() */
 };
 
 struct tdma_manual_req {
 	enum tdma_manual_op op;
-	uint32_t timeout_ms;			/* RX window */
+	uint32_t timeout_ms;			/* RX window; NOISE: samples */
 	const uint8_t *payload;			/* TX payload (40 B) */
 	struct tdma_rx_msg *rx;			/* RX result out */
+	struct tdma_noise *noise;		/* NOISE result out */
 	int result;
 	struct k_sem done;
 };

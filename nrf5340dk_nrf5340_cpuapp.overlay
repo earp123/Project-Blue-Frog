@@ -57,6 +57,10 @@
         busy-gpios     = <&gpio1 9 GPIO_ACTIVE_HIGH>;
         dio1-gpios     = <&gpio1 8 GPIO_ACTIVE_HIGH>;
         dio2-tx-enable;
+        /* Boosted LNA gain (reg 0x08AC = 0x96): ~3 dB sensitivity for
+         * ~2 mA. Without it lora_config() writes power-saving gain.
+         */
+        rx-boosted;
         dio3-tcxo-voltage = <SX126X_DIO3_TCXO_1V8>;
         tcxo-power-startup-delay-ms = <10>;
         spi-max-frequency = <500000>;

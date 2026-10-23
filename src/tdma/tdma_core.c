@@ -470,6 +470,14 @@ void tdma_core_on_manual(struct tdma_manual_req *req)
 		req->result = tdma_radio_standby();
 		break;
 
+	case TDMA_MANUAL_NOISE:
+		if (eng.state != TDMA_SYNC_STOPPED) {
+			req->result = -EBUSY;
+			break;
+		}
+		req->result = tdma_radio_noise(req->timeout_ms, req->noise);
+		break;
+
 	default:
 		req->result = -EINVAL;
 		break;
@@ -611,6 +619,24 @@ int tdma_manual_rx(uint32_t timeout_ms, struct tdma_rx_msg *msg)
 		.rx = msg,
 	};
 
+	if (!eng.initialized) {
+		return -EPERM;
+	}
+
+	return tdma_port_manual_submit(&req);
+}
+
+int tdma_noise_floor(uint32_t samples, struct tdma_noise *out)
+{
+	struct tdma_manual_req req = {
+		.op = TDMA_MANUAL_NOISE,
+		.timeout_ms = samples,
+		.noise = out,
+	};
+
+	if (samples == 0 || samples > TDMA_NOISE_SAMPLES_MAX) {
+		return -EINVAL;
+	}
 	if (!eng.initialized) {
 		return -EPERM;
 	}

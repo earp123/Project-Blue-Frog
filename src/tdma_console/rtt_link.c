@@ -432,6 +432,47 @@ static void cmd_dsp(char **tok, int n)
 }
 #endif
 
+/* One second of 1 ms GetRssiInst samples. */
+#define NOISE_SAMPLES_DEFAULT	1000
+
+/* dBm x 10 as "-103.5". */
+static void fmt_dbm10(char *out, size_t len, int v)
+{
+	snprintf(out, len, "%s%d.%d", v < 0 ? "-" : "", abs(v) / 10,
+		 abs(v) % 10);
+}
+
+/*
+ * Blocks this (writer) thread for the run, like bench. The engine refuses
+ * while a soak runs (busy) and before the first soak start has initialized
+ * it (init); with the engine stopped no records are waiting.
+ */
+static void cmd_noise(uint32_t samples)
+{
+	struct tdma_noise nf;
+	char mn[12], p50[12], p90[12], mx[12], mean[12];
+	int rc = tdma_noise_floor(samples, &nf);
+
+	if (rc == -EBUSY) {
+		reply("err noise busy");
+		return;
+	} else if (rc == -EPERM) {
+		reply("err noise init");
+		return;
+	} else if (rc < 0) {
+		reply("err noise %d", rc);
+		return;
+	}
+
+	fmt_dbm10(mn, sizeof(mn), nf.min_dbm10);
+	fmt_dbm10(p50, sizeof(p50), nf.p50_dbm10);
+	fmt_dbm10(p90, sizeof(p90), nf.p90_dbm10);
+	fmt_dbm10(mx, sizeof(mx), nf.max_dbm10);
+	fmt_dbm10(mean, sizeof(mean), nf.mean_dbm10);
+	reply("ok noise n=%u gain=0x%02x min=%s p50=%s p90=%s max=%s mean=%s",
+	      nf.samples, nf.rx_gain, mn, p50, p90, mx, mean);
+}
+
 static void handle_line(char *s)
 {
 	char *tok[4];
@@ -528,6 +569,9 @@ static void handle_line(char *s)
 		   parse_u32(tok[2], &minutes) && parse_u32(tok[3], &lead)) {
 		cmd_sdget(tok[1], minutes, lead);
 #endif
+	} else if (strcmp(tok[0], "noise") == 0 && n <= 2 &&
+		   (n == 1 || parse_u32(tok[1], &lead))) {
+		cmd_noise(n == 2 ? lead : NOISE_SAMPLES_DEFAULT);
 	} else if (strcmp(tok[0], "phase") == 0 && n == 2 &&
 		   parse_u32(tok[1], &lead) && lead <= LEAD_MAX_US) {
 		atomic_set(&next_phase_us, (atomic_val_t)lead);

@@ -50,6 +50,7 @@
 #define SX126X_CMD_GET_STATUS			0xC0	/* DS 13.5.1 */
 #define SX126X_CMD_GET_RX_BUFFER_STATUS		0x13	/* DS 13.5.3 */
 #define SX126X_CMD_GET_PACKET_STATUS		0x14	/* DS 13.5.4 */
+#define SX126X_CMD_GET_RSSI_INST		0x15	/* DS 13.5.5 */
 
 /* IRQ flag bits (DS 13.3.1, Table 13-29) */
 #define SX126X_IRQ_TX_DONE		BIT(0)
@@ -108,6 +109,7 @@
 
 /* Registers (DS chapter 12 / errata workarounds in chapter 15) */
 #define SX126X_REG_TX_MODULATION	0x0889	/* DS 15.1 (500 kHz BW quality) */
+#define SX126X_REG_RX_GAIN		0x08AC	/* DS 9.6: 0x94 saving, 0x96 boosted */
 
 /* SetTx/SetRx timeout ticks are 15.625 us each (DS 13.1.4/13.1.5):
  * ticks = us / 15.625 = us * 64 / 1000, exact in integer math.
@@ -154,6 +156,7 @@ int sx126x_cmd_get_irq_status(uint16_t *irq);
 int sx126x_cmd_clear_irq_status(uint16_t mask);
 int sx126x_cmd_get_rx_buffer_status(uint8_t *payload_len, uint8_t *start_offset);
 int sx126x_cmd_get_packet_status_lora(int16_t *rssi_dbm, int8_t *snr_db);
+int sx126x_cmd_get_rssi_inst(uint8_t *raw);
 int sx126x_cmd_write_buffer(uint8_t offset, const uint8_t *data, size_t len);
 int sx126x_cmd_read_buffer(uint8_t offset, uint8_t *data, size_t len);
 int sx126x_cmd_write_register(uint16_t addr, const uint8_t *data, size_t len);
