@@ -14,7 +14,7 @@ Usage:
     rtt_link.py --sn N status
     rtt_link.py --sn N soak 5 [--sd]          # 0 = continuous
     rtt_link.py --sn N stop
-    rtt_link.py --sn N mode ramp|tone|clip|pcm|mic   # mic: WM8960 HAT builds
+    rtt_link.py --sn N mode ramp|tone|clip|pcm|mic|ladder   # mic: HAT builds
     rtt_link.py --sn N mix avg|left|right     # mic: the encoder's mono mix
     rtt_link.py --sn N vol 0x6D               # mic: earpiece volume (0x79 = 0 dB)
     rtt_link.py --sn N listen 0|1|2|3|all     # mic, test: earpieces play one peer
@@ -28,6 +28,7 @@ Usage:
     rtt_link.py --sn N noise [2000]           # receiver noise floor, peers quiet
     rtt_link.py --sn N sdls [/DRAWER0]        # list the unit's SD card
     rtt_link.py --sn N sdget /X_001.BIN -o x.bin   # copy a file off it
+    rtt_link.py --sn N sdrm /X_001.BIN [/Y_002.BIN ...]   # delete from it
     rtt_link.py --sn N clip clip_F.c2         # "clip <n> <crc>" + the bytes
     rtt_link.py --sn N capture -o m.bin [--minutes M] [--soak M [--sd]]
     rtt_link.py --all capture -o soaks/rtt/ [--soak M]
@@ -335,6 +336,16 @@ def cmd_sdget(link, args):
     return 0
 
 
+def cmd_sdrm(link, args):
+    """Delete files from the unit's card, one command each."""
+    rc = 0
+    for path in args.paths:
+        r = link.command("sdrm %s" % path)
+        print("[%s] %s" % (link.sn, r))
+        rc |= 0 if r.startswith("ok") else 1
+    return rc
+
+
 def cmd_noise(link, args):
     """Noise floor; a unit that has never run a soak is initialized first by
     a momentary soak start/stop (one or two packets on air)."""
@@ -404,6 +415,8 @@ def run_one(args):
             return cmd_sdls(link, args)
         elif args.cmd == "sdget":
             return cmd_sdget(link, args)
+        elif args.cmd == "sdrm":
+            return cmd_sdrm(link, args)
         elif args.cmd == "capture":
             return cmd_capture(link, args)
         r = link.command(line)
@@ -455,7 +468,8 @@ def main(argv=None):
     p.add_argument("--sd", action="store_true", help="also log to the card")
     sub.add_parser("stop")
     p = sub.add_parser("mode")
-    p.add_argument("mode", choices=["ramp", "tone", "clip", "pcm", "mic"])
+    p.add_argument("mode", choices=["ramp", "tone", "clip", "pcm", "mic",
+                                    "ladder"])
     p = sub.add_parser("mix")
     p.add_argument("mix", choices=["avg", "left", "right"],
                    help="mic mode: the mono mix the encoder gets (HAT builds)")
@@ -498,6 +512,9 @@ def main(argv=None):
     p = sub.add_parser("sdget")
     p.add_argument("path", help="file on the card, e.g. /DRAWER0/X_001.BIN")
     p.add_argument("-o", "--out", help="local file (default: its name)")
+    p = sub.add_parser("sdrm")
+    p.add_argument("paths", nargs="+",
+                   help="files on the card to delete, e.g. /X_001.BIN")
     p = sub.add_parser("clip")
     p.add_argument("file", help="Codec 2 clip, a multiple of 32 B")
     p = sub.add_parser("capture")

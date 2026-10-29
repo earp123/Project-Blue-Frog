@@ -20,8 +20,10 @@
  *   status                  ok status role= slot= sync= soak= mode=
  *                           clip=<chunks>/<crc32> lead= rtt_drop=
  *                           pretx=<pickups>/<staged>/<min>/<last margin us>
- *   mode ramp|tone|clip|pcm payload source for the next soak start (pcm
- *                           only with CONFIG_SOAK_C2_ENCODE)
+ *   mode ramp|tone|clip|pcm|ladder
+ *                           payload source for the next soak start (pcm
+ *                           only with CONFIG_SOAK_C2_ENCODE; ladder steps
+ *                           the TX power and ends the run, tx_ladder.h)
  *   clip <nbytes> <crc32>   followed by exactly nbytes raw bytes: load the
  *                           clip buffer (clip_src.h); refused while a soak
  *                           runs, or if the size or CRC is wrong
@@ -43,6 +45,9 @@
  *                           start: receiver noise floor, 1 ms GetRssiInst
  *                           samples (default 1000), dBm min/p50/p90/max/
  *                           mean plus the RX gain register (tdma.h)
+ *   sdls [dir]              list a directory on the card
+ *   sdget <file> <off> <n>  read up to 512 bytes of a file, as hex
+ *   sdrm <file>             delete a file from the card
  *   soak <minutes> [sd]     start a soak (0 = continuous); sd adds the card
  *   stop                    stop the running soak
  *

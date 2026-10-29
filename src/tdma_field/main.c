@@ -42,6 +42,11 @@
  * and stop soaks and stream their records to the host; the unit pick stays
  * on the buttons.
  *
+ * A ladder build (CONFIG_SOAK_PAYLOAD_LADDER, tx_ladder.h) boots into a
+ * ready screen and has two buttons: B1 (or B2/B3) GO, B4 STOP. A run ends
+ * itself after the ladder; GO on the DONE screen starts the next one. HOME,
+ * TX PWR and the SD pages are out of reach.
+ *
  * SPDX-License-Identifier: Apache-2.0
  */
 
@@ -69,6 +74,9 @@ LOG_MODULE_REGISTER(tdma_field, LOG_LEVEL_INF);
 
 /* Boot TX power (Kconfig, default +22 dBm, the engine's own default). */
 #define FIELD_TX_POWER_DBM	CONFIG_SOAK_BOOT_TX_POWER_DBM
+
+/* Ladder build: the GO/STOP screens (tx_ladder.h). */
+#define LADDER_UI		IS_ENABLED(CONFIG_SOAK_PAYLOAD_LADDER)
 
 /* Live soak repaint cadence: <= 2 Hz keeps the I2C cost off the budget. */
 #define SOAK_DRAW_PERIOD_MS	500
@@ -242,6 +250,9 @@ static struct {
 	/* Per peer, for the summary page: last RSSI and when it was heard. */
 	int16_t peer_rssi[TDMA_SLOT_COUNT];
 	int64_t peer_rx_ms[TDMA_SLOT_COUNT];
+
+	/* Ladder run: the TX power last requested (ladder_stage()). */
+	int8_t ladder_dbm;
 } soak;
 
 static int64_t soak_last_draw_ms;
@@ -681,6 +692,9 @@ static void det_poll(void)
 static void soak_start(int64_t duration_ms, bool sd)
 {
 	enum soak_payload_mode mode = payload_next_mode();
+	bool ladder = payload_is_ladder(mode);
+	struct tdma_noise nf = { 0 };
+	int nf_rc = -ENODATA;
 	int rc;
 
 	/* A clip soak needs a clip; refuse before touching the engine. */
@@ -709,6 +723,17 @@ static void soak_start(int64_t duration_ms, bool sd)
 		engine_inited = true; /* unit is now locked */
 	}
 
+	/* A ladder ends itself after its last rung, counted in transmissions,
+	 * so no time limit. The noise floor is measured while the engine is
+	 * still stopped (about 1 s on this thread).
+	 */
+	if (ladder) {
+		duration_ms = 0;
+		nf_rc = ladder_prepare(&nf);
+		LOG_INF("ladder noise: p50 %d p90 %d dBm/10 (%d)",
+			nf.p50_dbm10, nf.p90_dbm10, nf_rc);
+	}
+
 	/* The data thread reads this struct on its own tick; clear and
 	 * republish it under the lock rather than racing a memset against it.
 	 * The payload source is latched here for the whole run.
@@ -717,6 +742,7 @@ static void soak_start(int64_t duration_ms, bool sd)
 	memset(&soak, 0, sizeof(soak));
 	soak.snap = *tdma_get_telemetry();
 	soak.payload_mode = mode;
+	soak.ladder_dbm = ladder_rung_dbm(0);
 #ifdef CONFIG_SOAK_RTT
 	soak.lead_us = rtt_link_lead_us();
 #endif
@@ -727,8 +753,11 @@ static void soak_start(int64_t duration_ms, bool sd)
 	 * drawers on this variant: logs always land in the card root.
 	 */
 	(void)soak_log_start(role, my_slot,
-			     (int8_t)tx_power_dbm, (uint32_t)duration_ms, NULL,
-			     sd, mode);
+			     ladder ? soak.ladder_dbm : (int8_t)tx_power_dbm,
+			     (uint32_t)duration_ms, NULL, sd, mode);
+	if (nf_rc == 0) {
+		soak_log_noise(&nf);
+	}
 
 	rc = tdma_start();
 	if (rc < 0) {
@@ -814,6 +843,10 @@ static void soak_finish(void)
 	c2_enc_stop();
 	c2_dec_stop();
 #endif
+	/* A ladder leaves the top rung latched: back to the unit's setting. */
+	if (payload_is_ladder(soak.payload_mode)) {
+		(void)tdma_set_tx_power((int8_t)tx_power_dbm);
+	}
 
 	/* One last counter snapshot, then drain and close the log. */
 	soak_log_stats(tdma_get_telemetry());
@@ -928,9 +961,16 @@ static void soak_data_step(void)
 						&lead_us, &enc_us, &done_at);
 			staged = true;
 		} else {
+			uint32_t n = t->tx_done - soak.snap.tx_done;
+
+			/* Ladder: this payload's rung power, latched for the
+			 * same transmit that carries it.
+			 */
+			if (payload_is_ladder(soak.payload_mode)) {
+				ladder_stage(n, &soak.ladder_dbm);
+			}
 			payload_fill(soak.tx_payload, soak.payload_mode,
-				     my_slot, t->tx_done - soak.snap.tx_done,
-				     soak.seq);
+				     my_slot, n, soak.seq);
 			stage_us = IS_ENABLED(CONFIG_SOAK_RTT) ?
 					   tdma_now_us() : 0;
 		}
@@ -966,6 +1006,11 @@ static void soak_data_step(void)
 	    k_uptime_get() - soak.start_ms >= soak.duration_ms) {
 		soak.expired = true;
 	}
+	/* A ladder ends once the tail's last packet is out. */
+	if (payload_is_ladder(soak.payload_mode) &&
+	    ladder_over(t->tx_done - soak.snap.tx_done)) {
+		soak.expired = true;
+	}
 }
 
 static void soak_data_fn(void *a, void *b, void *c)
@@ -999,6 +1044,22 @@ static void soak_begin(int pick)
 	soak_start(soak_durations[pick].ms, true);
 	if (screen != SCR_SOAK) {
 		LOG_ERR("soak did not start: %s", home_msg);
+	}
+}
+
+/* Ladder builds: GO, from the ready screen or a finished run. */
+static void ladder_go(void)
+{
+	if (sd_busy) {
+		snprintf(pick_msg, sizeof(pick_msg), "SD busy");
+		return;
+	}
+	LOG_INF("ladder start: %s", role_str());
+	pick_msg[0] = '\0';
+	soak_page = SP_SUM;
+	soak_start(0, true);
+	if (screen != SCR_SOAK) {
+		LOG_ERR("ladder did not start: %s", home_msg);
 	}
 }
 
@@ -1107,8 +1168,13 @@ static void draw_splash(void)
 {
 	char bottom[24];
 
-	snprintf(bottom, sizeof(bottom), "%+ddBm  %uMHz", tx_power_dbm,
-		 (unsigned)(TDMA_RF_FREQ_HZ / 1000000UL));
+	if (LADDER_UI) {
+		snprintf(bottom, sizeof(bottom), "LADDER  %uMHz",
+			 (unsigned)(TDMA_RF_FREQ_HZ / 1000000UL));
+	} else {
+		snprintf(bottom, sizeof(bottom), "%+ddBm  %uMHz", tx_power_dbm,
+			 (unsigned)(TDMA_RF_FREQ_HZ / 1000000UL));
+	}
 	if (CONFIG_SOAK_UNIT_SLOT >= 0) {
 		char slot[16];
 
@@ -1219,7 +1285,17 @@ static void draw_home(void)
  */
 static void draw_soak_pick(void)
 {
-	char top_l[24], top_r[12], bottom[24];
+	char top_l[24], top_r[12], bottom[32];
+
+	/* Ladder build: the ready screen. */
+	if (LADDER_UI) {
+		snprintf(top_l, sizeof(top_l), "LADDER %s", unit_tag());
+		fmt_clock(top_r, sizeof(top_r), LADDER_MS);
+		snprintf(bottom, sizeof(bottom), "B4 STOP  %s",
+			 pick_msg[0] ? pick_msg : sd_flag());
+		draw_card(top_l, top_r, "B1 = GO", bottom);
+		return;
+	}
 
 	snprintf(top_l, sizeof(top_l), "SOAK %s", role_str());
 	snprintf(top_r, sizeof(top_r), "%+ddBm", tx_power_dbm);
@@ -1289,7 +1365,19 @@ static void draw_soak_summary(const char *st)
 
 	cfb_framebuffer_clear(disp, false);
 
-	snprintf(l, sizeof(l), "%s %s", st, unit_tag());
+	if (payload_is_ladder(soak.payload_mode) && soak.done) {
+		snprintf(l, sizeof(l), "DONE B1=GO");
+	} else if (payload_is_ladder(soak.payload_mode) &&
+		   strcmp(st, "BUSY") != 0) {
+		/* "M +6 3/8": unit, this rung's power, rung. */
+		char rung[8];
+
+		ladder_fmt(rung, sizeof(rung), t->tx_done - soak.snap.tx_done);
+		snprintf(l, sizeof(l), "%s %+d %s", unit_tag(), soak.ladder_dbm,
+			 rung);
+	} else {
+		snprintf(l, sizeof(l), "%s %s", st, unit_tag());
+	}
 	fmt_clock(r, sizeof(r), soak_elapsed_ms());
 	d_bar(l, r);
 
@@ -1621,9 +1709,34 @@ static void boot_sd_step(void)
 	}
 }
 
+/*
+ * Ladder build, on the ready and soak screens: B4 stops a run, any other
+ * button starts one when none is running. False for the other screens (the
+ * boot SD check, and HOME should a start fail), which route as usual.
+ */
+static bool ladder_nav(enum nav_action a)
+{
+	if (screen != SCR_SOAK_PICK && screen != SCR_SOAK) {
+		return false;
+	}
+	if (a == NAV_BACK) {
+		if (soak.active) {
+			soak_end("B4");
+		}
+	} else if (!soak.active) {
+		ladder_go();
+	}
+	mark_dirty();
+	return true;
+}
+
 static void handle_nav(enum nav_action a)
 {
 	bool updown = (a == NAV_UP || a == NAV_DOWN);
+
+	if (LADDER_UI && ladder_nav(a)) {
+		return;
+	}
 
 	switch (screen) {
 	case SCR_ROLE_PICK:

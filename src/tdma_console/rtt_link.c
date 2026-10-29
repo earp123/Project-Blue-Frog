@@ -118,6 +118,7 @@ static const char *const mode_name[] = {
 	[SOAK_PAYLOAD_CLIP] = "clip",
 	[SOAK_PAYLOAD_PCM] = "pcm",
 	[SOAK_PAYLOAD_MIC] = "mic",
+	[SOAK_PAYLOAD_LADDER] = "ladder",
 };
 
 enum soak_payload_mode rtt_link_mode(void)
@@ -197,8 +198,8 @@ static void reply(const char *fmt, ...);
 
 #ifdef CONFIG_FAT_FILESYSTEM_ELM
 /*
- * Card access for the host (sdls / sdget): the soak logs off a unit without
- * pulling its card. These run in handle_line(), which rtt_link_poll() calls
+ * Card access for the host (sdls / sdget / sdrm): the soak logs off a unit
+ * without pulling its card. These run in handle_line(), which rtt_link_poll() calls
  * on the soak_log writer thread, the one thread that may touch FatFs.
  */
 #define SDGET_MAX	512	/* bytes per sdget: 1 KB of hex in one reply */
@@ -278,6 +279,24 @@ static void cmd_sdget(const char *file, uint32_t off, uint32_t len)
 	}
 	line[n++] = '\n';
 	(void)SEGGER_RTT_Write(CH_REPLY, line, (unsigned int)n);
+}
+
+static void cmd_sdrm(const char *file)
+{
+	char path[64];
+	int rc = sd_log_mount();
+
+	if (rc < 0) {
+		reply("err sd mount %d", rc);
+		return;
+	}
+	sd_path(path, sizeof(path), file);
+	rc = fs_unlink(path);
+	if (rc < 0) {
+		reply("err sd unlink %d", rc);
+		return;
+	}
+	reply("ok sdrm %s", file);
 }
 #endif
 
@@ -568,6 +587,8 @@ static void handle_line(char *s)
 	} else if (strcmp(tok[0], "sdget") == 0 && n == 4 &&
 		   parse_u32(tok[2], &minutes) && parse_u32(tok[3], &lead)) {
 		cmd_sdget(tok[1], minutes, lead);
+	} else if (strcmp(tok[0], "sdrm") == 0 && n == 2) {
+		cmd_sdrm(tok[1]);
 #endif
 	} else if (strcmp(tok[0], "noise") == 0 && n <= 2 &&
 		   (n == 1 || parse_u32(tok[1], &lead))) {

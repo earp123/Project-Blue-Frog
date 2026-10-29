@@ -159,7 +159,12 @@ int soak_log_start(enum tdma_role role, uint8_t slot_id, int8_t tx_power_dbm,
 	open_req.dir[sizeof(open_req.dir) - 1] = '\0';
 	fmt_power(pwr, sizeof(pwr), tx_power_dbm);
 	fmt_duration(dur, sizeof(dur), duration_ms);
-	snprintf(open_req.base, sizeof(open_req.base), "%s_%s", pwr, dur);
+	if (payload_is_ladder(mode)) {
+		snprintf(open_req.base, sizeof(open_req.base), "LADR");
+	} else {
+		snprintf(open_req.base, sizeof(open_req.base), "%s_%s", pwr,
+			 dur);
+	}
 
 	/* Record 0 describes the run, so a decoded file is self-contained. */
 	m.magic = SOAK_LOG_MAGIC;
@@ -197,6 +202,10 @@ int soak_log_start(enum tdma_role role, uint8_t slot_id, int8_t tx_power_dbm,
 		m.payload_mode = SOAK_PAYLOAD_MIC;
 		m.p8 = CLIP_CODEC_3200;
 		m.p16 = (uint16_t)payload_mic_mix();
+	} else if (payload_is_ladder(mode)) {
+		m.payload_mode = SOAK_PAYLOAD_LADDER;
+		m.p8 = LADDER_STEPS;
+		m.p16 = LADDER_STEP_FRAMES;
 	}
 
 	r.type = SOAK_REC_META;
@@ -310,6 +319,25 @@ void soak_log_stats(const struct tdma_telemetry *t)
 	r.type = SOAK_REC_STATS;
 	r.sync_state = t->sync_state;
 	memcpy(r.payload, &s, sizeof(s));
+
+	submit(&r);
+}
+
+void soak_log_noise(const struct tdma_noise *nf)
+{
+	struct soak_rec r = { 0 };
+	struct soak_noise p = {
+		.samples = nf->samples,
+		.min_dbm10 = nf->min_dbm10,
+		.p50_dbm10 = nf->p50_dbm10,
+		.p90_dbm10 = nf->p90_dbm10,
+		.max_dbm10 = nf->max_dbm10,
+		.mean_dbm10 = nf->mean_dbm10,
+		.rx_gain = nf->rx_gain,
+	};
+
+	r.type = SOAK_REC_NOISE;
+	memcpy(r.payload, &p, sizeof(p));
 
 	submit(&r);
 }

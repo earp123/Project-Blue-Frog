@@ -33,8 +33,10 @@ META_FMT = "<IHBBIIIIBBHbBBBIBBH"
 MAGIC = 0x4B414F53  # "SOAK"
 # META payload_mode (zero in pre-tone v2 files). p8 / p16 mean, per mode:
 # ramp 0 / 0, tone fs kHz / f0 Hz, clip codec / clip chunk count, pcm codec /
-# PCM chunk count, mic codec / mono mix (0 avg, 1 left, 2 right).
+# PCM chunk count, mic codec / mono mix (0 avg, 1 left, 2 right), ladder
+# rungs / TX frames per rung.
 PAYLOAD_RAMP, PAYLOAD_TONE, PAYLOAD_CLIP, PAYLOAD_PCM, PAYLOAD_MIC =     0, 1, 2, 3, 4
+PAYLOAD_LADDER = 5
 MIX_NAME = {0: "avg", 1: "left", 2: "right"}
 CODEC_NAME = {0: "3200"}	# Codec 2 mode enum in the clip header
 
@@ -43,8 +45,9 @@ Rec = namedtuple("Rec", "index type slot_id sync flags t_us frame_ctr rssi snr"
                         " seq uptime_ms payload rsvd")
 
 SOAK_LOG_VERSION = 2	# newest format this decoder writes assumptions for
-REC_META, REC_RX, REC_TX, REC_STATS = 1, 2, 3, 4
-TYPE_NAME = {REC_META: "meta", REC_RX: "rx", REC_TX: "tx", REC_STATS: "stats"}
+REC_META, REC_RX, REC_TX, REC_STATS, REC_NOISE = 1, 2, 3, 4, 5
+TYPE_NAME = {REC_META: "meta", REC_RX: "rx", REC_TX: "tx", REC_STATS: "stats",
+             REC_NOISE: "noise"}
 SYNC_NAME = {0: "STOPPED", 1: "SYNCING", 2: "RUNNING"}
 F_NO_CTR = 1 << 0
 
@@ -61,6 +64,23 @@ STATS_FIELDS_V1 = ["tx_done", "rx_done", "rx_crc_err", "rx_bad_header",
                    "rx_ok", "missed", "dup"]
 
 ALL_STATS_FIELDS = STATS_FIELDS_V2 + ["rx_ok", "missed", "dup"]
+
+# NOISE payload (struct soak_noise): samples, then min/p50/p90/max/mean in
+# tenths of a dBm, then the RX gain register.
+NOISE_FMT = "<I5hB"
+NOISE_FIELDS = ["samples", "min_dbm10", "p50_dbm10", "p90_dbm10",
+                "max_dbm10", "mean_dbm10", "rx_gain"]
+
+
+def parse_noise(payload):
+    return dict(zip(NOISE_FIELDS, struct.unpack_from(NOISE_FMT, payload)))
+
+
+def noise_desc(nf):
+    return ("n=%d gain=0x%02x min/p50/p90/max %.1f/%.1f/%.1f/%.1f mean %.1f"
+            " dBm" % (nf["samples"], nf["rx_gain"], nf["min_dbm10"] / 10,
+                      nf["p50_dbm10"] / 10, nf["p90_dbm10"] / 10,
+                      nf["max_dbm10"] / 10, nf["mean_dbm10"] / 10))
 
 CSV_FIELDS = ["seq", "type", "uptime_ms", "t_us", "slot_id", "sync",
               "frame_ctr", "rssi", "snr"] + ALL_STATS_FIELDS + ["payload"]
@@ -110,6 +130,8 @@ def parse_meta(payload):
         meta["clip_codec"], meta["pcm_chunks"] = p8, p16
     elif payload_mode == PAYLOAD_MIC:
         meta["clip_codec"], meta["mic_mix"] = p8, p16
+    elif payload_mode == PAYLOAD_LADDER:
+        meta["ladder_rungs"], meta["ladder_step_frames"] = p8, p16
     return meta
 
 
@@ -129,6 +151,9 @@ def payload_desc(meta):
         return "payload=mic codec=%s mix=%s (live HAT mics, on-device)" % (
             CODEC_NAME.get(meta["clip_codec"], "?%d" % meta["clip_codec"]),
             MIX_NAME.get(meta["mic_mix"], "?%d" % meta["mic_mix"]))
+    if meta["payload_mode"] == PAYLOAD_LADDER:
+        return "payload=ladder rungs=%d x %d frames" % (
+            meta["ladder_rungs"], meta["ladder_step_frames"])
     if meta["payload_mode"] == PAYLOAD_RAMP:
         return "payload=ramp"
     return "payload=unknown(%d)" % meta["payload_mode"]
@@ -186,6 +211,7 @@ def main():
     missed = dup = 0
     bad_bytes_tot = bad_bits_tot = 0
     ramp = True	# until a META record says otherwise
+    noise = []
 
     for rec in iter_records(blob):
         (_, rtype, slot_id, sync, flags, t_us, frame_ctr, rssi, snr,
@@ -225,6 +251,11 @@ def main():
                 first_stats = cur
             last_stats = cur
             row.update(cur)
+            rows.append(row)
+            continue
+
+        if rtype == REC_NOISE:
+            noise.append(parse_noise(payload))
             rows.append(row)
             continue
 
@@ -272,6 +303,8 @@ def main():
 
     print("records:  rx=%d tx=%d stats=%d meta=%d" % (
         counts[REC_RX], counts[REC_TX], counts[REC_STATS], counts[REC_META]))
+    for nf in noise:
+        print("noise:    " + noise_desc(nf))
     if seq_gaps:
         print("WARNING:  %d records dropped on-device (seq gaps) --"
               " card could not keep up" % seq_gaps)
@@ -290,7 +323,8 @@ def main():
                 bad_bytes_tot, bad_bits_tot, recvd))
         else:
             print("payload:  not a ramp, integrity check skipped"
-                  " (tone: reconstruct_tone.py, clip: reconstruct_c2.py)")
+                  " (tone: reconstruct_tone.py, clip: reconstruct_c2.py,"
+                  " ladder: ladder_report.py)")
 
     if last_stats:
         # Engine counters are absolute and are NOT reset by tdma_start(), so a

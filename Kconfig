@@ -66,19 +66,20 @@ config SOAK_BOOT_TX_POWER_DBM
 config SOAK_TOUCH_CAL
 	bool "TFT unit: power-on touch calibration"
 	default y
-	depends on APP_TDMA_CONSOLE
+	depends on APP_TDMA_CONSOLE && !SOAK_PAYLOAD_LADDER
 	help
 	  Run the mandatory touch calibration at power-on. Say n to drive the
 	  console from the DK buttons only (B1 UP, B2 DOWN, B3 OK, B4 BACK):
 	  calibration is skipped and touch input is ignored, since uncalibrated
-	  taps land in the wrong place.
+	  taps land in the wrong place. Always off in a ladder build, which
+	  runs on B1 GO and B4 STOP alone.
 
 choice SOAK_PAYLOAD
 	prompt "Soak payload"
 	default SOAK_PAYLOAD_RAMP
 	help
 	  What a soak puts in each 40-byte transmission. The log's META
-	  record says which payload a unit sent. With SOAK_RTT all three
+	  record says which payload a unit sent. With SOAK_RTT all four
 	  sources are linked and the bench port's "mode" command picks the
 	  one the next soak starts in; this is the boot default. Without it,
 	  only the chosen source is linked. A soak latches its source at
@@ -110,6 +111,18 @@ config SOAK_PAYLOAD_CLIP
 	  once per boot with tools/rtt_link.py and loops. A soak will not
 	  start in this mode without a valid clip. Score a run with
 	  tools/reconstruct_c2.py. See docs/rtt_link_c2_transport.md.
+
+config SOAK_PAYLOAD_LADDER
+	bool "Ladder: TX power ladder test, GO/STOP only"
+	help
+	  The fixed-range TX power test (src/tdma_console/tx_ladder.h).
+	  From GO each unit logs its receiver noise floor, then steps its
+	  own TX power from -6 to +22 dBm in 4 dB rungs of 30 s, holds
+	  +22 dBm for a 20 s tail (4:20 in all) and ends the run itself.
+	  Every packet carries its rung, so either unit's log gives RSSI,
+	  SNR and loss per rung (tools/ladder_report.py). Both units drop
+	  to two buttons: B1 GO, B4 STOP; preset each with SOAK_UNIT_SLOT.
+	  Logs are LADR_NNN.BIN.
 
 endchoice
 

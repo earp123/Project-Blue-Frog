@@ -12,7 +12,7 @@ For hardware wiring, build/flash instructions, and SDK setup, see
 
 On-device radio-evaluation tooling for the nRF5340 DK + Wio-SX1262 (SX1262),
 plus the first slice of the wireless-intercom firmware (TDMA radio layer).
-_Last updated: 2026-10-23._
+_Last updated: 2026-10-29._
 
 ### Where things stand (2026-09-29)
 
@@ -86,6 +86,48 @@ Exactly one `main()` is linked, chosen by the Kconfig choice in
 Four other variants were retired on 2026-09-25: LoRa send, the telemetry
 console, the TDMA UART-shell test and the UART soak harness (see "Streamlined
 to two unit types"). Their sections below are kept as history.
+
+### TX power ladder test; 50 ft gym runs with Molex flex dipoles (2026-10-29)
+
+A settings-free fixed-range test (`CONFIG_SOAK_PAYLOAD_LADDER`,
+[`tx_ladder.h`](src/tdma_console/tx_ladder.h)) and its first two runs, logs
+in [`soaks/LadderTest_1029/`](soaks/LadderTest_1029) (`M_` / `S1_` per run).
+
+- **The ladder:** at GO each unit logs its noise floor (a new NOISE record,
+  type 5), then steps its own TX power −6 → +22 dBm in 4 dB rungs of 375
+  frames (30 s), holds +22 dBm for a 20 s tail and ends the run itself:
+  4:20. Rungs are counted in the unit's own transmissions, so a secondary
+  starts its ladder when it locks; start the secondary first. Every packet
+  carries its rung, power, slot and TX index plus a check pattern, so one
+  unit's log alone gives the peer's link per rung. Logs are
+  `LADR_NNN.BIN`. Payload mode 5, also `mode ladder` over RTT.
+- **Buttons only on both units:** B1 GO, B4 STOP; a ladder build forces
+  `SOAK_TOUCH_CAL` off. Roles come from `SOAK_UNIT_SLOT`.
+- **Tools:** [`ladder_report.py`](src/tdma_console/tools/ladder_report.py)
+  prints RSSI, SNR and loss per rung and direction, the RSSI step per rung
+  and the gap to free space at the given distance. `decode_soak_log.py`
+  reads NOISE and ladder META. New RTT command `sdrm <file>`
+  (`rtt_link.py sdrm`) deletes files from a unit's card.
+- **Runs:** shield 960166366 (MASTER) and shield 1050080691 (SEC 1), Molex
+  2067640100 flex dipoles (not the AVX FPC antennas of the pitch walks),
+  50 ft apart and 50 in high in the apartment gym, each ~4 ft in front of a
+  wall corner, line of sight clear ~98 % of the time. `_001` had the
+  antennas a little more parallel.
+  - −22 to −24 dBm at +22 dBm and −46 to −49 dBm at −6 dBm, both
+    directions within 1 dB: about 10 dB above free space with 0 dBi
+    antennas, mostly the room. One packet lost in ~13,000; no CRC-passing
+    corruption, no stale TX, phase within ±34 µs.
+  - RSSI rose ~3.5 dB per 4 dB rung (slope 0.86–0.93), least at the top
+    rung: PA short of its setting near +22, or RSSI compressing at these
+    levels. Not separated yet.
+  - One person crossing showed as a 5 dB dip for ~3 s, no loss.
+  - Gym noise floor p50 −99 to −103 dBm.
+  - The pitch walks changed antenna and environment at once, so the gap to
+    them (~50 dB at 120 m) is not yet split between the two. Next: AVX
+    antennas at the same spots.
+- **Hardware:** the TFT unit (960170130) is out. Its SD socket stopped
+  answering at card init (−134) with two cards, on old and new firmware.
+  Shield 960166366's radio read all 0xFF until reseated (dead MISO, P1.01).
 
 ### Soccer pitch range test; boosted RX gain; `noise` command (2026-10-23)
 

@@ -2,10 +2,11 @@
  * payload_src - which payload a soak sends, and the one fill call the runner
  * makes per staged frame.
  *
- * Three sources, enum soak_payload_mode: the ramp, tone_src and clip_src.
- * With CONFIG_SOAK_RTT all three are linked and the bench port's "mode"
- * command picks the one the next soak starts in (rtt_link_mode()); without
- * it only the source chosen by the SOAK_PAYLOAD Kconfig choice is linked.
+ * Four sources, enum soak_payload_mode: the ramp, tone_src, clip_src and the
+ * TX power ladder (tx_ladder.h). With CONFIG_SOAK_RTT all four are linked
+ * and the bench port's "mode" command picks the one the next soak starts in
+ * (rtt_link_mode()); without it only the source chosen by the SOAK_PAYLOAD
+ * Kconfig choice is linked.
  * The runner latches the mode at soak start and passes it back to every
  * payload_fill() of that run, so a run never switches source.
  *
@@ -27,6 +28,7 @@
 #include "soak_log.h"
 #include "tone_src.h"
 #include "clip_src.h"
+#include "tx_ladder.h"
 #ifdef CONFIG_SOAK_RTT
 #include "rtt_link.h"
 #endif
@@ -43,6 +45,8 @@
 	(IS_ENABLED(CONFIG_SOAK_RTT) || IS_ENABLED(CONFIG_SOAK_PAYLOAD_TONE))
 #define PAYLOAD_CLIP_LINKED \
 	(IS_ENABLED(CONFIG_SOAK_RTT) || IS_ENABLED(CONFIG_SOAK_PAYLOAD_CLIP))
+#define PAYLOAD_LADDER_LINKED \
+	(IS_ENABLED(CONFIG_SOAK_RTT) || IS_ENABLED(CONFIG_SOAK_PAYLOAD_LADDER))
 /* The on-device encoder: only with CONFIG_SOAK_C2_ENCODE, and never a Kconfig
  * default (it needs a PCM clip, uploaded over RTT, and "mode pcm").
  */
@@ -59,10 +63,19 @@ static inline bool payload_is_c2(enum soak_payload_mode mode)
 	       (PAYLOAD_MIC_LINKED && mode == SOAK_PAYLOAD_MIC);
 }
 
+/* The ladder run: the runner also steps the TX power and ends the run
+ * itself (tx_ladder.h).
+ */
+static inline bool payload_is_ladder(enum soak_payload_mode mode)
+{
+	return PAYLOAD_LADDER_LINKED && mode == SOAK_PAYLOAD_LADDER;
+}
+
 /* The Kconfig choice, as the boot default. */
 #define PAYLOAD_DEFAULT_MODE \
 	(IS_ENABLED(CONFIG_SOAK_PAYLOAD_TONE) ? SOAK_PAYLOAD_TONE : \
 	 IS_ENABLED(CONFIG_SOAK_PAYLOAD_CLIP) ? SOAK_PAYLOAD_CLIP : \
+	 IS_ENABLED(CONFIG_SOAK_PAYLOAD_LADDER) ? SOAK_PAYLOAD_LADDER : \
 						SOAK_PAYLOAD_RAMP)
 
 /* The mode the next soak starts in. */
@@ -202,6 +215,8 @@ static inline void payload_fill(uint8_t out[TDMA_PAYLOAD_LEN],
 		tone_src_fill(out, slot_id, n);
 	} else if (PAYLOAD_CLIP_LINKED && mode == SOAK_PAYLOAD_CLIP) {
 		clip_src_fill(out, n);
+	} else if (payload_is_ladder(mode)) {
+		ladder_fill(out, slot_id, n);
 	} else {
 		for (int i = 0; i < TDMA_PAYLOAD_LEN; i++) {
 			out[i] = (uint8_t)(seq + i);

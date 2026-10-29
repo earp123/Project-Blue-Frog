@@ -74,6 +74,7 @@ enum soak_rec_type {
 	SOAK_REC_RX = 2,	/* one received packet */
 	SOAK_REC_TX = 3,	/* one submitted transmit */
 	SOAK_REC_STATS = 4,	/* periodic engine counter snapshot */
+	SOAK_REC_NOISE = 5,	/* receiver noise floor (ladder runs, at GO) */
 };
 
 /* flags bits */
@@ -148,7 +149,25 @@ enum soak_payload_mode {
 	SOAK_PAYLOAD_CLIP = 2,	/* clip_src chunks: test header + Codec 2 */
 	SOAK_PAYLOAD_PCM = 3,	/* c2_enc: PCM clip encoded on the device */
 	SOAK_PAYLOAD_MIC = 4,	/* c2_enc: live WM8960 HAT mic (hat_audio) */
+	SOAK_PAYLOAD_LADDER = 5, /* TX power ladder (tx_ladder.h) */
 };
+
+/*
+ * NOISE payload overlay (little-endian): struct tdma_noise, packed. Levels
+ * are tenths of a dBm.
+ */
+struct soak_noise {
+	uint32_t samples;
+	int16_t  min_dbm10;
+	int16_t  p50_dbm10;
+	int16_t  p90_dbm10;
+	int16_t  max_dbm10;
+	int16_t  mean_dbm10;
+	uint8_t  rx_gain;	/* reg 0x08AC: 0x94 saving, 0x96 boosted */
+} __packed;
+
+BUILD_ASSERT(sizeof(struct soak_noise) <= TDMA_PAYLOAD_LEN,
+	     "soak_noise must fit the record payload");
 
 /*
  * META payload overlay (little-endian, written into soak_rec.payload).
@@ -163,6 +182,7 @@ enum soak_payload_mode {
  *   TONE           fs kHz (8)      f0 Hz (330)
  *   CLIP           codec (0=3200)  clip chunk count
  *   PCM            codec (0=3200)  PCM chunk count (80 ms each)
+ *   LADDER         rungs (8)       TX frames per rung (375)
  *
  * The clip's CRC does not fit here; every clip chunk's header carries it.
  */
@@ -216,7 +236,8 @@ struct soak_log_status {
  *
  * The file name encodes the run: "<PWR>_<DUR>_NNN.BIN" with M/P for the
  * power sign (M9 = -9 dBm, P22 = +22 dBm) and the duration in minutes/hours
- * ("5M", "30M", "2H"; "CT" = continuous, duration_ms == 0). dir is a bare
+ * ("5M", "30M", "2H"; "CT" = continuous, duration_ms == 0). A ladder run
+ * is "LADR_NNN.BIN" instead: its power is not one number. dir is a bare
  * top-level directory name ("DRAWER0"...) or ""/NULL for the card root; a
  * missing drawer is created when the file opens.
  */
@@ -320,6 +341,9 @@ void soak_log_tx_at(const uint8_t payload[TDMA_PAYLOAD_LEN], uint8_t slot_id,
 		    uint32_t enc_us);
 
 void soak_log_stats(const struct tdma_telemetry *t);
+
+/* One NOISE record: a tdma_noise_floor() result. */
+void soak_log_noise(const struct tdma_noise *nf);
 
 /* Drain the ring, flush and close. Blocks briefly for the writer to finish. */
 int soak_log_stop(void);
