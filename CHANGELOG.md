@@ -12,7 +12,7 @@ For hardware wiring, build/flash instructions, and SDK setup, see
 
 On-device radio-evaluation tooling for the nRF5340 DK + Wio-SX1262 (SX1262),
 plus the first slice of the wireless-intercom firmware (TDMA radio layer).
-_Last updated: 2026-10-29._
+_Last updated: 2026-10-30._
 
 ### Where things stand (2026-09-29)
 
@@ -86,6 +86,50 @@ Exactly one `main()` is linked, chosen by the Kconfig choice in
 Four other variants were retired on 2026-09-25: LoRa send, the telemetry
 console, the TDMA UART-shell test and the UART soak harness (see "Streamlined
 to two unit types"). Their sections below are kept as history.
+
+### Ladder runs: gym AVX A/B, open field at 134 m; Molex picked (2026-10-30)
+
+Gym runs `_002`/`_003` in [`soaks/LadderTest_1029/`](soaks/LadderTest_1029),
+open-field runs `_004`–`_007` in
+[`soaks/FieldLadder_1030/`](soaks/FieldLadder_1030). Same two units and
+ladder firmware as 2026-10-29 (MASTER 960166366, SEC 1 1050080691).
+
+- **Gym A/B, same spots as `_000`/`_001`:** `_002`, AVX on both, ran
+  −27/−28 dBm at +22 dBm, 4–6 dB below Molex/Molex (−22/−24). `_003`, one
+  AVX and one Molex, ran −22/−23, inside the Molex range, so most of the
+  AVX deficit was one of the two AVX ends. No loss in either run.
+- **Open field:** 134 m of space, ±1 ft of terrain, antennas ~4 ft high,
+  Molex 2067640100 on both.
+  - `_007`, fixed at 134 m, clear line of sight: −56 dBm at +22 dBm, both
+    directions, 3.8 dB below free space with 0 dBi antennas.
+  - `_006`, the same with the holder's body in between: −59/−60 dBm, so
+    the body costs ~4 dB. At +22 it lost 1.4 % (15 of 1,107, both
+    directions), never more than two in a row. The packets around each
+    loss came in at −60 dBm and SNR 8: other traffic, not range. `_007`
+    lost ~0.5 % at +22.
+  - `_004`, a walk out to ~120 m, unit held at the chest, body in between:
+    path gain levels off at −80 to −84 dB (−58 to −62 dBm at +22) from
+    about a minute in, in line with `_006`.
+  - `_005`, the walk back: the same, until the last ~40 s, when path gain
+    fell another ~15 dB (−75 to −79 dBm at +22, 6–30 % loss). Cause not
+    recorded.
+- **The site was noisy.** Noise at GO was p50 −84 to −90 dBm on both
+  units, with bursts to −49 dBm. On the desk the same day they read −97
+  (gym −96 to −106, pitch ~−105). SNR reached 0 at ~−80 dBm; loss started
+  near −73 dBm and was ~50 % at −84 (pitch: −95 and −103). The low rungs'
+  losses are this floor, not range. Packets at −60 to −70 dBm with good SNR
+  still lost ~3 %: collisions.
+- **Top rung settled: the PA.** +18 → +22 dBm gave only +1 to +2 dB here
+  too, at −56 dBm, where the receiver is far from compression, as in the
+  gym at −22. The PA falls ~2 dB short of +22; harmless.
+- **The pitch shortfall was not mostly bodies.** At ~120 m the pitch's
+  walker-to-walker links ran −100 to −103 dBm at +22, ~40 dB below
+  `_004`. The AVX (4–6 dB in the gym) and bodies (~4 dB each here) leave
+  ~30 dB, from the AVX in open field and/or the pitch site. Not separated:
+  `_006`/`_007` repeated on the pitch with the Molex would split them.
+- **Decision:** the Molex 2067640100 is the antenna to carry forward. It
+  fits inside the enclosure. Next: `_006`/`_007` again with the antenna
+  mounted inside the enclosure on a bicep.
 
 ### TX power ladder test; 50 ft gym runs with Molex flex dipoles (2026-10-29)
 
