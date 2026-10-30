@@ -1,5 +1,5 @@
 /*
- * clip_src - Codec 2 clip for the soak payload. See clip_src.h.
+ * clip_src - pre-encoded speech clip for the soak payload. See clip_src.h.
  *
  * SPDX-License-Identifier: Apache-2.0
  */
@@ -12,7 +12,8 @@
 
 #include "clip_src.h"
 
-BUILD_ASSERT(CLIP_CHUNK == 32, "4 x 8 B Codec 2 3200 frames per payload");
+BUILD_ASSERT(CLIP_CHUNK == 32 || CLIP_CHUNK == 72,
+	     "4 x 8 B Codec 2 3200 or 4 x 18 B Opus frames per payload");
 
 static uint8_t clip_buf[CONFIG_SOAK_CLIP_BUF_KB * 1024];
 
@@ -31,7 +32,7 @@ void clip_src_fill(uint8_t out[TDMA_PAYLOAD_LEN], uint32_t n)
 	uint32_t off = (n % clip_chunks) * CLIP_CHUNK;
 
 	out[0] = CLIP_MAGIC;
-	out[1] = CLIP_CODEC_3200;
+	out[1] = CLIP_CODEC;
 	sys_put_le16((uint16_t)n, &out[2]);
 	sys_put_le16((uint16_t)clip_crc, &out[4]);
 	out[6] = 0;

@@ -40,7 +40,16 @@ Per peer slot:
      drift over the run cancels). Needs three units. The figure is
      stage-to-DIO1 on the air path: it excludes encode, decode and playout.
 
-Codec 2 comes from c2codec.py (pycodec2, else c2enc/c2dec on PATH).
+Opus clips (codec 1, an 80-byte payload build: 72-byte chunks of four 18 B
+SILK frames, c2clip.py opus, docs/opus_payload.md) go through the same steps;
+pass the .op72 clips. Their audio is decoded as decision 3 plays it: one
+persistent decoder, a missing chunk runs the decoder's PLC, played for up to
+two chunks in a row and silence after (opuscodec.decode_chunks()). Both
+codecs are also scored with STOI (pystoi, if importable) against the clip's
+own lossless decode, so 1.000 means the link cost nothing.
+
+Codec 2 comes from c2codec.py (pycodec2, else c2enc/c2dec on PATH), Opus from
+opuscodec.py.
 """
 
 import argparse
@@ -55,6 +64,8 @@ from collections import Counter
 import numpy as np
 
 import c2codec
+import opuscodec
+from c2clip import ref_path
 from decode_soak_log import (PAYLOAD_CLIP, REC_META, REC_TX, iter_records,
                              parse_meta, payload_desc)
 from reconstruct_tone import (clean_rx, frame_period, place, trusted_records,
@@ -69,11 +80,16 @@ CHUNK = 32
 MODE = 3200
 FRAMES_PER_CHUNK = CHUNK // c2codec.frame_bytes(MODE)			# 4
 SAMPLES_PER_CHUNK = FRAMES_PER_CHUNK * c2codec.frame_samples(MODE)	# 640
+CODEC_C2, CODEC_OPUS = 0, 1	# clip header codec byte (clip_src.h)
 
 try:
     from pesq import pesq as pesq_score
 except ImportError:
     pesq_score = None
+try:
+    from pystoi import stoi as stoi_score
+except ImportError:
+    stoi_score = None
 
 
 def s16(x):
@@ -98,7 +114,7 @@ class Unwrap:
 
 def header(p):
     """(chunk_idx, clip_id) of a valid clip payload, else None."""
-    if p[0] != MAGIC or p[1] != c2codec.CODEC_ENUM[MODE]:
+    if p[0] != MAGIC or p[1] not in (CODEC_C2, CODEC_OPUS):
         return None
     idx, cid = struct.unpack_from("<HH", p, 2)
     return idx, cid
@@ -109,7 +125,7 @@ def shifted_header(p):
 
     Returns (chunk_idx, clip_id) of the clip chunk it carries, or None.
     """
-    if p[4] != MAGIC or p[5] != c2codec.CODEC_ENUM[MODE]:
+    if p[4] != MAGIC or p[5] not in (CODEC_C2, CODEC_OPUS):
         return None
     return struct.unpack_from("<HH", p, 6)
 
@@ -139,7 +155,7 @@ def clip_fragments(p, clips):
                     break
                 n, at = n + 1, nxt
             if best is None or n > best[1]:
-                best = (i, n, clip, at // CHUNK, at % CHUNK)
+                best = (i, n, clip, at // clip.chunk_len, at % clip.chunk_len)
         if best is None:
             i += 1
             continue
@@ -149,29 +165,40 @@ def clip_fragments(p, clips):
 
 
 class Clip:
+    """A clip file: .c2 is Codec 2 3200 in 32 B chunks, .op72 Opus in 72 B
+    chunks (c2clip.py opus)."""
+
     def __init__(self, path):
         with open(path, "rb") as f:
             self.data = f.read()
-        if not self.data or len(self.data) % CHUNK:
+        ext = os.path.splitext(path)[1]
+        if ext.startswith(".op") and ext[3:].isdigit():
+            self.codec, self.chunk_len = CODEC_OPUS, int(ext[3:])
+        else:
+            self.codec, self.chunk_len = CODEC_C2, CHUNK
+        if not self.data or len(self.data) % self.chunk_len:
             sys.exit("%s: not a clip (%d B is not a multiple of %d)"
-                     % (path, len(self.data), CHUNK))
+                     % (path, len(self.data), self.chunk_len))
         self.path = path
         self.name = os.path.basename(path)
-        self.chunks = len(self.data) // CHUNK
+        self.chunks = len(self.data) // self.chunk_len
         self.crc = zlib.crc32(self.data) & 0xFFFFFFFF
         self.clip_id = self.crc & 0xFFFF
 
     def chunk(self, n):
-        off = (n % self.chunks) * CHUNK
-        return self.data[off:off + CHUNK]
+        off = (n % self.chunks) * self.chunk_len
+        return self.data[off:off + self.chunk_len]
 
     def ref_pcm(self):
         """The clip's own decode (c2clip.py writes it), or decode it now."""
-        ref = os.path.splitext(self.path)[0] + "_ref.wav"
+        ref = ref_path(self.path)
         if os.path.exists(ref):
             import wave
             with wave.open(ref, "rb") as w:
                 return np.frombuffer(w.readframes(w.getnframes()), "<i2")
+        if self.codec == CODEC_OPUS:
+            return opuscodec.decode_chunks([self.chunk(k)
+                                            for k in range(self.chunks)])
         return c2codec.decode(self.data, MODE)
 
 
@@ -299,29 +326,41 @@ def analyse_slot(chunks, clips):
 
 
 def audio(res, clip, out_path):
-    """Decode the stream, silence for gaps; returns (samples, pesq or None)."""
+    """Decode the stream as a receiver plays it; returns (samples, pesq or
+    None, stoi or None). Codec 2: silence for gaps. Opus: PLC, then silence
+    (opuscodec.decode_chunks())."""
     placed = res["placed"]
     keys = sorted(placed)
     lo, hi = keys[0], keys[-1]
-    present = b"".join(placed[u][0] for u in keys)
-    pcm = c2codec.decode(present, MODE)
-    out = np.zeros((hi - lo + 1) * SAMPLES_PER_CHUNK, np.int16)
-    for i, u in enumerate(keys):
-        seg = pcm[i * SAMPLES_PER_CHUNK:(i + 1) * SAMPLES_PER_CHUNK]
-        out[(u - lo) * SAMPLES_PER_CHUNK:][:len(seg)] = seg
+    codec = clip.codec if clip is not None else (
+        CODEC_C2 if len(placed[lo][0]) == CHUNK else CODEC_OPUS)
+    if codec == CODEC_OPUS:
+        out = opuscodec.decode_chunks([placed[u][0] if u in placed else None
+                                       for u in range(lo, hi + 1)])
+    else:
+        present = b"".join(placed[u][0] for u in keys)
+        pcm = c2codec.decode(present, MODE)
+        out = np.zeros((hi - lo + 1) * SAMPLES_PER_CHUNK, np.int16)
+        for i, u in enumerate(keys):
+            seg = pcm[i * SAMPLES_PER_CHUNK:(i + 1) * SAMPLES_PER_CHUNK]
+            out[(u - lo) * SAMPLES_PER_CHUNK:][:len(seg)] = seg
     write_wav(out_path, out, c2codec.FS)
 
-    score = None
-    if pesq_score is not None and clip is not None:
+    score = st = None
+    if clip is not None and (pesq_score or stoi_score):
         ref = clip.ref_pcm().astype(np.int16)
         start = (lo % clip.chunks) * SAMPLES_PER_CHUNK
         reps = (start + len(out)) // len(ref) + 1
         ref = np.tile(ref, reps)[start:start + len(out)]
-        try:
-            score = float(pesq_score(c2codec.FS, ref, out, "nb"))
-        except Exception as e:	# silence-only or too short
-            score = "n/a (%s)" % e
-    return len(out), score
+        if pesq_score is not None:
+            try:
+                score = float(pesq_score(c2codec.FS, ref, out, "nb"))
+            except Exception as e:	# silence-only or too short
+                score = "n/a (%s)" % e
+        if stoi_score is not None:
+            st = float(stoi_score(ref.astype(np.float64),
+                                  out.astype(np.float64), c2codec.FS))
+    return len(out), score, st
 
 
 def s32(x):
@@ -524,13 +563,16 @@ def main():
 
         if res["placed"]:
             wav = os.path.join(out_dir, "%s_slot%d.wav" % (stem, slot))
-            n, score = audio(res, clip, wav)
-            print("           audio: %s (%.2f s)%s" % (
+            n, score, st = audio(res, clip, wav)
+            print("           audio: %s (%.2f s)%s%s" % (
                 wav, n / c2codec.FS,
                 "" if score is None else ", PESQ nb %s" % (
-                    "%.2f" % score if isinstance(score, float) else score)))
+                    "%.2f" % score if isinstance(score, float) else score),
+                "" if st is None else ", STOI %.3f vs the clip's own decode"
+                % st))
             peer["wav"] = wav
             peer["pesq_nb"] = score
+            peer["stoi_vs_ref"] = st
 
         if slot in sent_by_slot and cid is not None:
             path, sent, their_rx = sent_by_slot[slot]

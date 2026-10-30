@@ -1,0 +1,74 @@
+Codec 2: pycodec2; Opus: libopus unknown (opus.dll)
+OSR_0010_F clean, as sent  c2 0.739  opus7.2 0.830 (+0.090)  5.6 0.730  auto 0.799   delays 160/56/56/60   [106 s]
+OSR_0030_M clean, as sent  c2 0.833  opus7.2 0.907 (+0.074)  5.6 0.828  auto 0.850   delays 132/58/60/56   [223 s]
+OSR_0011_F clean, as sent  c2 0.712  opus7.2 0.827 (+0.115)  5.6 0.735  auto 0.791   delays 160/56/56/56   [325 s]
+quiet_M    quiet -22 dBFS  c2 0.853  opus7.2 0.920 (+0.068)  5.6 0.838  auto 0.865   delays 152/60/62/58   [346 s]
+quiet_F    quiet -22 dBFS  c2 0.772  opus7.2 0.860 (+0.087)  5.6 0.779  auto 0.831   delays 152/58/58/60   [374 s]
+soft_M     quiet -34 dBFS  c2 0.840  opus7.2 0.924 (+0.084)  5.6 0.851  auto 0.869   delays 160/60/58/58   [395 s]
+crowd5_M   crowd +5 dB     c2 0.657  opus7.2 0.706 (+0.050)  5.6 0.632  auto 0.696   delays 158/54/48/46   [416 s]
+crowd0_M   crowd +0 dB     c2 0.572  opus7.2 0.602 (+0.030)  5.6 0.526  auto 0.595   delays 164/60/48/56   [438 s]
+crowd0_F   crowd +0 dB     c2 0.361  opus7.2 0.343 (-0.017)  5.6 0.281  auto 0.362   delays 172/62/58/62   [465 s]
+wind0_M    wind +0 dB      c2 0.828  opus7.2 0.893 (+0.065)  5.6 0.787  auto 0.845   delays 152/60/64/54   [487 s]
+roar0_M    roar +0 dB      c2 0.487  opus7.2 0.548 (+0.060)  5.6 0.485  auto 0.539   delays 72/46/58/54   [508 s]
+
+STOI, lossless
+clip       condition       c2 3200 opus 7.2k   delta opus 5.6k 5.6k auto
+OSR_0010_F clean, as sent    0.739     0.830  +0.090     0.730     0.799
+OSR_0030_M clean, as sent    0.833     0.907  +0.074     0.828     0.850
+OSR_0011_F clean, as sent    0.712     0.827  +0.115     0.735     0.791
+quiet_M    quiet -22 dBFS    0.853     0.920  +0.068     0.838     0.865
+quiet_F    quiet -22 dBFS    0.772     0.860  +0.087     0.779     0.831
+soft_M     quiet -34 dBFS    0.840     0.924  +0.084     0.851     0.869
+crowd5_M   crowd +5 dB       0.657     0.706  +0.050     0.632     0.696
+crowd0_M   crowd +0 dB       0.572     0.602  +0.030     0.526     0.595
+crowd0_F   crowd +0 dB       0.361     0.343  -0.017     0.281     0.362
+wind0_M    wind +0 dB        0.828     0.893  +0.065     0.787     0.845
+roar0_M    roar +0 dB        0.487     0.548  +0.060     0.485     0.539
+mean, clean                  0.791     0.878  +0.086     0.794     0.834
+mean, noisy                  0.581     0.619  +0.038     0.542     0.607
+
+STOI vs chunk loss (mean over clips; PLC <= 2 chunks, nPLC = silence)
+set    loss          c2 3200      opus 7.2k opus 7.2k nPLC      opus 5.6k      5.6k auto
+clean     0 %          0.791          0.878          0.878          0.794          0.834
+clean     2 %          0.767          0.861          0.852          0.778          0.818
+clean     5 %          0.745          0.847          0.828          0.766          0.803
+clean    10 %          0.700          0.810          0.775          0.733          0.766
+noisy     0 %          0.581          0.619          0.619          0.542          0.607
+noisy     2 %          0.569          0.610          0.603          0.536          0.597
+noisy     5 %          0.543          0.593          0.575          0.521          0.580
+noisy    10 %          0.504          0.573          0.534          0.504          0.554
+
+ESTOI, lossless
+clip       condition       c2 3200 opus 7.2k   delta opus 5.6k 5.6k auto
+OSR_0010_F clean, as sent    0.604     0.748  +0.144     0.635     0.686
+OSR_0030_M clean, as sent    0.687     0.824  +0.136     0.726     0.728
+OSR_0011_F clean, as sent    0.552     0.730  +0.178     0.624     0.667
+quiet_M    quiet -22 dBFS    0.686     0.845  +0.158     0.722     0.741
+quiet_F    quiet -22 dBFS    0.611     0.762  +0.150     0.668     0.706
+soft_M     quiet -34 dBFS    0.678     0.854  +0.176     0.742     0.743
+crowd5_M   crowd +5 dB       0.369     0.430  +0.061     0.383     0.395
+crowd0_M   crowd +0 dB       0.303     0.310  +0.007     0.282     0.292
+crowd0_F   crowd +0 dB       0.202     0.171  -0.030     0.142     0.179
+wind0_M    wind +0 dB        0.639     0.807  +0.168     0.665     0.714
+roar0_M    roar +0 dB        0.211     0.236  +0.025     0.206     0.231
+mean, clean                  0.636     0.794  +0.157     0.686     0.712
+mean, noisy                  0.345     0.391  +0.046     0.336     0.362
+
+ESTOI vs chunk loss (mean over clips; PLC <= 2 chunks, nPLC = silence)
+set    loss          c2 3200      opus 7.2k opus 7.2k nPLC      opus 5.6k      5.6k auto
+clean     0 %          0.636          0.794          0.794          0.686          0.712
+clean     2 %          0.613          0.774          0.769          0.670          0.695
+clean     5 %          0.595          0.758          0.747          0.656          0.679
+clean    10 %          0.553          0.714          0.694          0.619          0.638
+noisy     0 %          0.345          0.391          0.391          0.336          0.362
+noisy     2 %          0.336          0.383          0.381          0.330          0.355
+noisy     5 %          0.321          0.368          0.364          0.317          0.344
+noisy    10 %          0.296          0.348          0.337          0.299          0.322
+
+Opus 7.2k complexity, lossless STOI (mean clean / noisy):
+  0: 0.862 / 0.596
+  2: 0.878 / 0.619
+  4: 0.884 / 0.623
+TOC configs: opus 7.2k [1], opus 5.6k [1], 5.6k auto [19]  (1 = SILK NB 20 ms, 17-19 = CELT NB)
+
+C0 STOI bar: opus 7.2k - c2 3200 on clean speech = +0.086 (pass >= +0.08): PASS

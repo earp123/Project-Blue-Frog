@@ -39,6 +39,9 @@
 #ifdef CONFIG_SOAK_AUDIO_HAT
 #include "hat_audio.h"
 #endif
+#ifdef CONFIG_SOAK_OPUS_DEC
+#include "opus_dec.h"
+#endif
 
 /* A source is linked if the bench port can select it, or if it is the one. */
 #define PAYLOAD_TONE_LINKED \
@@ -51,8 +54,10 @@
  * default (it needs a PCM clip, uploaded over RTT, and "mode pcm").
  */
 #define PAYLOAD_PCM_LINKED	IS_ENABLED(CONFIG_SOAK_C2_ENCODE)
-/* The same encoder fed by the WM8960 HAT's mics ("mode mic"). */
-#define PAYLOAD_MIC_LINKED	IS_ENABLED(CONFIG_SOAK_AUDIO_HAT)
+/* The same encoder fed by the WM8960 HAT's mics ("mode mic"). An Opus
+ * decode build has the HAT for its earpieces but no encoder, so no mic mode.
+ */
+#define PAYLOAD_MIC_LINKED 	(IS_ENABLED(CONFIG_SOAK_AUDIO_HAT) && IS_ENABLED(CONFIG_SOAK_C2_ENCODE))
 
 /* The modes whose chunks the on-device encoder makes and stages itself,
  * and whose received chunks go to the decoder.
@@ -115,6 +120,44 @@ static inline void payload_rx_pcm(uint8_t slot_id,
 {
 #ifdef CONFIG_SOAK_C2_ENCODE
 	c2_dec_submit(slot_id, payload);
+#else
+	ARG_UNUSED(slot_id);
+	ARG_UNUSED(payload);
+#endif
+}
+
+/* CLIP mode with CONFIG_SOAK_OPUS_DEC: the peers' Opus chunks are decoded
+ * on the unit (opus_dec.h) and, with the HAT, played to the earpieces.
+ */
+static inline bool payload_decodes_clip(enum soak_payload_mode mode)
+{
+	return IS_ENABLED(CONFIG_SOAK_OPUS_DEC) && mode == SOAK_PAYLOAD_CLIP;
+}
+
+/* Run start and stop for that decoder; no-ops in other builds. */
+static inline int payload_clip_dec_start(uint8_t own_slot)
+{
+#ifdef CONFIG_SOAK_OPUS_DEC
+	return opus_dec_start(own_slot);
+#else
+	ARG_UNUSED(own_slot);
+	return 0;
+#endif
+}
+
+static inline void payload_clip_dec_stop(void)
+{
+#ifdef CONFIG_SOAK_OPUS_DEC
+	opus_dec_stop();
+#endif
+}
+
+/* A received peer payload, for that decoder. */
+static inline void payload_rx_clip(uint8_t slot_id,
+				   const uint8_t payload[TDMA_PAYLOAD_LEN])
+{
+#ifdef CONFIG_SOAK_OPUS_DEC
+	opus_dec_submit(slot_id, payload);
 #else
 	ARG_UNUSED(slot_id);
 	ARG_UNUSED(payload);

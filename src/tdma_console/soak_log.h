@@ -9,7 +9,8 @@
  *    it per packet costs far more CPU than a memcpy. 64 B also divides 512
  *    exactly, so eight records fill a FAT sector with no waste and no
  *    partial-sector rewrite. Text formatting happens offline in the decoder
- *    (tools/decode_soak_log.py), where it is free.
+ *    (tools/decode_soak_log.py), where it is free. 80-byte payloads take
+ *    128 B records (v3), four to a sector.
  *
  * 2. The producer never touches the card. Records go into a k_msgq ring; a
  *    dedicated low-priority writer thread drains it into sd_log. A card stall
@@ -39,6 +40,7 @@
 #include <zephyr/kernel.h>
 #include <zephyr/toolchain.h>
 #include <stdbool.h>
+#include <stddef.h>
 #include <stdint.h>
 
 #include "tdma.h"
@@ -56,16 +58,29 @@
  *     made by dropping rx_ok/missed/dup, which the decoder derives from the
  *     RX records' frame-counter continuity anyway.
  */
-#define SOAK_LOG_VERSION	2
 #define SOAK_LOG_MAGIC		0x4B414F53UL	/* "SOAK", little-endian */
 
-/* Eight records per 512-byte sector. Keep this exact. */
-#define SOAK_REC_SIZE		64
+/*
+ * v3: 80-byte payloads (CONFIG_TDMA_PAYLOAD_LEN=80) in 128 B records, four
+ *     per sector, the payload's tail padded. The fields and their offsets
+ *     are v2's; only the payload length and record size differ, and META's
+ *     payload_len says which. A 40 B build still writes v2.
+ */
+#define SOAK_LOG_VERSION	(TDMA_PAYLOAD_LEN > 40 ? 3 : 2)
+
+/* The fixed header ahead of the payload. */
+#define SOAK_REC_HDR_LEN	24
+
+/* Eight records per 512-byte sector (four at 80 B payloads). Keep this
+ * exact.
+ */
+#define SOAK_REC_SIZE		(TDMA_PAYLOAD_LEN > 40 ? 128 : 64)
 
 /*
- * Ring depth in records. 128 * 64 B = 8 KB, about 2.5 s of headroom at the
- * 20 ms-slot worst case — sized to swallow a card sync stall whole, since
- * anything the ring drops is data the run can never recover.
+ * Ring depth in records. 128 * 64 B = 8 KB (16 KB at 128 B records), about
+ * 2.5 s of headroom at the 20 ms-slot worst case — sized to swallow a card
+ * sync stall whole, since anything the ring drops is data the run can never
+ * recover.
  */
 #define SOAK_LOG_RING_DEPTH	128
 
@@ -106,12 +121,18 @@ struct soak_rec {
 	uint8_t  rsvd[3];
 	uint32_t seq;		/* monotonic; a gap means the ring dropped */
 	uint32_t uptime_ms;	/* wall-clock correlation between the two units */
-	uint8_t  payload[TDMA_PAYLOAD_LEN];	/* 40 B: RX/TX data, or packed
+	uint8_t  payload[TDMA_PAYLOAD_LEN];	/* RX/TX data, or packed
 						 * counters for META/STATS */
+#if SOAK_REC_SIZE > SOAK_REC_HDR_LEN + TDMA_PAYLOAD_LEN
+	uint8_t  pad[SOAK_REC_SIZE - SOAK_REC_HDR_LEN - TDMA_PAYLOAD_LEN];
+#endif
 } __packed;
 
+BUILD_ASSERT(offsetof(struct soak_rec, payload) == SOAK_REC_HDR_LEN,
+	     "soak_rec header layout moved");
 BUILD_ASSERT(sizeof(struct soak_rec) == SOAK_REC_SIZE,
-	     "soak_rec must stay 64 B so 8 pack into a 512 B sector");
+	     "soak_rec must stay 64 B (128 B at 80 B payloads) to pack a "
+	     "512 B sector exactly");
 BUILD_ASSERT(SD_LOG_BLOCK % SOAK_REC_SIZE == 0,
 	     "record size must divide the FAT sector exactly");
 
@@ -180,7 +201,8 @@ BUILD_ASSERT(sizeof(struct soak_noise) <= TDMA_PAYLOAD_LEN,
  *   payload_mode   p8              p16
  *   RAMP           0               0
  *   TONE           fs kHz (8)      f0 Hz (330)
- *   CLIP           codec (0=3200)  clip chunk count
+ *   CLIP           codec (0=3200,  clip chunk count
+ *                  1=Opus)
  *   PCM            codec (0=3200)  PCM chunk count (80 ms each)
  *   LADDER         rungs (8)       TX frames per rung (375)
  *

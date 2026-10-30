@@ -58,8 +58,12 @@ _Last updated: 2026-10-30._
   3. In reserve if the live pipeline needs CPU: fast sin/cos/atan2 in
      synthesis (~2 ms per decode).
   4. Settle Codec 2's LGPL licensing for the product. It is test-only
-     today, behind `CONFIG_SOAK_C2_ENCODE`.
-  5. The four-unit soak (card #23 first).
+     today, behind `CONFIG_SOAK_C2_ENCODE`. Opus (BSD) now decodes on the
+     device; Codec 2 leaves the product once the Opus encoder runs there
+     too (`docs/opus_payload.md` C1).
+  5. ~~The four-unit soak (card #23 first).~~ Done 2026-10-30: #23 fixed,
+     four units at 84 B with Opus decoded on the HATs. Next is a
+     four-unit range test with live audio.
 - **Open questions:**
   - One acquisition in 400 had not locked at 3 s after the sync fix. It
     was not re-checked, so it is unknown whether it was slow or stuck.
@@ -86,6 +90,101 @@ Exactly one `main()` is linked, chosen by the Kconfig choice in
 Four other variants were retired on 2026-09-25: LoRa send, the telemetry
 console, the TDMA UART-shell test and the UART soak harness (see "Streamlined
 to two unit types"). Their sections below are kept as history.
+
+### Opus over the air: C0 passed, 84-byte packets, card #23 fixed, Opus decoded on the HATs (2026-10-30)
+
+Task: [`docs/opus_payload.md`](docs/opus_payload.md). Runs in
+[`soaks/opus_c0/`](soaks/opus_c0) (host), [`soaks/OpusAir_1030/`](soaks/OpusAir_1030)
+(two units), [`soaks/OpusAir4_1030/`](soaks/OpusAir4_1030) (four units) and
+[`soaks/OpusHat_1030/`](soaks/OpusHat_1030), [`soaks/OpusHat2_1030/`](soaks/OpusHat2_1030)
+(four units, three HATs playing). Units: MASTER 960166366, SEC 1 1050080691,
+SEC 2 1050043756 (new, no HAT or card), SEC 3 960170130 (TFT); HATs on 0, 1, 3.
+Bench soaks now run at −9 dBm, the minimum. C2 (the 84 B engine) was brought
+ahead of C1 so that Opus could be heard over the radios.
+
+- **C0 passed.** Opus SILK NB at 7.2 kbit/s CBR against Codec 2 3200 on the
+  three OSR clips and the eight D1 conditions, on the host
+  (`tools/opus_c0.py`, `tools/opuscodec.py`; libopus 1.3.x from PyOgg).
+  - Clean speech: STOI 0.791 → 0.878 (+0.086; the bar is +0.08), ESTOI
+    0.636 → 0.794. In noise +0.038, and −0.017 for the female talker in
+    crowd at 0 dB SNR.
+  - With 80 ms chunks lost at random, Opus's lead grows: at 10 %, 0.700
+    (Codec 2, silence) against 0.810 (Opus, PLC) and 0.775 (Opus, silence).
+  - By ear, the engineer: Opus is "wayyyy better".
+  - libopus codes any 20 ms frame under 15 B as CELT unless SILK is forced
+    (`OPUS_SET_FORCE_MODE`, now in decision 2). Forced, the 68 B fallback
+    (5.6 kbit/s) scores Codec 2's STOI (0.794): a weak fallback.
+  - Complexity 0/2/4: STOI 0.862/0.878/0.884.
+- **84-byte packets** (decisions 4–7):
+  - `CONFIG_TDMA_PAYLOAD_LEN` (40, or 80). `TDMA_TOA_US` is now computed,
+    with a `BUILD_ASSERT` of 7,760 µs at 44 B; 84 B is 12,880 µs.
+  - The pre-TX pickup is 3,500 µs at 80 B.
+  - Soak log v3: 128 B records; the decoder takes the size from META.
+  - Clip chunks are 72 B (four 18 B Opus frames, codec 1), and the clip
+    buffer is 64 KB.
+  - 40 B builds are unchanged, and their logs decode byte for byte as
+    before.
+  - Two units, 5 min, 0 dBm: 3,749 and 3,745 chunks, all bit-exact, none
+    lost. Phase error σ 11 µs, worst +75 µs; pickup margin ≥ 3,390 µs; no
+    stale re-sends or slot timeouts.
+  - **Open, C2's timing check:** boundary → TxDone reads 13,356 µs on both
+    roles against the model's 13,412 (−56 µs; the band is ±30). The slot
+    clock agrees with uptime to 20 ppm, so the packet is ~0.9 symbol
+    shorter on air than the formula at 84 B, while exact at 44 B. Harmless
+    (secondaries run 56 µs early); a third length would show the slope.
+- **Card #23 fixed.** At 84 B with four units, the receive buffer's wrap
+  landed on the staged payload, and most packets went out carrying
+  received bytes.
+  - In continuous RX the chip writes each packet after the previous one,
+    and a `SetRx` while already in RX does not restart that. A TX does:
+    its fallback is FS, and RX entered from FS starts at the base.
+  - `SetBufferBaseAddress` inside RX was tried: it moves the start offset
+    the chip reports, not where it writes, and every later packet read as
+    a bad header. Reverted.
+  - Fix: after every RxDone or HeaderErr, `SetFS`, base, continuous
+    `SetRx` (`tdma_radio_drain_dio1()`, ~0.1 ms, ≥5 ms before the next
+    packet).
+  - Afterwards, four units, 9.5 min: 12 links of ~7,060 chunks, 89 lost
+    (65 on SEC 2 → SEC 3), never two in a row; every chunk received
+    bit-exact. Under that real loss, against each codec's own lossless
+    decode: at ~1 %, STOI 0.960 (Codec 2) against 0.989 (Opus); at 4 %,
+    0.940 against 0.985.
+  - One garbled packet from SEC 3 per receiver (the same at all three, so
+    on its TX side) remains.
+- **Opus decoded on the device, played to the HATs**
+  (`CONFIG_SOAK_OPUS_DEC`, `opus_dec.c`):
+  - libopus 1.5.2 vendored unmodified in [`external/opus/`](external/opus)
+    (BSD), fixed point, scratch on the stack (`VAR_ARRAYS`), states in
+    static buffers.
+  - `CONFIG_SOAK_AUDIO_HAT` no longer needs the Codec 2 encoder.
+  - The clips are still encoded on the host; mic mode needs the Opus
+    encoder (C1).
+  - Cost, C1's decode half: 1.8–2.4 ms per 80 ms chunk, about 0.5 ms per
+    20 ms frame against a 1.5 ms bar. The decoder thread takes 6.6–9.5 %
+    of the core with three peers.
+  - Memory: 17,800 B per state; ~4.5 KB of a 16 KB stack; +93 KB of flash.
+  - **Concealment has to be on time.** The first version concealed a lost
+    chunk when the next one arrived. That made a late write, so the
+    playout resynced and carried 80 ms of extra lead, which took ~40 s of
+    one-sample corrections to remove. The master had 2 resyncs and 847
+    corrections for 2 lost chunks.
+  - Now a chunk not in by a frame plus 20 ms after its predecessor is
+    concealed then, in its own place. Next run: 2–14 concealed chunks per
+    HAT unit, no resyncs, ≤14 corrections. No chunk ever came more than
+    0.5 ms late.
+  - By ear: the master and SEC 3 sound great. **SEC 1 (1050080691) sounds
+    really bad** in both runs, though its decode, PLC, playout and HAT
+    clock counters match the others. Its HAT's output side is the
+    suspect: swap HATs to see whether the fault follows the board.
+- **Host tools:**
+  - `rtt_link.py capture --play SLOT` (`rtt_monitor.py`) plays what a unit
+    hears on the PC, live; keys 0–3 switch units under `--all`.
+  - Capture prints the units' `opus` and `play` status lines every 5 s.
+  - `loss_conditions.py` gives per-link loss, plus Codec 2 against Opus
+    A/Bs under the same real losses.
+  - `reconstruct_c2.py` and `decode_soak_log.py` read v3 logs and Opus
+    clips; `c2clip.py opus` makes the clips.
+  - Four Opus clips are in `soaks/clips` (a fourth talker, `OSR_0031_M`).
 
 ### Ladder runs: gym AVX A/B, open field at 134 m; Molex picked (2026-10-30)
 

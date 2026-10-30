@@ -78,7 +78,7 @@ enum tdma_manual_op {
 struct tdma_manual_req {
 	enum tdma_manual_op op;
 	uint32_t timeout_ms;			/* RX window; NOISE: samples */
-	const uint8_t *payload;			/* TX payload (40 B) */
+	const uint8_t *payload;			/* TX payload (TDMA_PAYLOAD_LEN) */
 	struct tdma_rx_msg *rx;			/* RX result out */
 	struct tdma_noise *noise;		/* NOISE result out */
 	int result;

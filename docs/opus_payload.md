@@ -1,6 +1,9 @@
 # Opus at 7.2 kbit/s on an 84-byte packet: the airtime lever
 
-**Status:** task, 2026-10-30. **Follows:**
+**Status:** task, 2026-10-30. **C0 passed (2026-10-30); C2 brought
+forward ahead of C1 and running on four units** (the engineer asked to hear
+Opus over the radios first, which needs the 84 B engine, not the device
+codec), results at the end. **Follows:**
 [`live_audio_wm8960.md`](live_audio_wm8960.md) (G3: Codec 2 3200 is the
 quality limit), [`mic_dsp_frontend.md`](mic_dsp_frontend.md), and the
 range work through 2026-10-30 (CHANGELOG). **Decision this rests on:**
@@ -45,7 +48,12 @@ it on our clips rather than trusting that.
 2. **Encoder:** `OPUS_APPLICATION_VOIP`, `OPUS_SET_BANDWIDTH(NARROWBAND)`,
    `OPUS_SET_SIGNAL(VOICE)`, `OPUS_SET_VBR(0)` (CBR, so `opus_encode()`
    returns exactly 18 B at `OPUS_SET_BITRATE(7200)`), `OPUS_SET_DTX(0)`,
-   `OPUS_SET_INBAND_FEC(0)`, complexity start at **2**. FEC stays off: the
+   `OPUS_SET_INBAND_FEC(0)`, complexity start at **2**, and
+   `OPUS_SET_FORCE_MODE(MODE_SILK_ONLY)` (request 11002, `opus_private.h`):
+   left to choose, libopus codes any 20 ms frame under 15 B as CELT (the
+   "less than 6 kb/s" rule in `opus_encode_native()`'s auto branch). At
+   7.2 kbit/s forcing changes no byte (C0); it keeps a smaller frame,
+   decision 9's fallback, in SILK. FEC stays off: the
    four frames of a chunk are lost together, so LBRR of frame k−1 inside
    frame k protects nothing we lose. One encoder state per run, as Codec 2
    has.
@@ -85,7 +93,9 @@ it on our clips rather than trusting that.
 9. **Nothing else moves.** Slot width, slot count, SF/BW/CR, preamble,
    the sync constants, the HAT path, playout ring: unchanged. If C2 shows
    84 B does not fit, the fallback is 68 B (4 × 14 B, 5.6 kbit/s), not a
-   slot change.
+   slot change. C0 says it is a weak one: SILK-forced 5.6 kbit/s scores
+   the STOI of Codec 2 3200 on clean speech (0.794 vs 0.791; ESTOI +0.05),
+   so it buys loss concealment, not intelligibility.
 
 ## Gates, in order (Fail Fast)
 
@@ -166,3 +176,52 @@ repeat 1 minute for the A/B.
   the single biggest fixed cost left in the slot. Worth a look after C2.
 - Whether complexity above 2 is audible at 7.2 kbit/s NB. C1 gives the
   CPU cost; C3 can try it if the budget allows.
+
+## Results
+
+Details and figures: the CHANGELOG entry of 2026-10-30.
+
+- **C0, passed (2026-10-30).** On clean speech STOI went 0.791 → 0.878
+  (+0.086 against the +0.08 bar) and ESTOI 0.636 → 0.794. The engineer
+  heard a clear step up ("wayyyy better"). The table is in
+  `soaks/opus_c0/table.txt`, the A/B WAVs beside it.
+  - The host libopus was 1.3.x (PyOgg). The device's 1.5.2 fixed-point
+    build has decoded the same clips bit-exact over the air.
+  - The 68 B fallback is weak: forced to SILK at 5.6 kbit/s it scores
+    Codec 2's STOI (decision 9).
+- **C2, run ahead of C1, with one check open.** The 84 B engine runs on
+  two and four units. Every chunk received was bit-exact, after card #23
+  (the receive-buffer wrap) was fixed in `tdma_radio.c`.
+  - Phase error, pickup margin, stale re-sends and slot timeouts are all
+    inside C2's marks.
+  - **Open:** `tx_evt_dt_us` reads 13,356 µs against 13,412 ± 30. The
+    slot clock checks out, so the airtime at 84 B is ~56 µs shorter than
+    the formula, which is exact at 44 B.
+  - The runs were 5 and 9.5 minutes, not 30, and on clips, not the ramp.
+- **C1, decode half, passed.** About 0.5 ms per 20 ms frame against the
+  1.5 ms bar; 6.6–9.5 % of the core for three peers; 17.8 KB per decoder.
+  The encode half is not done.
+- **C3, informally.** Three HAT units play their peers' Opus clips
+  (`CONFIG_SOAK_OPUS_DEC`). PLC must conceal on time to keep the playout
+  steady (opus_dec.h). Two units sound great. SEC 1 (1050080691) sounds
+  bad with clean counters, so its HAT is suspect. G3's formal run needs
+  the device encoder (mic mode).
+
+### Running it
+
+```sh
+# Clips (host): four 18 B frames per 72 B chunk, plus <clip>_op72_ref.wav
+python src/tdma_console/tools/c2clip.py opus soaks/clips/OSR_us_000_0010_8k.wav -o soaks/clips/OSR_0010_F.op72
+
+# A HAT unit that decodes and plays (shield shown; the TFT the same with its files)
+west build -b nrf5340dk/nrf5340/cpuapp -p always -d build-opdec-m --   "-DEXTRA_DTC_OVERLAY_FILE=boards/nrf5340dk_nrf5340_cpuapp_shield.overlay;boards/audio_hat.overlay"   -DEXTRA_CONF_FILE=boards/nrf5340dk_nrf5340_cpuapp_shield.conf   -DCONFIG_TDMA_PAYLOAD_LEN=80 -DCONFIG_SOAK_OPUS_DEC=y -DCONFIG_SOAK_AUDIO_HAT=y   -DCONFIG_SOAK_UNIT_SLOT=0 -DCONFIG_SOAK_BOOT_TX_POWER_DBM=-9
+
+# Per unit, after every boot (the clip lives in RAM): upload, clip mode
+python src/tdma_console/tools/rtt_link.py --sn <serial> clip soaks/clips/OSR_0010_F.op72
+python src/tdma_console/tools/rtt_link.py --sn <serial> mode clip
+
+# All units: soak, capture, live opus/play counters; --play SLOT also plays
+# that unit's ears on the PC (keys 0-3 in a real console)
+python src/tdma_console/tools/rtt_link.py --all capture -o soaks/<run>/ --soak 5
+python src/tdma_console/tools/loss_conditions.py soaks/<run>/*.bin
+```

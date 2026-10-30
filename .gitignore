@@ -20,3 +20,11 @@ soaks/mic_dsp_d1/*_in.wav
 soaks/mic_dsp_d1/*_clean.wav
 soaks/mic_dsp_d1/*_cond.wav
 soaks/mic_dsp_d1/*_raw.wav
+
+# Opus over-the-air runs (docs/opus_payload.md): logs, captures, JSON and the
+# 15 s listening files are kept. The 5-minute per-slot decodes and the
+# loss-condition A/Bs regenerate with reconstruct_c2.py / loss_conditions.py;
+# OpusLive_1030 was the PC monitor's shakedown.
+soaks/Opus*/*_slot[0-9].wav
+soaks/Opus*/conditions/
+soaks/OpusLive_1030/

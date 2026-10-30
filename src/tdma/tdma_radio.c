@@ -392,6 +392,34 @@ int tdma_radio_drain_dio1(struct tdma_radio_event *ev)
 		}
 	}
 
+	/*
+	 * Card #23: in continuous RX the chip writes each packet after the
+	 * previous one, not at the RX base, and a SetRx while already in RX
+	 * does not restart it. The third packet between two of a unit's own
+	 * TXs (four units) wraps the 256 B buffer onto the staged TX packet;
+	 * at 84 B it lands on the payload, not just the header. A reception
+	 * entered from FS starts at the base (what follows every TX, whose
+	 * fallback is FS), so after every packet, read or not, drop to FS and
+	 * re-enter continuous RX. SetBufferBaseAddress inside RX instead
+	 * moves the reported start offset but not the write pointer: every
+	 * later packet read back as a bad header (2026-10-30).
+	 */
+	if (ev->irq & (SX126X_IRQ_RX_DONE | SX126X_IRQ_HEADER_ERR)) {
+		ret = sx126x_cmd_set_fs();
+		if (ret < 0) {
+			return ret;
+		}
+		ret = sx126x_cmd_set_buffer_base_address(TDMA_TX_BASE_ADDR,
+							 TDMA_RX_BASE_ADDR);
+		if (ret < 0) {
+			return ret;
+		}
+		ret = sx126x_cmd_set_rx(SX126X_RX_CONTINUOUS);
+		if (ret < 0) {
+			return ret;
+		}
+	}
+
 	return 0;
 }
 

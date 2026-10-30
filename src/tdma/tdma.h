@@ -2,8 +2,9 @@
  * tdma - public API of the intercom TDMA radio layer (L2).
  *
  * This is the only header the application / future L3 sees. The radio is a
- * fixed 4-slot TDMA broadcast flood: every unit transmits one 44-byte packet
- * in its own slot and receives in the other three, every frame, forever.
+ * fixed 4-slot TDMA broadcast flood: every unit transmits one fixed-length
+ * packet (44 B, or 84 B with CONFIG_TDMA_PAYLOAD_LEN=80) in its own slot and
+ * receives in the other three, every frame, forever.
  * Frame timing is anchored by the master unit's slot-0 packets.
  *
  * SPDX-License-Identifier: Apache-2.0
@@ -36,30 +37,45 @@
  */
 #define TDMA_PREAMBLE_SYMS	12
 
-/* Fixed on-air payload: 4-byte L2 header + 40 bytes of opaque L3 payload. */
+/*
+ * Fixed on-air payload: 4-byte L2 header + CONFIG_TDMA_PAYLOAD_LEN bytes of
+ * opaque L3 payload (40, or 80 for Opus, docs/opus_payload.md). Every unit
+ * in a group must be built with the same length.
+ */
 #define TDMA_HDR_LEN		4
-#define TDMA_PAYLOAD_LEN	40
+#define TDMA_PAYLOAD_LEN	CONFIG_TDMA_PAYLOAD_LEN
 #define TDMA_ON_AIR_LEN		(TDMA_HDR_LEN + TDMA_PAYLOAD_LEN)
 
 /* SX1262 data buffer split: staged TX at 0x00, RX landing zone at 0x80.
- * The fixed 44-byte length means RX can never overrun into the TX region.
+ * The fixed length (at most 128 B) means RX can never overrun into the TX
+ * region: 84 B is 0x00-0x53 and 0x80-0xD3.
  */
 #define TDMA_TX_BASE_ADDR	0x00
 #define TDMA_RX_BASE_ADDR	0x80
+BUILD_ASSERT(TDMA_ON_AIR_LEN <= TDMA_RX_BASE_ADDR - TDMA_TX_BASE_ADDR,
+	     "TX packet would run into the RX landing zone");
 
 /*
  * Time-on-air at SF5 / BW 500 kHz / CR 4-5, explicit header, CRC on,
- * LDRO off, 12-symbol preamble, 44-byte payload:
+ * LDRO off, 12-symbol preamble, L-byte packet:
  *   t_sym      = 2^5 / 500 kHz                = 64 us
  *   t_preamble = (12 + 6.25) * t_sym          = 1168 us
  *     (SF5/SF6 carry a 6.25-symbol sync overhead, not the 4.25 of
  *      SF7+ — SX1261/2 datasheet, LoRa time-on-air)
- *   n_payload  = 8 + ceil((8*44 - 4*5 + 28 + 16) / (4*5)) * (4+1)
- *              = 8 + 19*5                     = 103 symbols
- *   t_payload  = 103 * t_sym                  = 6592 us
- *   total                                     = 7760 us
+ *   n_payload  = 8 + ceil((8*L - 4*5 + 28 + 16) / (4*5)) * (4+1)
+ *   L = 44:    = 8 + 19*5 = 103 symbols, 6592 us, total 7760 us
+ *   L = 84:    = 8 + 35*5 = 183 symbols, 11712 us, total 12880 us
+ * Computed, never typed in: every TOA/latency bug so far was a constant
+ * drifting from its definition. 7760 at 44 B is the measured anchor
+ * (tx_evt_dt_us = TOA + TDMA_TX_START_LATENCY_US, 2026-08-16).
  */
-#define TDMA_TOA_US		7760
+#define TDMA_T_SYM_US		64
+#define TDMA_PREAMBLE_US	((TDMA_PREAMBLE_SYMS * 4 + 25) * TDMA_T_SYM_US / 4)
+#define TDMA_PAYLOAD_SYMS(len)	(8 + 5 * ((8 * (len) + 24 + 19) / 20))
+#define TDMA_TOA_LEN_US(len) \
+	(TDMA_PREAMBLE_US + TDMA_T_SYM_US * TDMA_PAYLOAD_SYMS(len))
+#define TDMA_TOA_US		TDMA_TOA_LEN_US(TDMA_ON_AIR_LEN)
+BUILD_ASSERT(TDMA_TOA_LEN_US(44) == 7760, "TOA formula off its 44 B anchor");
 
 /*
  * Production slot width. Bring-up ran at 50 ms for fat guard bands; the flip
@@ -67,9 +83,10 @@
  * the lock threshold at the wider width. Frame is always 4 slots, so this one
  * constant sets the frame too — everything below derives from it.
  *
- * Worst in-slot completion is TDMA_TX_START_LATENCY_US + TDMA_TOA_US = 8292 us,
- * which must stay under TDMA_SLOT_ACTIVE_US (18 ms here). That is the number
- * that limits how far this can tighten, and it is measured, not derived.
+ * Worst in-slot completion is TDMA_TX_START_LATENCY_US + TDMA_TOA_US = 8292 us
+ * at 44 B (13412 us at 84 B), which must stay under TDMA_SLOT_ACTIVE_US (18 ms
+ * here). That is the number that limits how far this can tighten, and it is
+ * measured, not derived.
  */
 #define TDMA_SLOT_DURATION_US	20000
 #define TDMA_SLOT_COUNT		4
@@ -96,13 +113,15 @@
  * Pre-TX pickup: how long before its own TX boundary a unit takes the
  * newest staged payload into the chip (tdma_core_on_pre_tx(), on a second
  * slot-timer alarm). A payload submitted before this point makes the frame.
- * It must cover the alarm-to-radio-thread wake plus one 40 B WriteBuffer
- * (~0.7 ms at the 500 kHz bus) with room to spare, so the TX slot entry
- * is never delayed; telemetry.pre_tx_margin_min_us is the check. Before
- * this pickup existed the last guaranteed one was the preceding slot's
- * RX-slot entry, a full slot ahead (docs/stage_lead_sweep.md).
+ * It must cover the alarm-to-radio-thread wake plus one payload WriteBuffer
+ * (~0.7 ms for 40 B at the 500 kHz bus, ~1.4 ms for 80 B) with room to
+ * spare, so the TX slot entry is never delayed;
+ * telemetry.pre_tx_margin_min_us is the check. 2500 us at 40 B; the
+ * extra 1 ms at 80 B keeps the same spare. Before this pickup existed the
+ * last guaranteed one was the preceding slot's RX-slot entry, a full slot
+ * ahead (docs/stage_lead_sweep.md).
  */
-#define TDMA_PRE_TX_PICKUP_US	2500
+#define TDMA_PRE_TX_PICKUP_US	(TDMA_PAYLOAD_LEN > 40 ? 3500 : 2500)
 
 /*
  * There is deliberately no RX guard lead. An earlier revision biased the
@@ -165,7 +184,7 @@ struct tdma_telemetry {
 	uint32_t tx_done;
 	uint32_t rx_done;
 	uint32_t rx_crc_err;		/* payload CRC or header CRC errors */
-	uint32_t rx_bad_header;		/* length != 44 or magic/version mismatch */
+	uint32_t rx_bad_header;		/* length != TDMA_ON_AIR_LEN or magic/version mismatch */
 	uint32_t slot_timeouts;		/* RX slots that saw no packet */
 	uint32_t stale_retx;		/* TX slots entered without a fresh payload */
 	uint32_t busy_timeouts;		/* fatal: BUSY never deasserted */

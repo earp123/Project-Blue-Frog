@@ -28,16 +28,20 @@
 #ifdef CONFIG_SOAK_MIC_DSP
 #include "mic_dsp.h"
 #endif
+#ifdef CONFIG_SOAK_OPUS_DEC
+#include "opus_dec.h"
+#endif
 
 #define CH_SOAK		1	/* up: record stream */
 #define CH_CTL		1	/* down: commands */
 #define CH_REPLY	2	/* up: replies */
 
 /*
- * 8 KB matches the soak_log ring: ~2.5 s at the 20 ms slot, enough to
- * swallow a host hiccup or a capture started a moment late.
+ * The size of the soak_log ring (8 KB, 16 KB at 128 B records): ~2.5 s at
+ * the 20 ms slot, enough to swallow a host hiccup or a capture started a
+ * moment late.
  */
-static uint8_t soak_buf[8192];
+static uint8_t soak_buf[SOAK_REC_SIZE * SOAK_LOG_RING_DEPTH];
 static uint8_t reply_buf[2048];	/* bench + profile: ~10 lines at once */
 static uint8_t ctl_buf[1024];
 #ifdef CONFIG_SOAK_AUDIO_HAT
@@ -686,6 +690,45 @@ static const char *sync_name(uint8_t s)
 	}
 }
 
+#ifdef CONFIG_SOAK_AUDIO_HAT
+/* The HAT's two status lines, in either decoder's build. */
+static void status_hat(void)
+{
+	struct hat_audio_stats hs;
+	static const char *const mix_name[] = { "avg", "left", "right" };
+
+	hat_audio_get_stats(&hs);
+	/* hat = codec ACKed/I2C retries/5 ms blocks/LRCLK mHz/I2S restarts/
+	 * timeouts; slip = short/drop/frames served this run; peak = left/
+	 * right since the last status.
+	 */
+	reply("ok hat %u/%u/%u/%u/%u/%u mix=%s slip=%u/%u/%u peak=%d/%d",
+	      hs.codec_ok, hs.i2c_retries, hs.blocks, hs.rate_mhz, hs.restarts,
+	      hs.timeouts, mix_name[hat_audio_get_mix()], hs.slip_short,
+	      hs.slip_drop, hs.frames, hs.peak[0], hs.peak[1]);
+
+	struct hat_play_stats ps;
+
+	hat_audio_get_play_stats(&ps);
+	/* play = chunks/starts/missing/dup/resync; corr = drop/repeat;
+	 * lead = min/max samples between write and play (target 320).
+	 */
+	int lsn = hat_audio_get_listen();
+	char lbuf[4];
+
+	snprintf(lbuf, sizeof(lbuf), "%d", lsn);
+	/* listen = all, or the one slot played (test); rawmic = on/off and
+	 * frames skipped (RTT buffer full).
+	 */
+	reply("ok play %u/%u/%u/%u/%u corr=%u/%u lead=%d/%d listen=%s "
+	      "rawmic=%s/%u", ps.chunks, ps.starts, ps.missing, ps.dup,
+	      ps.resync, ps.corr_drop, ps.corr_rep,
+	      ps.chunks ? ps.lead_min : 0, ps.chunks ? ps.lead_max : 0,
+	      lsn < 0 ? "all" : lbuf, rtt_link_raw_on() ? "on" : "off",
+	      raw_skipped);
+}
+#endif
+
 static void do_status(const struct rtt_link_ops *ops)
 {
 	struct rtt_link_unit u;
@@ -740,38 +783,7 @@ static void do_status(const struct rtt_link_ops *ops)
 	      ds.dec_max_us, ds.mix_max_us, ds.stack_unused, ds.heap_left,
 	      cpu.busy, cpu.enc, cpu.dec, cpu.radio, cpu.data);
 #ifdef CONFIG_SOAK_AUDIO_HAT
-	struct hat_audio_stats hs;
-	static const char *const mix_name[] = { "avg", "left", "right" };
-
-	hat_audio_get_stats(&hs);
-	/* hat = codec ACKed/I2C retries/5 ms blocks/LRCLK mHz/I2S restarts/
-	 * timeouts; slip = short/drop/frames served this run; peak = left/
-	 * right since the last status.
-	 */
-	reply("ok hat %u/%u/%u/%u/%u/%u mix=%s slip=%u/%u/%u peak=%d/%d",
-	      hs.codec_ok, hs.i2c_retries, hs.blocks, hs.rate_mhz, hs.restarts,
-	      hs.timeouts, mix_name[hat_audio_get_mix()], hs.slip_short,
-	      hs.slip_drop, hs.frames, hs.peak[0], hs.peak[1]);
-
-	struct hat_play_stats ps;
-
-	hat_audio_get_play_stats(&ps);
-	/* play = chunks/starts/missing/dup/resync; corr = drop/repeat;
-	 * lead = min/max samples between write and play (target 320).
-	 */
-	int lsn = hat_audio_get_listen();
-	char lbuf[4];
-
-	snprintf(lbuf, sizeof(lbuf), "%d", lsn);
-	/* listen = all, or the one slot played (test); rawmic = on/off and
-	 * frames skipped (RTT buffer full).
-	 */
-	reply("ok play %u/%u/%u/%u/%u corr=%u/%u lead=%d/%d listen=%s "
-	      "rawmic=%s/%u", ps.chunks, ps.starts, ps.missing, ps.dup,
-	      ps.resync, ps.corr_drop, ps.corr_rep,
-	      ps.chunks ? ps.lead_min : 0, ps.chunks ? ps.lead_max : 0,
-	      lsn < 0 ? "all" : lbuf, rtt_link_raw_on() ? "on" : "off",
-	      raw_skipped);
+	status_hat();
 #endif
 #ifdef CONFIG_SOAK_MIC_DSP
 	struct mic_dsp_stats dsp;
@@ -798,6 +810,24 @@ static void do_status(const struct rtt_link_ops *ops)
 	      clip_src_chunks(), clip_src_crc(), rtt_link_lead_us(),
 	      ls.rtt_dropped, t->pre_tx_pickups, t->pre_tx_staged,
 	      (int)t->pre_tx_margin_min_us, (int)t->pre_tx_margin_last_us);
+#ifdef CONFIG_SOAK_OPUS_DEC
+	struct opus_dec_stats os;
+
+	opus_dec_get_stats(&os);
+	/* opus = decoded/PLC played/PLC silent/resets/late/bad/errors/dropped;
+	 * us = per chunk (4 frames) avg/max, PLC chunk max; late = worst
+	 * arrival past a frame, us; stack never used and one decoder state,
+	 * bytes; cpu = decoder thread, tenths of a percent.
+	 */
+	reply("ok opus %u/%u/%u/%u/%u/%u/%u/%u us=%u/%u/%u late=%u stack=%u "
+	      "state=%u cpu=%u", os.decoded, os.plc_played, os.plc_silent,
+	      os.resets, os.late, os.bad, os.errors, os.dropped, os.dec_avg_us,
+	      os.dec_max_us, os.plc_max_us, os.late_max_us, os.stack_unused,
+	      os.state_bytes, os.cpu);
+#endif
+#ifdef CONFIG_SOAK_AUDIO_HAT
+	status_hat();
+#endif
 #endif
 }
 

@@ -135,7 +135,9 @@ Both types behave the same way:
 - **TX power:** −9…+22 dBm, applied from the next packet. Both unit types
   boot at +22 dBm.
 - **SD logging:** every soak writes `<PWR>_<DUR>_NNN.BIN` (e.g.
-  `P0_5M_000.BIN`) with one 64-byte record per packet. Decode with
+  `P0_5M_000.BIN`) with one 64-byte record per packet (128 bytes in an
+  80-byte-payload build, `CONFIG_TDMA_PAYLOAD_LEN=80`,
+  docs/opus_payload.md). Decode with
   [`src/tdma_console/tools/decode_soak_log.py`](src/tdma_console/tools/decode_soak_log.py).
   Each file's header records the unit's role and slot.
 - **Buttons:** B1 = UP, B2 = DOWN, B3 = OK, B4 = BACK. On the shield unit, B4

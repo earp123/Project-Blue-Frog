@@ -790,6 +790,20 @@ static void soak_start(int64_t duration_ms, bool sd)
 	}
 #endif
 
+	/* CLIP mode in an Opus decode build: the peers' chunks are decoded
+	 * (and, with the HAT, played) on the unit (opus_dec.h).
+	 */
+	if (payload_decodes_clip(mode)) {
+		rc = payload_clip_dec_start(my_slot);
+		if (rc < 0) {
+			snprintf(home_msg, sizeof(home_msg), "dec err %d", rc);
+			tdma_stop();
+			soak_log_stop();
+			screen = SCR_HOME;
+			return;
+		}
+	}
+
 	/*
 	 * Baseline counter snapshot at t=0. The engine's counters are not
 	 * reset by tdma_start(), so they carry over between soaks in one boot;
@@ -843,6 +857,7 @@ static void soak_finish(void)
 	c2_enc_stop();
 	c2_dec_stop();
 #endif
+	payload_clip_dec_stop();
 	/* A ladder leaves the top rung latched: back to the unit's setting. */
 	if (payload_is_ladder(soak.payload_mode)) {
 		(void)tdma_set_tx_power((int8_t)tx_power_dbm);
@@ -879,6 +894,8 @@ static void soak_data_step(void)
 		soak_log_rx(&msg, tdma_get_telemetry()->sync_state);
 		if (payload_is_c2(soak.payload_mode)) {
 			payload_rx_pcm(msg.slot_id, msg.payload);
+		} else if (payload_decodes_clip(soak.payload_mode)) {
+			payload_rx_clip(msg.slot_id, msg.payload);
 		}
 
 		if (soak.have_ctr[s]) {

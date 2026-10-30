@@ -1,12 +1,12 @@
 /*
  * tdma_buf - frame header pack/unpack and the TX staging buffer.
  *
- * On-air layout (first TDMA_HDR_LEN of the 44 bytes):
+ * On-air layout (first TDMA_HDR_LEN of the TDMA_ON_AIR_LEN bytes):
  *   0: uint8  magic_ver  - 0xA1
  *   1: uint8  slot_id    - transmitter's slot 0-3
  *   2: uint16 frame_ctr  - little-endian; master increments,
  *                          secondaries echo last-heard
- *   4..43: opaque payload (40 B) - L3's business
+ *   4..:   opaque payload (TDMA_PAYLOAD_LEN, 40 or 80 B) - L3's business
  *
  * SPDX-License-Identifier: Apache-2.0
  */

@@ -2,8 +2,10 @@
 """Decode a binary soak log (SOAKnnn.BIN) written by the TDMA field console.
 
 The firmware writes fixed 64-byte records so the on-device cost is a memcpy and
-each FAT sector holds exactly 8 records. All the text formatting happens here,
-where it is free.
+each FAT sector holds exactly 8 records; with 80-byte payloads
+(CONFIG_TDMA_PAYLOAD_LEN=80, format v3) they are 128 B, 4 per sector, and the
+size comes from the log itself (rec_layout()). All the text formatting happens
+here, where it is free.
 
 Usage:
     python decode_soak_log.py SOAK000.BIN                 # summary only
@@ -27,8 +29,10 @@ import struct
 import sys
 from collections import Counter, namedtuple
 
-REC_SIZE = 64
-REC_FMT = "<BBBBIHhb3sII40s"
+REC_SIZE = 64		# v2; a v3 log's 128 B records: rec_layout()
+REC_FMT = "<BBBBIHhb3sII40s"	# one v2 record
+REC_HDR = 24
+REC_HDR_FMT = "<BBBBIHhb3sII"	# the header every version shares
 META_FMT = "<IHBBIIIIBBHbBBBIBBH"
 MAGIC = 0x4B414F53  # "SOAK"
 # META payload_mode (zero in pre-tone v2 files). p8 / p16 mean, per mode:
@@ -38,13 +42,13 @@ MAGIC = 0x4B414F53  # "SOAK"
 PAYLOAD_RAMP, PAYLOAD_TONE, PAYLOAD_CLIP, PAYLOAD_PCM, PAYLOAD_MIC =     0, 1, 2, 3, 4
 PAYLOAD_LADDER = 5
 MIX_NAME = {0: "avg", 1: "left", 2: "right"}
-CODEC_NAME = {0: "3200"}	# Codec 2 mode enum in the clip header
+CODEC_NAME = {0: "3200", 1: "opus"}	# clip header codec byte
 
 # One on-disk record, unpacked. index is the record's position in the file.
 Rec = namedtuple("Rec", "index type slot_id sync flags t_us frame_ctr rssi snr"
                         " seq uptime_ms payload rsvd")
 
-SOAK_LOG_VERSION = 2	# newest format this decoder writes assumptions for
+SOAK_LOG_VERSION = 3	# newest format this decoder writes assumptions for
 REC_META, REC_RX, REC_TX, REC_STATS, REC_NOISE = 1, 2, 3, 4, 5
 TYPE_NAME = {REC_META: "meta", REC_RX: "rx", REC_TX: "tx", REC_STATS: "stats",
              REC_NOISE: "noise"}
@@ -86,12 +90,37 @@ CSV_FIELDS = ["seq", "type", "uptime_ms", "t_us", "slot_id", "sync",
               "frame_ctr", "rssi", "snr"] + ALL_STATS_FIELDS + ["payload"]
 
 
+def rec_layout(blob):
+    """(record size, payload length) of a log: (64, 40), or (128, 80) in v3.
+
+    Record 0 is META in every log, and in a capture started before its soak;
+    its payload_len says. Without one (a capture joined mid-run) the size is
+    the one under which seq runs on from record to record.
+    """
+    if len(blob) >= REC_SIZE and blob[0] == REC_META:
+        meta = parse_meta(blob[REC_HDR:REC_SIZE])
+        if meta is not None:
+            n = meta["payload_len"]
+            return (REC_SIZE if n <= 40 else 128), n
+
+    def runs(size):
+        seqs = [struct.unpack_from("<I", blob, off + 16)[0]
+                for off in range(0, min(len(blob), 64 * size) - size + 1,
+                                 size)]
+        return sum(b == a + 1 for a, b in zip(seqs, seqs[1:]))
+
+    size = max((REC_SIZE, 128), key=runs)
+    return size, (40 if size == REC_SIZE else 80)
+
+
 def iter_records(blob):
-    """Yield every whole 64-byte record in blob as a Rec, in file order."""
-    for i in range(len(blob) // REC_SIZE):
+    """Yield every whole record in blob as a Rec, in file order."""
+    size, plen = rec_layout(blob)
+    for i in range(len(blob) // size):
+        off = i * size
         (rtype, slot_id, sync, flags, t_us, frame_ctr, rssi, snr, rsvd,
-         seq, uptime_ms, payload) = struct.unpack_from(REC_FMT, blob,
-                                                       i * REC_SIZE)
+         seq, uptime_ms) = struct.unpack_from(REC_HDR_FMT, blob, off)
+        payload = blob[off + REC_HDR:off + REC_HDR + plen]
         # rsvd last, so positional users of the older fields are unchanged.
         yield Rec(i, rtype, slot_id, sync, flags, t_us, frame_ctr, rssi, snr,
                   seq, uptime_ms, payload, rsvd)
@@ -195,10 +224,11 @@ def main():
     args = ap.parse_args()
 
     blob = open(args.logfile, "rb").read()
-    total = len(blob) // REC_SIZE
-    if len(blob) % REC_SIZE:
+    size = rec_layout(blob)[0]
+    total = len(blob) // size
+    if len(blob) % size:
         print("note: %d trailing bytes ignored (partial record)"
-              % (len(blob) % REC_SIZE), file=sys.stderr)
+              % (len(blob) % size), file=sys.stderr)
 
     meta = None
     rows = []

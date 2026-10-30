@@ -6,7 +6,8 @@ they are made, and a small command channel starts and stops soaks. The
 firmware side is src/tdma_console/rtt_link.{c,h}; the task write-up is
 docs/rtt_link_c2_transport.md.
 
-    up 1    soak records, the same 64 B stream the card gets (META first)
+    up 1    soak records, the same stream the card gets (META first; 64 B
+            records, 128 B with 80 B payloads)
     up 2    one text reply per command: "ok ..." or "err <reason>"
     down 1  text commands, "\\n"-terminated, plus clip bytes
 
@@ -32,6 +33,7 @@ Usage:
     rtt_link.py --sn N clip clip_F.c2         # "clip <n> <crc>" + the bytes
     rtt_link.py --sn N capture -o m.bin [--minutes M] [--soak M [--sd]]
     rtt_link.py --all capture -o soaks/rtt/ [--soak M]
+    rtt_link.py --all capture -o DIR --soak M --play 1   # hear slot 1's ears
     rtt_link.py --list                        # connected J-Link serials
 
 Start capture before the soak for a gap-free file: the unit's 8 KB up buffer
@@ -58,8 +60,9 @@ import zlib
 DEVICE = "nRF5340_xxAA_APP"
 UP_SOAK, UP_CTL, DOWN_CTL = 1, 2, 1
 UP_RAW = 3              # raw mic frames (HAT builds, "rawmic on")
-REC_SIZE = 64
+REC_SIZE = 64           # 128 with 80 B payloads (v3; META's payload_len)
 REC_META = 1
+REC_META_PLEN = 24 + 30  # META payload_len: record header + soak_meta offset
 POLL_S = 0.005          # up-buffer drain period
 REPLY_TIMEOUT_S = 10.0  # stop waits up to 5 s on the card writer
 
@@ -189,11 +192,22 @@ class RecCounter:
         self.gaps = 0
         self.missing = 0
         self.next_seq = None
+        self.size = None        # from the first META: 64, or 128 (v3)
 
     def feed(self, data):
         self.pending += data
-        whole = len(self.pending) // REC_SIZE * REC_SIZE
-        for off in range(0, whole, REC_SIZE):
+        if self.size is None:
+            if len(self.pending) < REC_SIZE:
+                return
+            # The first record is META when the capture began before the
+            # soak (the documented way); 64 B until one says otherwise.
+            self.size = REC_SIZE
+            if self.pending[0] == REC_META and \
+                    self.pending[REC_META_PLEN] > 40:
+                self.size = 128
+        size = self.size
+        whole = len(self.pending) // size * size
+        for off in range(0, whole, size):
             rtype = self.pending[off]
             (seq,) = struct.unpack_from("<I", self.pending, off + 16)
             if rtype == REC_META and seq == 0:
@@ -217,6 +231,18 @@ def capture_path(link, out):
     return os.path.join(out, f"{unit}_{link.sn}_{stamp}.bin")
 
 
+def listen_slot(args):
+    """The slot --play listens as: the --all parent's control file (keys
+    0-3, m = -1), else the --play value."""
+    if args.play_ctl:
+        try:
+            with open(args.play_ctl) as f:
+                return int(f.read().strip() or "-1")
+        except (OSError, ValueError):
+            return -1
+    return args.play
+
+
 def cmd_capture(link, args):
     path = capture_path(link, args.out)
     # Stale records from before this capture would open the file mid-run.
@@ -231,6 +257,12 @@ def cmd_capture(link, args):
             pass
 
     cnt = RecCounter()
+    mon = None
+    if args.play is not None:
+        import rtt_monitor
+        own = int(parse_status(link.command("status")).get("slot", "-1"))
+        mon = rtt_monitor.Monitor(own)
+    last_ctl = 0.0
     t0 = last_data = last_print = time.monotonic()
     seen_data = False
     soak_sent = args.soak is None
@@ -239,6 +271,9 @@ def cmd_capture(link, args):
     try:
         with open(path, "wb") as f:
             while True:
+                if mon is not None and time.monotonic() - last_ctl >= 0.2:
+                    last_ctl = time.monotonic()
+                    mon.set_active(listen_slot(args) == mon.own)
                 if link.has_raw:
                     raw = link.read(UP_RAW, 16384)
                     if raw:
@@ -252,6 +287,8 @@ def cmd_capture(link, args):
                 if data:
                     f.write(data)
                     cnt.feed(data)
+                    if mon is not None:
+                        mon.feed(data)
                     seen_data = True
                     last_data = now
                 else:
@@ -274,6 +311,17 @@ def cmd_capture(link, args):
                     print(f"[{link.sn}] {el:6.0f} s  {cnt.records} rec  "
                           f"{cnt.records / el:5.1f} rec/s  gaps {cnt.gaps} "
                           f"(missing {cnt.missing})", flush=True)
+                    if mon is not None and mon.active:
+                        print(f"[{link.sn}] >> listening as slot {mon.own}: "
+                              f"{mon.status()}", flush=True)
+                    if soak_sent and args.soak is not None:
+                        # On-device decode builds: the decoder's and the
+                        # earpieces' counters, live (the soak channel is
+                        # separate, so this costs the stream nothing).
+                        for line in link.command("status").splitlines():
+                            if line.startswith(("ok opus", "ok play")):
+                                print(f"[{link.sn}]    {line[3:]}",
+                                      flush=True)
 
                 if args.minutes and now - t0 >= args.minutes * 60:
                     why = "time limit"
@@ -284,6 +332,8 @@ def cmd_capture(link, args):
                     break
     except KeyboardInterrupt:
         pass
+    if mon is not None:
+        mon.close()
     if raw_f is not None:
         raw_f.close()
         print(f"[{link.sn}] raw mic: {raw_bytes} B "
@@ -435,17 +485,42 @@ def run_all(args, argv):
     if not serials:
         sys.exit("no J-Link emulators connected")
     rest = [a for a in argv if a != "--all"]
+    ctl = None
+    if args.cmd == "capture" and args.play is not None:
+        # Which unit's ears are on the speakers: one small file the
+        # children poll, rewritten by keys 0-3 (m mutes).
+        os.makedirs(args.out, exist_ok=True)
+        ctl = os.path.join(args.out, ".listen")
+        with open(ctl, "w") as f:
+            f.write(str(args.play))
+        rest += ["--play-ctl", ctl]
+        print("listening as slot %d: keys 0-3 switch, m mutes" % args.play,
+              flush=True)
     procs = [subprocess.Popen([sys.executable, os.path.abspath(__file__),
                                "--sn", str(sn)] + rest)
              for sn in serials]
     rc = 0
     try:
+        if ctl is not None:
+            import msvcrt
+            while any(p.poll() is None for p in procs):
+                while msvcrt.kbhit():
+                    k = msvcrt.getwch()
+                    if k in "0123m":
+                        with open(ctl, "w") as f:
+                            f.write("-1" if k == "m" else k)
+                        print("-- muted" if k == "m" else
+                              "-- listening as slot %s" % k, flush=True)
+                time.sleep(0.05)
         for p in procs:
             rc |= p.wait()
     except KeyboardInterrupt:
         # Ctrl-C reaches the children too; let them close their files.
         for p in procs:
             rc |= p.wait()
+    finally:
+        if ctl is not None and os.path.exists(ctl):
+            os.remove(ctl)
     return rc
 
 
@@ -530,6 +605,11 @@ def main(argv=None):
     p.add_argument("--idle-exit", type=float, default=3.0, metavar="S",
                    help="end once records stop for S seconds after flowing "
                         "(0 = never; default 3)")
+    p.add_argument("--play", type=int, metavar="SLOT",
+                   help="play what the unit in SLOT hears on the PC's "
+                        "speakers, live (rtt_monitor.py); with --all, keys "
+                        "0-3 switch units and m mutes")
+    p.add_argument("--play-ctl", help=argparse.SUPPRESS)	# --all's children
 
     args = ap.parse_args(argv)
     if args.list:

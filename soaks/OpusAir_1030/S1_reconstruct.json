@@ -1,0 +1,38 @@
+{
+ "file": "soaks/OpusAir_1030/S1_1050080691_20261030_171325.bin",
+ "slot": 1,
+ "role": "secondary",
+ "hygiene": {
+  "discarded": 0,
+  "missing": 0,
+  "own_slot": 0
+ },
+ "peers": {
+  "0": {
+   "clip": "OSR_0010_F.op72",
+   "placed": 3749,
+   "missing": 0,
+   "missing_log": 0,
+   "dup": 0,
+   "stale": 0,
+   "out_of_order": 0,
+   "foreign": 0,
+   "foreign_detail": [],
+   "missing_runs": {},
+   "mismatched": 0,
+   "byte_errors": 0,
+   "time_disagree": 0,
+   "wav": "C:\\Users\\ralls\\Github\\Project-Blue-Frog\\soaks\\OpusAir_1030\\S1_1050080691_20261030_171325_slot0.wav",
+   "pesq_nb": null,
+   "stoi_vs_ref": 0.9999881632568907,
+   "link": {
+    "sent": 3749,
+    "lost": 0,
+    "span": [
+     0,
+     3748
+    ]
+   }
+  }
+ }
+}

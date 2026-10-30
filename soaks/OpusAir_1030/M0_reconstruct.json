@@ -1,0 +1,40 @@
+{
+ "file": "soaks/OpusAir_1030/M0_960166366_20261030_171325.bin",
+ "slot": 0,
+ "role": "master",
+ "hygiene": {
+  "discarded": 0,
+  "missing": 0,
+  "own_slot": 0
+ },
+ "peers": {
+  "1": {
+   "clip": "OSR_0030_M.op72",
+   "placed": 3745,
+   "missing": 0,
+   "missing_log": 0,
+   "dup": 0,
+   "stale": 0,
+   "out_of_order": 0,
+   "foreign": 1,
+   "foreign_detail": [
+    "frame 0: card #23 received bytes in the TX region: [0:36] = OSR_0010_F.op72 chunk 1 +36, [48:80] = OSR_0010_F.op72 chunk 2 +0"
+   ],
+   "missing_runs": {},
+   "mismatched": 0,
+   "byte_errors": 0,
+   "time_disagree": 0,
+   "wav": "C:\\Users\\ralls\\Github\\Project-Blue-Frog\\soaks\\OpusAir_1030\\M0_960166366_20261030_171325_slot1.wav",
+   "pesq_nb": null,
+   "stoi_vs_ref": 1.0,
+   "link": {
+    "sent": 3745,
+    "lost": 0,
+    "span": [
+     1,
+     3745
+    ]
+   }
+  }
+ }
+}

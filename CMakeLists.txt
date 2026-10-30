@@ -104,10 +104,6 @@ if(CONFIG_SOAK_C2_ENCODE)
     target_link_libraries(app PRIVATE speexdsp)
     target_sources(app PRIVATE src/tdma_console/mic_dsp.c)
   endif()
-  # The WM8960 HAT as the microphone (CONFIG_SOAK_AUDIO_HAT).
-  target_sources_ifdef(CONFIG_SOAK_AUDIO_HAT app PRIVATE
-    src/tdma_console/hat_audio.c src/tdma_console/wm8960.c)
-
   # Per-function profile (CONFIG_SOAK_C2_PROFILE): the linker sends the
   # codec's cross-file calls to timing wrappers in c2_prof.c.
   if(CONFIG_SOAK_C2_PROFILE)
@@ -122,6 +118,30 @@ if(CONFIG_SOAK_C2_ENCODE)
     endforeach()
   endif()
 endif()
+# Opus on the device (CONFIG_SOAK_OPUS_DEC): the vendored libopus 1.5.2
+# subset in external/opus (BSD-3-Clause, see its README) as its own static
+# library. Fixed point, no float API, no DNN extensions; scratch on the
+# calling thread's stack (VAR_ARRAYS), so decode needs no heap. Same -O2
+# pragma as Codec 2. Upstream code, upstream warnings: silenced.
+if(CONFIG_SOAK_OPUS_DEC)
+  FILE(GLOB opus_sources external/opus/celt/*.c external/opus/silk/*.c
+    external/opus/silk/fixed/*.c external/opus/src/*.c)
+  add_library(opus STATIC ${opus_sources})
+  target_link_libraries(opus PRIVATE zephyr_interface)
+  target_compile_definitions(opus PRIVATE OPUS_BUILD FIXED_POINT
+    DISABLE_FLOAT_API VAR_ARRAYS "PACKAGE_VERSION=\"1.5.2\"")
+  target_compile_options(opus PRIVATE -w
+    -include ${CMAKE_CURRENT_SOURCE_DIR}/external/codec2_opt.h)
+  target_include_directories(opus PRIVATE external/opus/celt
+    external/opus/silk external/opus/silk/fixed external/opus/src)
+  target_include_directories(opus PUBLIC external/opus/include)
+  target_link_libraries(app PRIVATE opus)
+  target_sources(app PRIVATE src/tdma_console/opus_dec.c)
+endif()
+# The WM8960 HAT (CONFIG_SOAK_AUDIO_HAT): mic and earpieces, for either
+# codec's decoder.
+target_sources_ifdef(CONFIG_SOAK_AUDIO_HAT app PRIVATE
+  src/tdma_console/hat_audio.c src/tdma_console/wm8960.c)
 target_include_directories(app PRIVATE src/tdma src/tdma_console)
 # Driver-internal header, needed once at init to detach the native driver's
 # DIO1 gpio_callback (docs/tdma_layering.md). The installed driver *is* the

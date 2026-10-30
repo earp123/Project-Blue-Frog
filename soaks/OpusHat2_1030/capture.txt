@@ -1,0 +1,672 @@
+[960170130] capturing to soaks/OpusHat2_1030/S3_960170130_20261030_184445.bin
+[960166366] capturing to soaks/OpusHat2_1030/M0_960166366_20261030_184445.bin
+[1050043756] capturing to soaks/OpusHat2_1030/S2_1050043756_20261030_184445.bin
+[1050080691] capturing to soaks/OpusHat2_1030/S1_1050080691_20261030_184445.bin
+[960166366] soak 5: ok soak
+[1050043756] soak 5: ok soak
+[960170130] soak 5: ok soak
+[1050080691] soak 5: ok soak
+[960166366]      5 s  232 rec   46.4 rec/s  gaps 0 (missing 0)
+[960170130]      5 s  232 rec   46.4 rec/s  gaps 0 (missing 0)
+[1050043756]      5 s  233 rec   46.6 rec/s  gaps 0 (missing 0)
+[1050080691]      5 s  235 rec   47.0 rec/s  gaps 0 (missing 0)
+[960166366]    opus 166/0/0/0/0/0/0/0 us=1866/2348/0 late=351 stack=11856 state=17800 cpu=72
+[960166366]    play 166/3/0/0/0 corr=0/0 lead=320/360 listen=all rawmic=off/0
+[1050043756]    opus 171/0/0/0/0/0/0/0 us=1800/2185/0 late=411 stack=11856 state=17800 cpu=67
+[960170130]    opus 172/0/0/0/0/0/0/0 us=1841/2286/0 late=387 stack=11856 state=17800 cpu=72
+[960170130]    play 172/3/0/0/0 corr=0/0 lead=320/360 listen=all rawmic=off/0
+[1050080691]    opus 175/0/0/0/0/0/0/0 us=1898/2290/0 late=505 stack=11856 state=17800 cpu=75
+[1050080691]    play 175/3/0/0/0 corr=0/0 lead=320/360 listen=all rawmic=off/0
+[960170130]     10 s  487 rec   48.7 rec/s  gaps 0 (missing 0)
+[960166366]     10 s  485 rec   48.5 rec/s  gaps 0 (missing 0)
+[1050043756]     10 s  487 rec   48.7 rec/s  gaps 0 (missing 0)
+[1050080691]     10 s  490 rec   49.0 rec/s  gaps 0 (missing 0)
+[960166366]    opus 351/2/0/0/0/0/0/0 us=1856/2348/2948 late=381 stack=11856 state=17800 cpu=75
+[960166366]    play 353/3/0/0/0 corr=0/2 lead=161/362 listen=all rawmic=off/0
+[960170130]    opus 359/0/0/0/0/0/0/0 us=1848/2286/0 late=387 stack=11856 state=17800 cpu=75
+[960170130]    play 359/3/0/0/0 corr=0/0 lead=320/360 listen=all rawmic=off/0
+[1050043756]    opus 359/0/0/0/0/0/0/0 us=1806/2204/0 late=411 stack=11856 state=17800 cpu=70
+[1050080691]    opus 362/0/0/0/0/0/0/0 us=1894/2290/0 late=505 stack=11856 state=17800 cpu=77
+[1050080691]    play 362/3/0/0/0 corr=0/0 lead=320/360 listen=all rawmic=off/0
+[960170130]     15 s  742 rec   49.5 rec/s  gaps 0 (missing 0)
+[960166366]     15 s  740 rec   49.3 rec/s  gaps 0 (missing 0)
+[1050043756]     15 s  742 rec   49.5 rec/s  gaps 0 (missing 0)
+[1050080691]     15 s  744 rec   49.6 rec/s  gaps 0 (missing 0)
+[960166366]    opus 539/2/0/0/0/0/0/0 us=1854/2348/2948 late=412 stack=11856 state=17800 cpu=76
+[960166366]    play 541/3/0/0/0 corr=0/2 lead=161/362 listen=all rawmic=off/0
+[1050043756]    opus 547/0/0/0/0/0/0/0 us=1807/2204/0 late=411 stack=11856 state=17800 cpu=70
+[960170130]    opus 548/0/0/0/0/0/0/0 us=1849/2286/0 late=387 stack=11856 state=17800 cpu=76
+[960170130]    play 548/3/0/0/0 corr=0/0 lead=320/360 listen=all rawmic=off/0
+[1050080691]    opus 550/0/0/0/0/0/0/0 us=1888/2290/0 late=505 stack=11856 state=17800 cpu=77
+[1050080691]    play 550/3/0/0/0 corr=0/0 lead=320/360 listen=all rawmic=off/0
+[960166366]     20 s  995 rec   49.8 rec/s  gaps 0 (missing 0)
+[960170130]     20 s  996 rec   49.8 rec/s  gaps 0 (missing 0)
+[1050043756]     20 s  998 rec   49.9 rec/s  gaps 0 (missing 0)
+[1050080691]     20 s  999 rec   50.0 rec/s  gaps 0 (missing 0)
+[960166366]    opus 726/2/0/0/0/0/0/0 us=1850/2348/2948 late=412 stack=11856 state=17800 cpu=76
+[960166366]    play 728/3/0/0/0 corr=0/2 lead=161/362 listen=all rawmic=off/0
+[1050043756]    opus 734/0/0/0/0/0/0/0 us=1806/2204/0 late=411 stack=11856 state=17800 cpu=71
+[1050080691]    opus 736/1/0/0/0/0/0/0 us=1886/2290/2941 late=505 stack=11856 state=17800 cpu=77
+[1050080691]    play 737/3/0/0/0 corr=0/1 lead=161/360 listen=all rawmic=off/0
+[960170130]    opus 738/0/0/0/0/0/0/0 us=1847/2286/0 late=387 stack=11856 state=17800 cpu=76
+[960170130]    play 738/3/0/0/0 corr=0/0 lead=320/360 listen=all rawmic=off/0
+[960166366]     25 s  1249 rec   50.0 rec/s  gaps 0 (missing 0)
+[960170130]     25 s  1252 rec   50.1 rec/s  gaps 0 (missing 0)
+[1050043756]     25 s  1253 rec   50.1 rec/s  gaps 0 (missing 0)
+[1050080691]     25 s  1254 rec   50.2 rec/s  gaps 0 (missing 0)
+[960166366]    opus 913/3/0/0/0/0/0/0 us=1850/2348/3005 late=414 stack=11856 state=17800 cpu=77
+[960166366]    play 916/3/0/0/0 corr=0/3 lead=161/363 listen=all rawmic=off/0
+[960170130]    opus 921/0/0/0/0/0/0/0 us=1847/2286/0 late=387 stack=11856 state=17800 cpu=76
+[960170130]    play 921/3/0/0/0 corr=0/0 lead=320/360 listen=all rawmic=off/0
+[1050043756]    opus 922/0/0/0/0/0/0/0 us=1802/2213/0 late=412 stack=11856 state=17800 cpu=71
+[1050080691]    opus 924/1/0/0/0/0/0/0 us=1879/2290/2941 late=505 stack=11857 state=17800 cpu=77
+[1050080691]    play 925/3/0/0/0 corr=0/1 lead=161/360 listen=all rawmic=off/0
+[960170130]     30 s  1507 rec   50.2 rec/s  gaps 0 (missing 0)
+[960166366]     30 s  1504 rec   50.1 rec/s  gaps 0 (missing 0)
+[1050043756]     30 s  1507 rec   50.2 rec/s  gaps 0 (missing 0)
+[1050080691]     30 s  1509 rec   50.3 rec/s  gaps 0 (missing 0)
+[960170130]    opus 1110/0/0/0/0/0/0/0 us=1833/2286/0 late=387 stack=11856 state=17800 cpu=76
+[960170130]    play 1110/3/0/0/0 corr=0/0 lead=320/360 listen=all rawmic=off/0
+[960166366]    opus 1101/3/0/0/0/0/0/0 us=1837/2348/3005 late=414 stack=11856 state=17800 cpu=76
+[960166366]    play 1104/3/0/0/0 corr=0/3 lead=161/363 listen=all rawmic=off/0
+[1050043756]    opus 1109/0/0/0/0/0/0/0 us=1792/2213/0 late=412 stack=11856 state=17800 cpu=71
+[1050080691]    opus 1113/1/0/0/0/0/0/0 us=1872/2290/2941 late=505 stack=11856 state=17800 cpu=77
+[1050080691]    play 1114/3/0/0/0 corr=0/1 lead=161/360 listen=all rawmic=off/0
+[960166366]     35 s  1759 rec   50.3 rec/s  gaps 0 (missing 0)
+[960170130]     35 s  1762 rec   50.3 rec/s  gaps 0 (missing 0)
+[1050043756]     35 s  1763 rec   50.4 rec/s  gaps 0 (missing 0)
+[1050080691]     35 s  1764 rec   50.4 rec/s  gaps 0 (missing 0)
+[960166366]    opus 1288/3/0/0/0/0/0/0 us=1835/2348/3005 late=414 stack=11856 state=17800 cpu=76
+[960166366]    play 1291/3/0/0/0 corr=0/3 lead=161/363 listen=all rawmic=off/0
+[1050043756]    opus 1297/0/0/0/0/0/0/0 us=1790/2242/0 late=412 stack=11856 state=17800 cpu=71
+[960170130]    opus 1297/0/0/0/0/0/0/0 us=1833/2291/0 late=418 stack=11856 state=17800 cpu=76
+[960170130]    play 1297/3/0/0/0 corr=0/0 lead=320/360 listen=all rawmic=off/0
+[1050080691]    opus 1299/1/0/0/0/0/0/0 us=1870/2290/2941 late=505 stack=11856 state=17800 cpu=77
+[1050080691]    play 1300/3/0/0/0 corr=0/1 lead=161/360 listen=all rawmic=off/0
+[960170130]     40 s  2017 rec   50.4 rec/s  gaps 0 (missing 0)
+[960166366]     40 s  2014 rec   50.4 rec/s  gaps 0 (missing 0)
+[1050043756]     40 s  2018 rec   50.5 rec/s  gaps 0 (missing 0)
+[1050080691]     40 s  2019 rec   50.5 rec/s  gaps 0 (missing 0)
+[960166366]    opus 1475/3/0/0/0/0/0/0 us=1840/2348/3005 late=414 stack=11856 state=17800 cpu=77
+[960166366]    play 1478/3/0/0/0 corr=0/3 lead=161/363 listen=all rawmic=off/0
+[1050043756]    opus 1484/0/0/0/0/0/0/0 us=1793/2242/0 late=412 stack=11856 state=17800 cpu=71
+[960170130]    opus 1487/0/0/0/0/0/0/0 us=1839/2291/0 late=443 stack=11856 state=17800 cpu=76
+[960170130]    play 1487/3/0/0/0 corr=0/0 lead=320/360 listen=all rawmic=off/0
+[1050080691]    opus 1486/1/0/0/0/0/0/0 us=1870/2290/2941 late=505 stack=11856 state=17800 cpu=77
+[1050080691]    play 1487/3/0/0/0 corr=0/1 lead=161/360 listen=all rawmic=off/0
+[960170130]     45 s  2272 rec   50.5 rec/s  gaps 0 (missing 0)
+[960166366]     45 s  2269 rec   50.4 rec/s  gaps 0 (missing 0)
+[1050043756]     45 s  2273 rec   50.5 rec/s  gaps 0 (missing 0)
+[1050080691]     45 s  2274 rec   50.5 rec/s  gaps 0 (missing 0)
+[960170130]    opus 1671/0/0/0/0/0/0/0 us=1836/2291/0 late=443 stack=11856 state=17800 cpu=76
+[960170130]    play 1671/3/0/0/0 corr=0/0 lead=320/360 listen=all rawmic=off/0
+[1050043756]    opus 1672/0/0/0/0/0/0/0 us=1790/2242/0 late=412 stack=11856 state=17800 cpu=71
+[960166366]    opus 1663/3/0/0/0/0/0/0 us=1838/2348/3005 late=414 stack=11856 state=17800 cpu=77
+[960166366]    play 1666/3/0/0/0 corr=0/3 lead=161/363 listen=all rawmic=off/0
+[1050080691]    opus 1674/1/0/0/0/0/0/0 us=1871/2295/2941 late=505 stack=11856 state=17800 cpu=77
+[1050080691]    play 1675/3/0/0/0 corr=0/1 lead=161/360 listen=all rawmic=off/0
+[960170130]     50 s  2527 rec   50.5 rec/s  gaps 0 (missing 0)
+[960166366]     50 s  2524 rec   50.5 rec/s  gaps 0 (missing 0)
+[1050043756]     50 s  2527 rec   50.5 rec/s  gaps 0 (missing 0)
+[1050080691]     50 s  2529 rec   50.6 rec/s  gaps 0 (missing 0)
+[960170130]    opus 1859/0/0/0/0/0/0/0 us=1836/2291/0 late=443 stack=11856 state=17800 cpu=76
+[960170130]    play 1859/3/0/0/0 corr=0/0 lead=320/360 listen=all rawmic=off/0
+[960166366]    opus 1851/3/0/0/0/0/0/0 us=1835/2348/3005 late=480 stack=11856 state=17800 cpu=77
+[960166366]    play 1854/3/0/0/0 corr=0/3 lead=161/363 listen=all rawmic=off/0
+[1050043756]    opus 1860/0/0/0/0/0/0/0 us=1789/2242/0 late=412 stack=11856 state=17800 cpu=71
+[1050080691]    opus 1861/1/0/0/0/0/0/0 us=1871/2300/2941 late=505 stack=11856 state=17800 cpu=77
+[1050080691]    play 1862/3/0/0/0 corr=0/1 lead=161/360 listen=all rawmic=off/0
+[960166366]     55 s  2779 rec   50.5 rec/s  gaps 0 (missing 0)
+[960170130]     55 s  2782 rec   50.6 rec/s  gaps 0 (missing 0)
+[1050043756]     55 s  2782 rec   50.6 rec/s  gaps 0 (missing 0)
+[1050080691]     55 s  2784 rec   50.6 rec/s  gaps 0 (missing 0)
+[960170130]    opus 2047/0/0/0/0/0/0/0 us=1839/2291/0 late=443 stack=11856 state=17800 cpu=76
+[960170130]    play 2047/3/0/0/0 corr=0/0 lead=320/360 listen=all rawmic=off/0
+[960166366]    opus 2038/3/0/0/0/0/0/0 us=1839/2348/3005 late=480 stack=11856 state=17800 cpu=77
+[960166366]    play 2041/3/0/0/0 corr=0/3 lead=161/363 listen=all rawmic=off/0
+[1050043756]    opus 2047/0/0/0/0/0/0/0 us=1791/2242/0 late=412 stack=11856 state=17800 cpu=71
+[1050080691]    opus 2050/1/0/0/0/0/0/0 us=1871/2300/2941 late=505 stack=11856 state=17800 cpu=77
+[1050080691]    play 2051/3/0/0/0 corr=0/1 lead=161/360 listen=all rawmic=off/0
+[960170130]     60 s  3037 rec   50.6 rec/s  gaps 0 (missing 0)
+[960166366]     60 s  3033 rec   50.5 rec/s  gaps 0 (missing 0)
+[1050043756]     60 s  3037 rec   50.6 rec/s  gaps 0 (missing 0)
+[1050080691]     60 s  3038 rec   50.6 rec/s  gaps 0 (missing 0)
+[960166366]    opus 2225/4/0/0/0/0/0/0 us=1840/2348/3005 late=480 stack=11856 state=17800 cpu=77
+[960166366]    play 2229/3/0/0/0 corr=0/4 lead=161/364 listen=all rawmic=off/0
+[1050043756]    opus 2234/0/0/0/0/0/0/0 us=1790/2242/0 late=412 stack=11856 state=17800 cpu=71
+[1050080691]    opus 2235/2/0/0/0/0/0/0 us=1867/2300/2952 late=505 stack=11857 state=17800 cpu=77
+[1050080691]    play 2237/3/0/0/0 corr=0/2 lead=161/360 listen=all rawmic=off/0
+[960170130]    opus 2238/0/0/0/0/0/0/0 us=1839/2291/0 late=443 stack=11856 state=17800 cpu=76
+[960170130]    play 2238/3/0/0/0 corr=0/0 lead=320/360 listen=all rawmic=off/0
+[960166366]     65 s  3288 rec   50.6 rec/s  gaps 0 (missing 0)
+[960170130]     65 s  3292 rec   50.6 rec/s  gaps 0 (missing 0)
+[1050043756]     65 s  3292 rec   50.6 rec/s  gaps 0 (missing 0)
+[1050080691]     65 s  3293 rec   50.7 rec/s  gaps 0 (missing 0)
+[960170130]    opus 2422/0/0/0/0/0/0/0 us=1839/2291/0 late=443 stack=11856 state=17800 cpu=76
+[960170130]    play 2422/3/0/0/0 corr=0/0 lead=320/360 listen=all rawmic=off/0
+[1050043756]    opus 2422/0/0/0/0/0/0/0 us=1790/2242/0 late=412 stack=11856 state=17800 cpu=71
+[960166366]    opus 2413/4/0/0/0/0/0/0 us=1840/2348/3005 late=480 stack=11856 state=17800 cpu=77
+[960166366]    play 2417/3/0/0/0 corr=0/4 lead=161/364 listen=all rawmic=off/0
+[1050080691]    opus 2425/2/0/0/0/0/0/0 us=1866/2300/2952 late=505 stack=11856 state=17800 cpu=77
+[1050080691]    play 2427/3/0/0/0 corr=0/2 lead=161/360 listen=all rawmic=off/0
+[960170130]     70 s  3547 rec   50.7 rec/s  gaps 0 (missing 0)
+[960166366]     70 s  3542 rec   50.6 rec/s  gaps 0 (missing 0)
+[1050043756]     70 s  3547 rec   50.7 rec/s  gaps 0 (missing 0)
+[1050080691]     70 s  3548 rec   50.7 rec/s  gaps 0 (missing 0)
+[960170130]    opus 2610/0/0/0/0/0/0/0 us=1841/2293/0 late=443 stack=11856 state=17800 cpu=76
+[960166366]    opus 2599/5/0/0/0/0/0/0 us=1842/2348/3005 late=480 stack=11856 state=17800 cpu=77
+[960170130]    play 2610/3/0/0/0 corr=0/0 lead=320/360 listen=all rawmic=off/0
+[960166366]    play 2604/3/0/0/0 corr=0/5 lead=161/365 listen=all rawmic=off/0
+[1050043756]    opus 2609/0/0/0/0/0/0/0 us=1791/2242/0 late=412 stack=11856 state=17800 cpu=71
+[1050080691]    opus 2611/2/0/0/0/0/0/0 us=1865/2300/2952 late=505 stack=11856 state=17800 cpu=77
+[1050080691]    play 2613/3/0/0/0 corr=0/2 lead=161/360 listen=all rawmic=off/0
+[960170130]     75 s  3802 rec   50.7 rec/s  gaps 0 (missing 0)
+[960166366]     75 s  3795 rec   50.6 rec/s  gaps 0 (missing 0)
+[1050043756]     75 s  3803 rec   50.7 rec/s  gaps 0 (missing 0)
+[1050080691]     75 s  3802 rec   50.7 rec/s  gaps 0 (missing 0)
+[960166366]    opus 2784/7/0/0/0/0/0/0 us=1842/2348/3005 late=480 stack=11856 state=17800 cpu=77
+[960166366]    play 2791/3/0/0/0 corr=0/7 lead=161/367 listen=all rawmic=off/0
+[1050043756]    opus 2796/0/0/0/0/0/0/0 us=1789/2242/0 late=414 stack=11856 state=17800 cpu=71
+[960170130]    opus 2798/0/0/0/0/0/0/0 us=1841/2293/0 late=443 stack=11856 state=17800 cpu=76
+[960170130]    play 2798/3/0/0/0 corr=0/0 lead=320/360 listen=all rawmic=off/0
+[1050080691]    opus 2797/3/0/0/0/0/0/0 us=1864/2300/2952 late=505 stack=11856 state=17800 cpu=77
+[1050080691]    play 2800/3/0/0/0 corr=0/3 lead=161/360 listen=all rawmic=off/0
+[960166366]     80 s  4050 rec   50.6 rec/s  gaps 0 (missing 0)
+[960170130]     80 s  4057 rec   50.7 rec/s  gaps 0 (missing 0)
+[1050043756]     80 s  4058 rec   50.7 rec/s  gaps 0 (missing 0)
+[1050080691]     80 s  4056 rec   50.7 rec/s  gaps 0 (missing 0)
+[960166366]    opus 2971/7/0/0/0/0/0/0 us=1841/2348/3005 late=480 stack=11856 state=17800 cpu=77
+[960166366]    play 2978/3/0/0/0 corr=0/7 lead=161/367 listen=all rawmic=off/0
+[1050043756]    opus 2984/0/0/0/0/0/0/0 us=1789/2242/0 late=414 stack=11856 state=17800 cpu=71
+[960170130]    opus 2987/0/0/0/0/0/0/0 us=1842/2293/0 late=447 stack=11856 state=17800 cpu=76
+[960170130]    play 2987/3/0/0/0 corr=0/0 lead=320/360 listen=all rawmic=off/0
+[1050080691]    opus 2984/4/0/0/0/0/0/0 us=1864/2300/2952 late=505 stack=11856 state=17800 cpu=77
+[1050080691]    play 2988/3/0/0/0 corr=0/4 lead=121/360 listen=all rawmic=off/0
+[960166366]     85 s  4303 rec   50.6 rec/s  gaps 0 (missing 0)
+[960170130]     85 s  4312 rec   50.7 rec/s  gaps 0 (missing 0)
+[1050043756]     85 s  4313 rec   50.7 rec/s  gaps 0 (missing 0)
+[1050080691]     85 s  4311 rec   50.7 rec/s  gaps 0 (missing 0)
+[960166366]    opus 3157/9/0/0/0/0/0/0 us=1842/2348/3005 late=480 stack=11856 state=17800 cpu=77
+[960166366]    play 3166/3/0/0/0 corr=0/9 lead=161/369 listen=all rawmic=off/0
+[1050043756]    opus 3172/0/0/0/0/0/0/0 us=1790/2242/0 late=414 stack=11856 state=17800 cpu=71
+[960170130]    opus 3171/0/0/0/0/0/0/0 us=1843/2293/0 late=447 stack=11856 state=17800 cpu=76
+[960170130]    play 3171/3/0/0/0 corr=0/0 lead=320/360 listen=all rawmic=off/0
+[1050080691]    opus 3171/4/0/0/0/0/0/0 us=1863/2325/2952 late=505 stack=11856 state=17800 cpu=77
+[1050080691]    play 3175/3/0/0/0 corr=0/4 lead=121/360 listen=all rawmic=off/0
+[960166366]     90 s  4558 rec   50.6 rec/s  gaps 0 (missing 0)
+[960170130]     90 s  4567 rec   50.7 rec/s  gaps 0 (missing 0)
+[1050043756]     90 s  4568 rec   50.8 rec/s  gaps 0 (missing 0)
+[1050080691]     90 s  4566 rec   50.7 rec/s  gaps 0 (missing 0)
+[960170130]    opus 3360/0/0/0/0/0/0/0 us=1843/2293/0 late=447 stack=11856 state=17800 cpu=76
+[960170130]    play 3360/3/0/0/0 corr=0/0 lead=320/360 listen=all rawmic=off/0
+[960166366]    opus 3344/9/0/0/0/0/0/0 us=1843/2348/3005 late=480 stack=11856 state=17800 cpu=77
+[960166366]    play 3353/3/0/0/0 corr=0/9 lead=161/369 listen=all rawmic=off/0
+[1050043756]    opus 3360/0/0/0/0/0/0/0 us=1789/2242/0 late=414 stack=11856 state=17800 cpu=71
+[1050080691]    opus 3359/4/0/0/0/0/0/0 us=1862/2325/2952 late=505 stack=11856 state=17800 cpu=77
+[1050080691]    play 3363/3/0/0/0 corr=0/4 lead=121/360 listen=all rawmic=off/0
+[960170130]     95 s  4822 rec   50.8 rec/s  gaps 0 (missing 0)
+[960166366]     95 s  4813 rec   50.7 rec/s  gaps 0 (missing 0)
+[1050043756]     95 s  4823 rec   50.8 rec/s  gaps 0 (missing 0)
+[1050080691]     95 s  4821 rec   50.7 rec/s  gaps 0 (missing 0)
+[1050043756]    opus 3547/0/0/0/0/0/0/0 us=1787/2242/0 late=414 stack=11856 state=17800 cpu=71
+[960166366]    opus 3532/9/0/0/0/0/0/0 us=1842/2348/3005 late=480 stack=11856 state=17800 cpu=77
+[960166366]    play 3541/3/0/0/0 corr=0/9 lead=161/369 listen=all rawmic=off/0
+[960170130]    opus 3547/0/0/0/0/0/0/0 us=1840/2293/0 late=447 stack=11856 state=17800 cpu=76
+[960170130]    play 3547/3/0/0/0 corr=0/0 lead=320/360 listen=all rawmic=off/0
+[1050080691]    opus 3547/4/0/0/0/0/0/0 us=1860/2325/2952 late=505 stack=11856 state=17800 cpu=77
+[1050080691]    play 3551/3/0/0/0 corr=0/4 lead=121/360 listen=all rawmic=off/0
+[960166366]    100 s  5068 rec   50.7 rec/s  gaps 0 (missing 0)
+[960170130]    100 s  5077 rec   50.8 rec/s  gaps 0 (missing 0)
+[1050043756]    100 s  5078 rec   50.8 rec/s  gaps 0 (missing 0)
+[1050080691]    100 s  5076 rec   50.8 rec/s  gaps 0 (missing 0)
+[1050043756]    opus 3734/0/0/0/0/0/0/0 us=1787/2242/0 late=414 stack=11856 state=17800 cpu=71
+[960166366]    opus 3721/9/0/0/0/0/0/0 us=1842/2348/3005 late=480 stack=11856 state=17800 cpu=77
+[960166366]    play 3730/3/0/0/0 corr=0/9 lead=161/369 listen=all rawmic=off/0
+[1050080691]    opus 3733/4/0/0/0/0/0/0 us=1859/2325/2952 late=505 stack=11856 state=17800 cpu=77
+[1050080691]    play 3737/3/0/0/0 corr=0/4 lead=121/360 listen=all rawmic=off/0
+[960170130]    opus 3737/0/0/0/0/0/0/0 us=1841/2293/0 late=447 stack=11856 state=17800 cpu=76
+[960170130]    play 3737/3/0/0/0 corr=0/0 lead=320/360 listen=all rawmic=off/0
+[960166366]    105 s  5323 rec   50.7 rec/s  gaps 0 (missing 0)
+[960170130]    105 s  5332 rec   50.8 rec/s  gaps 0 (missing 0)
+[1050043756]    105 s  5332 rec   50.8 rec/s  gaps 0 (missing 0)
+[1050080691]    105 s  5331 rec   50.8 rec/s  gaps 0 (missing 0)
+[960166366]    opus 3907/9/0/0/0/0/0/0 us=1845/2348/3005 late=480 stack=11856 state=17800 cpu=77
+[960166366]    play 3916/3/0/0/0 corr=0/9 lead=161/369 listen=all rawmic=off/0
+[1050043756]    opus 3922/0/0/0/0/0/0/0 us=1788/2242/0 late=414 stack=11857 state=17800 cpu=71
+[960170130]    opus 3922/0/0/0/0/0/0/0 us=1843/2293/0 late=488 stack=11856 state=17800 cpu=76
+[960170130]    play 3922/3/0/0/0 corr=0/0 lead=320/360 listen=all rawmic=off/0
+[1050080691]    opus 3921/4/0/0/0/0/0/0 us=1859/2325/2952 late=505 stack=11856 state=17800 cpu=77
+[1050080691]    play 3925/3/0/0/0 corr=0/4 lead=121/360 listen=all rawmic=off/0
+[960170130]    110 s  5587 rec   50.8 rec/s  gaps 0 (missing 0)
+[960166366]    110 s  5578 rec   50.7 rec/s  gaps 0 (missing 0)
+[1050043756]    110 s  5587 rec   50.8 rec/s  gaps 0 (missing 0)
+[1050080691]    110 s  5586 rec   50.8 rec/s  gaps 0 (missing 0)
+[960170130]    opus 4110/0/0/0/0/0/0/0 us=1843/2293/0 late=488 stack=11856 state=17800 cpu=76
+[960170130]    play 4110/3/0/0/0 corr=0/0 lead=320/360 listen=all rawmic=off/0
+[960166366]    opus 4095/9/0/0/0/0/0/0 us=1846/2348/3005 late=480 stack=11856 state=17800 cpu=77
+[960166366]    play 4104/3/0/0/0 corr=0/9 lead=161/369 listen=all rawmic=off/0
+[1050043756]    opus 4109/1/0/0/0/0/0/0 us=1788/2242/2997 late=414 stack=11857 state=17800 cpu=71
+[1050080691]    opus 4108/4/0/0/0/0/0/0 us=1858/2325/2952 late=505 stack=11856 state=17800 cpu=77
+[1050080691]    play 4112/3/0/0/0 corr=0/4 lead=121/360 listen=all rawmic=off/0
+[960170130]    115 s  5842 rec   50.8 rec/s  gaps 0 (missing 0)
+[960166366]    115 s  5832 rec   50.7 rec/s  gaps 0 (missing 0)
+[1050043756]    115 s  5842 rec   50.8 rec/s  gaps 0 (missing 0)
+[1050080691]    115 s  5840 rec   50.8 rec/s  gaps 0 (missing 0)
+[960166366]    opus 4281/10/0/0/0/0/0/0 us=1847/2348/3005 late=480 stack=11856 state=17800 cpu=77
+[960166366]    play 4291/3/0/0/0 corr=0/10 lead=161/370 listen=all rawmic=off/0
+[1050043756]    opus 4296/1/0/0/0/0/0/0 us=1788/2242/2997 late=414 stack=11857 state=17800 cpu=71
+[960170130]    opus 4297/0/0/0/0/0/0/0 us=1844/2293/0 late=488 stack=11856 state=17800 cpu=76
+[960170130]    play 4297/3/0/0/0 corr=0/0 lead=320/360 listen=all rawmic=off/0
+[1050080691]    opus 4296/5/0/0/0/0/0/0 us=1858/2325/3009 late=505 stack=11856 state=17800 cpu=77
+[1050080691]    play 4301/3/0/0/0 corr=0/5 lead=121/360 listen=all rawmic=off/0
+[960166366]    120 s  6087 rec   50.7 rec/s  gaps 0 (missing 0)
+[960170130]    120 s  6097 rec   50.8 rec/s  gaps 0 (missing 0)
+[1050043756]    120 s  6097 rec   50.8 rec/s  gaps 0 (missing 0)
+[1050080691]    120 s  6095 rec   50.8 rec/s  gaps 0 (missing 0)
+[960166366]    opus 4468/10/0/0/0/0/0/0 us=1848/2348/3005 late=480 stack=11856 state=17800 cpu=77
+[960166366]    play 4478/3/0/0/0 corr=0/10 lead=161/370 listen=all rawmic=off/0
+[1050043756]    opus 4483/1/0/0/0/0/0/0 us=1790/2242/2997 late=414 stack=11856 state=17800 cpu=71
+[960170130]    opus 4487/0/0/0/0/0/0/0 us=1845/2293/0 late=488 stack=11856 state=17800 cpu=76
+[1050080691]    opus 4483/5/0/0/0/0/0/0 us=1858/2325/3009 late=505 stack=11857 state=17800 cpu=77
+[960170130]    play 4487/3/0/0/0 corr=0/0 lead=320/360 listen=all rawmic=off/0
+[1050080691]    play 4488/3/0/0/0 corr=0/5 lead=121/360 listen=all rawmic=off/0
+[960170130]    125 s  6352 rec   50.8 rec/s  gaps 0 (missing 0)
+[960166366]    125 s  6342 rec   50.7 rec/s  gaps 0 (missing 0)
+[1050043756]    125 s  6352 rec   50.8 rec/s  gaps 0 (missing 0)
+[1050080691]    125 s  6350 rec   50.8 rec/s  gaps 0 (missing 0)
+[960170130]    opus 4671/0/0/0/0/0/0/0 us=1843/2293/0 late=488 stack=11856 state=17800 cpu=76
+[960170130]    play 4671/3/0/0/0 corr=0/0 lead=320/360 listen=all rawmic=off/0
+[960166366]    opus 4656/10/0/0/0/0/0/0 us=1847/2348/3005 late=480 stack=11856 state=17800 cpu=77
+[960166366]    play 4666/3/0/0/0 corr=0/10 lead=161/370 listen=all rawmic=off/0
+[1050043756]    opus 4671/1/0/0/0/0/0/0 us=1787/2242/2997 late=414 stack=11856 state=17800 cpu=71
+[1050080691]    opus 4670/5/0/0/0/0/0/0 us=1856/2325/3009 late=505 stack=11856 state=17800 cpu=77
+[1050080691]    play 4675/3/0/0/0 corr=0/5 lead=121/360 listen=all rawmic=off/0
+[960170130]    130 s  6607 rec   50.8 rec/s  gaps 0 (missing 0)
+[960166366]    130 s  6597 rec   50.7 rec/s  gaps 0 (missing 0)
+[1050043756]    130 s  6607 rec   50.8 rec/s  gaps 0 (missing 0)
+[1050080691]    130 s  6605 rec   50.8 rec/s  gaps 0 (missing 0)
+[960170130]    opus 4859/0/0/0/0/0/0/0 us=1843/2298/0 late=488 stack=11856 state=17800 cpu=76
+[960170130]    play 4859/3/0/0/0 corr=0/0 lead=320/360 listen=all rawmic=off/0
+[960166366]    opus 4843/10/0/0/0/0/0/0 us=1848/2348/3005 late=480 stack=11856 state=17800 cpu=77
+[960166366]    play 4853/3/0/0/0 corr=0/10 lead=161/370 listen=all rawmic=off/0
+[1050043756]    opus 4858/1/0/0/0/0/0/0 us=1788/2242/2997 late=442 stack=11856 state=17800 cpu=71
+[1050080691]    opus 4858/5/0/0/0/0/0/0 us=1855/2325/3009 late=505 stack=11857 state=17800 cpu=77
+[1050080691]    play 4863/3/0/0/0 corr=0/5 lead=121/360 listen=all rawmic=off/0
+[960170130]    135 s  6862 rec   50.8 rec/s  gaps 0 (missing 0)
+[960166366]    135 s  6852 rec   50.8 rec/s  gaps 0 (missing 0)
+[1050043756]    135 s  6862 rec   50.8 rec/s  gaps 0 (missing 0)
+[1050080691]    135 s  6859 rec   50.8 rec/s  gaps 0 (missing 0)
+[960170130]    opus 5047/0/0/0/0/0/0/0 us=1843/2298/0 late=488 stack=11856 state=17800 cpu=76
+[1050043756]    opus 5046/1/0/0/0/0/0/0 us=1788/2254/2997 late=442 stack=11856 state=17800 cpu=71
+[960170130]    play 5047/3/0/0/0 corr=0/0 lead=320/360 listen=all rawmic=off/0
+[960166366]    opus 5031/10/0/0/0/0/0/0 us=1849/2348/3005 late=480 stack=11856 state=17800 cpu=77
+[960166366]    play 5041/3/0/0/0 corr=0/10 lead=161/370 listen=all rawmic=off/0
+[1050080691]    opus 5044/6/0/0/0/0/0/0 us=1854/2325/3009 late=505 stack=11857 state=17800 cpu=77
+[1050080691]    play 5050/3/0/0/0 corr=0/6 lead=121/360 listen=all rawmic=off/0
+[960170130]    140 s  7117 rec   50.8 rec/s  gaps 0 (missing 0)
+[960166366]    140 s  7107 rec   50.8 rec/s  gaps 0 (missing 0)
+[1050043756]    140 s  7117 rec   50.8 rec/s  gaps 0 (missing 0)
+[1050080691]    140 s  7113 rec   50.8 rec/s  gaps 0 (missing 0)
+[960166366]    opus 5218/10/0/0/0/0/0/0 us=1849/2348/3005 late=480 stack=11856 state=17800 cpu=77
+[960166366]    play 5228/3/0/0/0 corr=0/10 lead=161/370 listen=all rawmic=off/0
+[1050043756]    opus 5233/1/0/0/0/0/0/0 us=1787/2254/2997 late=442 stack=11856 state=17800 cpu=71
+[960170130]    opus 5237/0/0/0/0/0/0/0 us=1842/2328/0 late=488 stack=11856 state=17800 cpu=76
+[960170130]    play 5237/3/0/0/0 corr=0/0 lead=320/360 listen=all rawmic=off/0
+[1050080691]    opus 5230/7/0/0/0/0/0/0 us=1854/2325/3044 late=505 stack=11857 state=17800 cpu=77
+[1050080691]    play 5237/3/0/0/0 corr=0/7 lead=121/360 listen=all rawmic=off/0
+[960166366]    145 s  7361 rec   50.8 rec/s  gaps 0 (missing 0)
+[960170130]    145 s  7372 rec   50.8 rec/s  gaps 0 (missing 0)
+[1050043756]    145 s  7372 rec   50.8 rec/s  gaps 0 (missing 0)
+[1050080691]    145 s  7366 rec   50.8 rec/s  gaps 0 (missing 0)
+[960166366]    opus 5405/11/0/0/0/0/0/0 us=1850/2348/3005 late=480 stack=11856 state=17800 cpu=77
+[960166366]    play 5416/3/0/0/0 corr=0/11 lead=161/370 listen=all rawmic=off/0
+[960170130]    opus 5421/0/0/0/0/0/0/0 us=1841/2328/0 late=488 stack=11856 state=17800 cpu=76
+[960170130]    play 5421/3/0/0/0 corr=0/0 lead=320/360 listen=all rawmic=off/0
+[1050043756]    opus 5421/1/0/0/0/0/0/0 us=1787/2254/2997 late=442 stack=11856 state=17800 cpu=71
+[1050080691]    opus 5417/9/0/0/0/0/0/0 us=1853/2325/3044 late=505 stack=11857 state=17800 cpu=77
+[1050080691]    play 5426/3/0/0/0 corr=0/9 lead=121/360 listen=all rawmic=off/0
+[960170130]    150 s  7627 rec   50.8 rec/s  gaps 0 (missing 0)
+[960166366]    150 s  7616 rec   50.8 rec/s  gaps 0 (missing 0)
+[1050043756]    150 s  7627 rec   50.8 rec/s  gaps 0 (missing 0)
+[1050080691]    150 s  7621 rec   50.8 rec/s  gaps 0 (missing 0)
+[960170130]    opus 5609/0/0/0/0/0/0/0 us=1842/2328/0 late=488 stack=11856 state=17800 cpu=76
+[960170130]    play 5609/3/0/0/0 corr=0/0 lead=320/360 listen=all rawmic=off/0
+[1050043756]    opus 5608/1/0/0/0/0/0/0 us=1787/2254/2997 late=442 stack=11856 state=17800 cpu=71
+[960166366]    opus 5593/11/0/0/0/0/0/0 us=1851/2348/3005 late=480 stack=11856 state=17800 cpu=77
+[960166366]    play 5604/3/0/0/0 corr=0/11 lead=161/371 listen=all rawmic=off/0
+[1050080691]    opus 5605/9/0/0/0/0/0/0 us=1853/2325/3044 late=505 stack=11856 state=17800 cpu=77
+[1050080691]    play 5614/3/0/0/0 corr=0/9 lead=121/360 listen=all rawmic=off/0
+[960170130]    155 s  7882 rec   50.9 rec/s  gaps 0 (missing 0)
+[960166366]    155 s  7871 rec   50.8 rec/s  gaps 0 (missing 0)
+[1050043756]    155 s  7882 rec   50.9 rec/s  gaps 0 (missing 0)
+[1050080691]    155 s  7876 rec   50.8 rec/s  gaps 0 (missing 0)
+[960166366]    opus 5780/11/0/0/0/0/0/0 us=1852/2348/3005 late=480 stack=11856 state=17800 cpu=77
+[960166366]    play 5791/3/0/0/0 corr=0/11 lead=161/371 listen=all rawmic=off/0
+[960170130]    opus 5796/0/0/0/0/0/0/0 us=1842/2328/0 late=488 stack=11856 state=17800 cpu=76
+[960170130]    play 5796/3/0/0/0 corr=0/0 lead=320/360 listen=all rawmic=off/0
+[1050043756]    opus 5796/1/0/0/0/0/0/0 us=1788/2254/2997 late=442 stack=11856 state=17800 cpu=71
+[1050080691]    opus 5791/9/0/0/0/0/0/0 us=1852/2325/3044 late=505 stack=11856 state=17800 cpu=77
+[1050080691]    play 5800/3/0/0/0 corr=0/9 lead=121/360 listen=all rawmic=off/0
+[960170130]    160 s  8137 rec   50.9 rec/s  gaps 0 (missing 0)
+[960166366]    160 s  8126 rec   50.8 rec/s  gaps 0 (missing 0)
+[1050043756]    160 s  8137 rec   50.9 rec/s  gaps 0 (missing 0)
+[1050080691]    160 s  8131 rec   50.8 rec/s  gaps 0 (missing 0)
+[960166366]    opus 5968/11/0/0/0/0/0/0 us=1852/2348/3005 late=480 stack=11856 state=17800 cpu=77
+[960166366]    play 5979/3/0/0/0 corr=0/11 lead=161/371 listen=all rawmic=off/0
+[1050043756]    opus 5983/1/0/0/0/0/0/0 us=1788/2254/2997 late=442 stack=11856 state=17800 cpu=71
+[960170130]    opus 5986/0/0/0/0/0/0/0 us=1841/2328/0 late=488 stack=11856 state=17800 cpu=76
+[960170130]    play 5986/3/0/0/0 corr=0/0 lead=320/360 listen=all rawmic=off/0
+[1050080691]    opus 5979/9/0/0/0/0/0/0 us=1851/2325/3044 late=505 stack=11857 state=17800 cpu=77
+[1050080691]    play 5988/3/0/0/0 corr=0/9 lead=121/360 listen=all rawmic=off/0
+[960170130]    165 s  8392 rec   50.9 rec/s  gaps 0 (missing 0)
+[960166366]    165 s  8381 rec   50.8 rec/s  gaps 0 (missing 0)
+[1050043756]    165 s  8392 rec   50.9 rec/s  gaps 0 (missing 0)
+[1050080691]    165 s  8386 rec   50.8 rec/s  gaps 0 (missing 0)
+[960166366]    opus 6155/11/0/0/0/0/0/0 us=1854/2348/3005 late=480 stack=11856 state=17800 cpu=77
+[960166366]    play 6166/3/0/0/0 corr=0/11 lead=161/371 listen=all rawmic=off/0
+[1050043756]    opus 6171/1/0/0/0/0/0/0 us=1788/2254/2997 late=442 stack=11856 state=17800 cpu=71
+[1050080691]    opus 6167/9/0/0/0/0/0/0 us=1849/2325/3044 late=505 stack=11857 state=17800 cpu=77
+[1050080691]    play 6176/3/0/0/0 corr=0/9 lead=121/360 listen=all rawmic=off/0
+[960170130]    opus 6176/0/0/0/0/0/0/0 us=1841/2328/0 late=488 stack=11856 state=17800 cpu=76
+[960170130]    play 6176/3/0/0/0 corr=0/0 lead=320/360 listen=all rawmic=off/0
+[960166366]    170 s  8635 rec   50.8 rec/s  gaps 0 (missing 0)
+[960170130]    170 s  8647 rec   50.9 rec/s  gaps 0 (missing 0)
+[1050043756]    170 s  8647 rec   50.9 rec/s  gaps 0 (missing 0)
+[1050080691]    170 s  8640 rec   50.8 rec/s  gaps 0 (missing 0)
+[960166366]    opus 6341/12/0/0/0/0/0/0 us=1854/2348/3005 late=480 stack=11856 state=17800 cpu=77
+[960166366]    play 6353/3/0/0/0 corr=0/12 lead=161/372 listen=all rawmic=off/0
+[960170130]    opus 6360/0/0/0/0/0/0/0 us=1840/2328/0 late=488 stack=11856 state=17800 cpu=76
+[960170130]    play 6360/3/0/0/0 corr=0/0 lead=320/360 listen=all rawmic=off/0
+[1050043756]    opus 6359/1/0/0/0/0/0/0 us=1787/2254/2997 late=442 stack=11856 state=17800 cpu=71
+[1050080691]    opus 6353/10/0/0/0/0/0/0 us=1849/2325/3044 late=505 stack=11857 state=17800 cpu=77
+[1050080691]    play 6363/3/0/0/0 corr=0/10 lead=121/360 listen=all rawmic=off/0
+[960166366]    175 s  8890 rec   50.8 rec/s  gaps 0 (missing 0)
+[960170130]    175 s  8902 rec   50.9 rec/s  gaps 0 (missing 0)
+[1050043756]    175 s  8902 rec   50.9 rec/s  gaps 0 (missing 0)
+[1050080691]    175 s  8895 rec   50.8 rec/s  gaps 0 (missing 0)
+[960166366]    opus 6529/12/0/0/0/0/0/0 us=1855/2348/3005 late=480 stack=11856 state=17800 cpu=77
+[960166366]    play 6541/3/0/0/0 corr=0/12 lead=161/372 listen=all rawmic=off/0
+[960170130]    opus 6547/0/0/0/0/0/0/0 us=1839/2328/0 late=494 stack=11856 state=17800 cpu=76
+[960170130]    play 6547/3/0/0/0 corr=0/0 lead=320/360 listen=all rawmic=off/0
+[1050043756]    opus 6546/1/0/0/0/0/0/0 us=1787/2254/2997 late=442 stack=11856 state=17800 cpu=71
+[1050080691]    opus 6541/10/0/0/0/0/0/0 us=1848/2325/3044 late=505 stack=11856 state=17800 cpu=77
+[1050080691]    play 6551/3/0/0/0 corr=0/10 lead=121/360 listen=all rawmic=off/0
+[960170130]    180 s  9157 rec   50.9 rec/s  gaps 0 (missing 0)
+[960166366]    180 s  9145 rec   50.8 rec/s  gaps 0 (missing 0)
+[1050043756]    180 s  9157 rec   50.9 rec/s  gaps 0 (missing 0)
+[1050080691]    180 s  9150 rec   50.8 rec/s  gaps 0 (missing 0)
+[960166366]    opus 6716/12/0/0/0/0/0/0 us=1856/2348/3005 late=480 stack=11856 state=17800 cpu=77
+[960166366]    play 6728/3/0/0/0 corr=0/12 lead=161/372 listen=all rawmic=off/0
+[1050043756]    opus 6733/1/0/0/0/0/0/0 us=1788/2254/2997 late=442 stack=11856 state=17800 cpu=71
+[960170130]    opus 6736/0/0/0/0/0/0/0 us=1840/2328/0 late=494 stack=11856 state=17800 cpu=76
+[960170130]    play 6736/3/0/0/0 corr=0/0 lead=320/360 listen=all rawmic=off/0
+[1050080691]    opus 6728/10/0/0/0/0/0/0 us=1848/2325/3044 late=505 stack=11856 state=17800 cpu=77
+[1050080691]    play 6738/3/0/0/0 corr=0/10 lead=121/360 listen=all rawmic=off/0
+[960170130]    185 s  9412 rec   50.9 rec/s  gaps 0 (missing 0)
+[960166366]    185 s  9400 rec   50.8 rec/s  gaps 0 (missing 0)
+[1050043756]    185 s  9412 rec   50.9 rec/s  gaps 0 (missing 0)
+[1050080691]    185 s  9405 rec   50.8 rec/s  gaps 0 (missing 0)
+[1050043756]    opus 6921/1/0/0/0/0/0/0 us=1788/2254/2997 late=442 stack=11856 state=17800 cpu=71
+[960166366]    opus 6906/12/0/0/0/0/0/0 us=1856/2348/3005 late=480 stack=11856 state=17800 cpu=77
+[960166366]    play 6918/3/0/0/0 corr=0/12 lead=161/372 listen=all rawmic=off/0
+[1050080691]    opus 6915/10/0/0/0/0/0/0 us=1848/2325/3044 late=505 stack=11856 state=17800 cpu=77
+[1050080691]    play 6925/3/0/0/0 corr=0/10 lead=121/360 listen=all rawmic=off/0
+[960170130]    opus 6926/0/0/0/0/0/0/0 us=1839/2328/0 late=494 stack=11856 state=17800 cpu=76
+[960170130]    play 6926/3/0/0/0 corr=0/0 lead=320/360 listen=all rawmic=off/0
+[960166366]    190 s  9655 rec   50.8 rec/s  gaps 0 (missing 0)
+[960170130]    190 s  9667 rec   50.9 rec/s  gaps 0 (missing 0)
+[1050043756]    190 s  9667 rec   50.9 rec/s  gaps 0 (missing 0)
+[1050080691]    190 s  9660 rec   50.8 rec/s  gaps 0 (missing 0)
+[960166366]    opus 7091/12/0/0/0/0/0/0 us=1856/2348/3005 late=480 stack=11856 state=17800 cpu=77
+[960166366]    play 7103/3/0/0/0 corr=0/12 lead=161/372 listen=all rawmic=off/0
+[960170130]    opus 7109/0/0/0/0/0/0/0 us=1837/2328/0 late=494 stack=11856 state=17800 cpu=76
+[960170130]    play 7109/3/0/0/0 corr=0/0 lead=320/360 listen=all rawmic=off/0
+[1050043756]    opus 7109/1/0/0/0/0/0/0 us=1787/2254/2997 late=442 stack=11856 state=17800 cpu=71
+[1050080691]    opus 7102/11/0/0/0/0/0/0 us=1847/2325/3044 late=505 stack=11856 state=17800 cpu=77
+[1050080691]    play 7113/3/0/0/0 corr=0/11 lead=121/360 listen=all rawmic=off/0
+[960170130]    195 s  9922 rec   50.9 rec/s  gaps 0 (missing 0)
+[960166366]    195 s  9910 rec   50.8 rec/s  gaps 0 (missing 0)
+[1050043756]    195 s  9922 rec   50.9 rec/s  gaps 0 (missing 0)
+[1050080691]    195 s  9914 rec   50.8 rec/s  gaps 0 (missing 0)
+[960170130]    opus 7297/0/0/0/0/0/0/0 us=1837/2328/0 late=494 stack=11856 state=17800 cpu=76
+[960170130]    play 7297/3/0/0/0 corr=0/0 lead=320/360 listen=all rawmic=off/0
+[960166366]    opus 7279/12/0/0/0/0/0/0 us=1857/2348/3005 late=480 stack=11856 state=17800 cpu=77
+[960166366]    play 7291/3/0/0/0 corr=0/12 lead=161/372 listen=all rawmic=off/0
+[1050043756]    opus 7297/1/0/0/0/0/0/0 us=1787/2254/2997 late=442 stack=11856 state=17800 cpu=71
+[1050080691]    opus 7289/11/0/0/0/0/0/0 us=1845/2325/3044 late=505 stack=11856 state=17800 cpu=77
+[1050080691]    play 7300/3/0/0/0 corr=0/11 lead=121/360 listen=all rawmic=off/0
+[960170130]    200 s  10177 rec   50.9 rec/s  gaps 0 (missing 0)
+[960166366]    200 s  10165 rec   50.8 rec/s  gaps 0 (missing 0)
+[1050043756]    200 s  10177 rec   50.9 rec/s  gaps 0 (missing 0)
+[1050080691]    200 s  10170 rec   50.9 rec/s  gaps 0 (missing 0)
+[960166366]    opus 7466/12/0/0/0/0/0/0 us=1858/2348/3005 late=480 stack=11856 state=17800 cpu=77
+[960166366]    play 7478/3/0/0/0 corr=0/12 lead=161/372 listen=all rawmic=off/0
+[960170130]    opus 7485/0/0/0/0/0/0/0 us=1837/2328/0 late=494 stack=11856 state=17800 cpu=76
+[960170130]    play 7485/3/0/0/0 corr=0/0 lead=320/360 listen=all rawmic=off/0
+[1050043756]    opus 7484/1/0/0/0/0/0/0 us=1787/2254/2997 late=442 stack=11856 state=17800 cpu=71
+[1050080691]    opus 7477/11/0/0/0/0/0/0 us=1845/2325/3044 late=505 stack=11856 state=17800 cpu=77
+[1050080691]    play 7488/3/0/0/0 corr=0/11 lead=121/360 listen=all rawmic=off/0
+[960170130]    205 s  10432 rec   50.9 rec/s  gaps 0 (missing 0)
+[960166366]    205 s  10420 rec   50.8 rec/s  gaps 0 (missing 0)
+[1050043756]    205 s  10432 rec   50.9 rec/s  gaps 0 (missing 0)
+[1050080691]    205 s  10424 rec   50.8 rec/s  gaps 0 (missing 0)
+[960166366]    opus 7654/12/0/0/0/0/0/0 us=1858/2348/3005 late=480 stack=11856 state=17800 cpu=77
+[960166366]    play 7666/3/0/0/0 corr=0/12 lead=161/372 listen=all rawmic=off/0
+[1050043756]    opus 7671/1/0/0/0/0/0/0 us=1787/2254/2997 late=442 stack=11856 state=17800 cpu=71
+[1050080691]    opus 7665/11/0/0/0/0/0/0 us=1844/2325/3044 late=505 stack=11856 state=17800 cpu=77
+[1050080691]    play 7676/3/0/0/0 corr=0/11 lead=121/360 listen=all rawmic=off/0
+[960170130]    opus 7675/0/0/0/0/0/0/0 us=1836/2328/0 late=494 stack=11856 state=17800 cpu=76
+[960170130]    play 7675/3/0/0/0 corr=0/0 lead=320/360 listen=all rawmic=off/0
+[960166366]    210 s  10675 rec   50.8 rec/s  gaps 0 (missing 0)
+[960170130]    210 s  10687 rec   50.9 rec/s  gaps 0 (missing 0)
+[1050043756]    210 s  10687 rec   50.9 rec/s  gaps 0 (missing 0)
+[1050080691]    210 s  10680 rec   50.9 rec/s  gaps 0 (missing 0)
+[960170130]    opus 7859/0/0/0/0/0/0/0 us=1836/2328/0 late=494 stack=11856 state=17800 cpu=76
+[960170130]    play 7859/3/0/0/0 corr=0/0 lead=320/360 listen=all rawmic=off/0
+[960166366]    opus 7842/12/0/0/0/0/0/0 us=1859/2348/3005 late=480 stack=11856 state=17800 cpu=77
+[960166366]    play 7854/3/0/0/0 corr=0/12 lead=161/372 listen=all rawmic=off/0
+[1050043756]    opus 7859/1/0/0/0/0/0/0 us=1787/2270/2997 late=442 stack=11856 state=17800 cpu=71
+[1050080691]    opus 7852/11/0/0/0/0/0/0 us=1844/2325/3044 late=505 stack=11856 state=17800 cpu=77
+[1050080691]    play 7863/3/0/0/0 corr=0/11 lead=121/360 listen=all rawmic=off/0
+[960170130]    215 s  10943 rec   50.9 rec/s  gaps 0 (missing 0)
+[960166366]    215 s  10930 rec   50.8 rec/s  gaps 0 (missing 0)
+[1050043756]    215 s  10942 rec   50.9 rec/s  gaps 0 (missing 0)
+[1050080691]    215 s  10933 rec   50.9 rec/s  gaps 0 (missing 0)
+[960170130]    opus 8046/0/0/0/0/0/0/0 us=1835/2328/0 late=494 stack=11856 state=17800 cpu=76
+[960170130]    play 8046/3/0/0/0 corr=0/0 lead=320/360 listen=all rawmic=off/0
+[960166366]    opus 8029/12/0/0/0/0/0/0 us=1860/2348/3005 late=480 stack=11856 state=17800 cpu=77
+[960166366]    play 8041/3/0/0/0 corr=0/12 lead=161/372 listen=all rawmic=off/0
+[1050043756]    opus 8047/1/0/0/0/0/0/0 us=1788/2270/2997 late=442 stack=11856 state=17800 cpu=71
+[1050080691]    opus 8039/12/0/0/0/0/0/0 us=1844/2325/3054 late=505 stack=11856 state=17800 cpu=77
+[1050080691]    play 8051/3/0/0/0 corr=0/12 lead=121/360 listen=all rawmic=off/0
+[960166366]    220 s  11185 rec   50.8 rec/s  gaps 0 (missing 0)
+[960170130]    220 s  11198 rec   50.9 rec/s  gaps 0 (missing 0)
+[1050043756]    220 s  11197 rec   50.9 rec/s  gaps 0 (missing 0)
+[1050080691]    220 s  11188 rec   50.9 rec/s  gaps 0 (missing 0)
+[1050043756]    opus 8233/1/0/0/0/0/0/0 us=1788/2270/2997 late=442 stack=11856 state=17800 cpu=71
+[960170130]    opus 8236/0/0/0/0/0/0/0 us=1834/2328/0 late=494 stack=11856 state=17800 cpu=76
+[960170130]    play 8236/3/0/0/0 corr=0/0 lead=320/360 listen=all rawmic=off/0
+[960166366]    opus 8219/12/0/0/0/0/0/0 us=1860/2348/3005 late=480 stack=11856 state=17800 cpu=77
+[960166366]    play 8231/3/0/0/0 corr=0/12 lead=161/372 listen=all rawmic=off/0
+[1050080691]    opus 8225/12/0/0/0/0/0/0 us=1843/2325/3054 late=505 stack=11856 state=17800 cpu=77
+[1050080691]    play 8237/3/0/0/0 corr=0/12 lead=121/360 listen=all rawmic=off/0
+[960166366]    225 s  11440 rec   50.8 rec/s  gaps 0 (missing 0)
+[960170130]    225 s  11452 rec   50.9 rec/s  gaps 0 (missing 0)
+[1050043756]    225 s  11452 rec   50.9 rec/s  gaps 0 (missing 0)
+[1050080691]    225 s  11443 rec   50.9 rec/s  gaps 0 (missing 0)
+[960166366]    opus 8404/12/0/0/0/0/0/0 us=1860/2348/3005 late=480 stack=11856 state=17800 cpu=77
+[960166366]    play 8416/3/0/0/0 corr=0/12 lead=161/372 listen=all rawmic=off/0
+[1050043756]    opus 8422/1/0/0/0/0/0/0 us=1787/2270/2997 late=442 stack=11856 state=17800 cpu=71
+[1050080691]    opus 8414/12/0/0/0/0/0/0 us=1842/2325/3054 late=505 stack=11856 state=17800 cpu=77
+[1050080691]    play 8426/3/0/0/0 corr=0/12 lead=121/360 listen=all rawmic=off/0
+[960170130]    opus 8427/0/0/0/0/0/0/0 us=1834/2328/0 late=494 stack=11856 state=17800 cpu=76
+[960170130]    play 8427/3/0/0/0 corr=0/0 lead=320/360 listen=all rawmic=off/0
+[960166366]    230 s  11695 rec   50.8 rec/s  gaps 0 (missing 0)
+[960170130]    230 s  11707 rec   50.9 rec/s  gaps 0 (missing 0)
+[1050043756]    230 s  11708 rec   50.9 rec/s  gaps 0 (missing 0)
+[1050080691]    230 s  11698 rec   50.9 rec/s  gaps 0 (missing 0)
+[960166366]    opus 8592/12/0/0/0/0/0/0 us=1860/2348/3005 late=480 stack=11856 state=17800 cpu=77
+[960166366]    play 8604/3/0/0/0 corr=0/12 lead=161/372 listen=all rawmic=off/0
+[1050043756]    opus 8608/1/0/0/0/0/0/0 us=1787/2270/2997 late=442 stack=11856 state=17800 cpu=71
+[960170130]    opus 8610/0/0/0/0/0/0/0 us=1833/2328/0 late=494 stack=11856 state=17800 cpu=76
+[960170130]    play 8610/3/0/0/0 corr=0/0 lead=320/360 listen=all rawmic=off/0
+[1050080691]    opus 8600/12/0/0/0/0/0/0 us=1842/2325/3054 late=505 stack=11856 state=17800 cpu=77
+[1050080691]    play 8612/3/0/0/0 corr=0/12 lead=121/360 listen=all rawmic=off/0
+[960170130]    235 s  11962 rec   50.9 rec/s  gaps 0 (missing 0)
+[960166366]    235 s  11950 rec   50.9 rec/s  gaps 0 (missing 0)
+[1050043756]    235 s  11962 rec   50.9 rec/s  gaps 0 (missing 0)
+[1050080691]    235 s  11953 rec   50.9 rec/s  gaps 0 (missing 0)
+[1050043756]    opus 8796/1/0/0/0/0/0/0 us=1787/2270/2997 late=442 stack=11856 state=17800 cpu=71
+[960166366]    opus 8779/12/0/0/0/0/0/0 us=1860/2348/3005 late=480 stack=11856 state=17800 cpu=77
+[960166366]    play 8791/3/0/0/0 corr=0/12 lead=161/372 listen=all rawmic=off/0
+[960170130]    opus 8797/0/0/0/0/0/0/0 us=1831/2328/0 late=494 stack=11856 state=17800 cpu=76
+[960170130]    play 8797/3/0/0/0 corr=0/0 lead=320/360 listen=all rawmic=off/0
+[1050080691]    opus 8789/12/0/0/0/0/0/0 us=1841/2325/3054 late=505 stack=11857 state=17800 cpu=77
+[1050080691]    play 8801/3/0/0/0 corr=0/12 lead=121/360 listen=all rawmic=off/0
+[960166366]    240 s  12205 rec   50.9 rec/s  gaps 0 (missing 0)
+[960170130]    240 s  12217 rec   50.9 rec/s  gaps 0 (missing 0)
+[1050043756]    240 s  12217 rec   50.9 rec/s  gaps 0 (missing 0)
+[1050080691]    240 s  12209 rec   50.9 rec/s  gaps 0 (missing 0)
+[960166366]    opus 8966/12/0/0/0/0/0/0 us=1860/2348/3005 late=480 stack=11856 state=17800 cpu=77
+[960166366]    play 8978/3/0/0/0 corr=0/12 lead=161/372 listen=all rawmic=off/0
+[1050043756]    opus 8984/1/0/0/0/0/0/0 us=1786/2270/2997 late=442 stack=11856 state=17800 cpu=71
+[960170130]    opus 8987/0/0/0/0/0/0/0 us=1831/2328/0 late=494 stack=11856 state=17800 cpu=76
+[960170130]    play 8987/3/0/0/0 corr=0/0 lead=320/360 listen=all rawmic=off/0
+[1050080691]    opus 8976/12/0/0/0/0/0/0 us=1841/2325/3054 late=505 stack=11856 state=17800 cpu=77
+[1050080691]    play 8988/3/0/0/0 corr=0/12 lead=121/360 listen=all rawmic=off/0
+[960166366]    245 s  12460 rec   50.9 rec/s  gaps 0 (missing 0)
+[960170130]    245 s  12472 rec   50.9 rec/s  gaps 0 (missing 0)
+[1050043756]    245 s  12472 rec   50.9 rec/s  gaps 0 (missing 0)
+[1050080691]    245 s  12463 rec   50.9 rec/s  gaps 0 (missing 0)
+[960170130]    opus 9172/0/0/0/0/0/0/0 us=1831/2328/0 late=494 stack=11856 state=17800 cpu=76
+[960170130]    play 9172/3/0/0/0 corr=0/0 lead=320/360 listen=all rawmic=off/0
+[960166366]    opus 9154/12/0/0/0/0/0/0 us=1861/2348/3005 late=480 stack=11856 state=17800 cpu=77
+[960166366]    play 9166/3/0/0/0 corr=0/12 lead=161/372 listen=all rawmic=off/0
+[1050043756]    opus 9172/1/0/0/0/0/0/0 us=1787/2270/2997 late=442 stack=11856 state=17800 cpu=71
+[1050080691]    opus 9164/12/0/0/0/0/0/0 us=1841/2325/3054 late=505 stack=11856 state=17800 cpu=77
+[1050080691]    play 9176/3/0/0/0 corr=0/12 lead=121/360 listen=all rawmic=off/0
+[960166366]    250 s  12715 rec   50.9 rec/s  gaps 0 (missing 0)
+[960170130]    250 s  12728 rec   50.9 rec/s  gaps 0 (missing 0)
+[1050043756]    250 s  12727 rec   50.9 rec/s  gaps 0 (missing 0)
+[1050080691]    250 s  12719 rec   50.9 rec/s  gaps 0 (missing 0)
+[960170130]    opus 9360/0/0/0/0/0/0/0 us=1830/2328/0 late=494 stack=11856 state=17800 cpu=76
+[960170130]    play 9360/3/0/0/0 corr=0/0 lead=320/360 listen=all rawmic=off/0
+[960166366]    opus 9342/12/0/0/0/0/0/0 us=1861/2348/3005 late=480 stack=11856 state=17800 cpu=77
+[960166366]    play 9354/3/0/0/0 corr=0/12 lead=161/372 listen=all rawmic=off/0
+[1050043756]    opus 9359/1/0/0/0/0/0/0 us=1787/2270/2997 late=442 stack=11856 state=17800 cpu=71
+[1050080691]    opus 9351/12/0/0/0/0/0/0 us=1840/2325/3054 late=505 stack=11856 state=17800 cpu=77
+[1050080691]    play 9363/3/0/0/0 corr=0/12 lead=121/360 listen=all rawmic=off/0
+[960166366]    255 s  12971 rec   50.9 rec/s  gaps 0 (missing 0)
+[960170130]    255 s  12983 rec   50.9 rec/s  gaps 0 (missing 0)
+[1050043756]    255 s  12982 rec   50.9 rec/s  gaps 0 (missing 0)
+[1050080691]    255 s  12973 rec   50.9 rec/s  gaps 0 (missing 0)
+[1050043756]    opus 9546/1/0/0/0/0/0/0 us=1787/2270/2997 late=442 stack=11856 state=17800 cpu=71
+[960170130]    opus 9547/0/0/0/0/0/0/0 us=1830/2328/0 late=494 stack=11856 state=17800 cpu=76
+[960170130]    play 9547/3/0/0/0 corr=0/0 lead=320/360 listen=all rawmic=off/0
+[960166366]    opus 9529/12/0/0/0/0/0/0 us=1861/2348/3005 late=482 stack=11856 state=17800 cpu=77
+[960166366]    play 9541/3/0/0/0 corr=0/12 lead=161/372 listen=all rawmic=off/0
+[1050080691]    opus 9539/12/0/0/0/0/0/0 us=1840/2325/3054 late=505 stack=11856 state=17800 cpu=77
+[1050080691]    play 9551/3/0/0/0 corr=0/12 lead=121/360 listen=all rawmic=off/0
+[960170130]    260 s  13238 rec   50.9 rec/s  gaps 0 (missing 0)
+[960166366]    260 s  13226 rec   50.9 rec/s  gaps 0 (missing 0)
+[1050043756]    260 s  13237 rec   50.9 rec/s  gaps 0 (missing 0)
+[1050080691]    260 s  13229 rec   50.9 rec/s  gaps 0 (missing 0)
+[960166366]    opus 9716/12/0/0/0/0/0/0 us=1861/2348/3005 late=482 stack=11856 state=17800 cpu=77
+[960166366]    play 9728/3/0/0/0 corr=0/12 lead=161/372 listen=all rawmic=off/0
+[1050043756]    opus 9733/1/0/0/0/0/0/0 us=1787/2270/2997 late=442 stack=11856 state=17800 cpu=71
+[960170130]    opus 9738/0/0/0/0/0/0/0 us=1829/2328/0 late=494 stack=11856 state=17800 cpu=76
+[960170130]    play 9738/3/0/0/0 corr=0/0 lead=320/360 listen=all rawmic=off/0
+[1050080691]    opus 9726/12/0/0/0/0/0/0 us=1839/2325/3054 late=505 stack=11856 state=17800 cpu=77
+[1050080691]    play 9738/3/0/0/0 corr=0/12 lead=121/360 listen=all rawmic=off/0
+[960166366]    265 s  13480 rec   50.9 rec/s  gaps 0 (missing 0)
+[960170130]    265 s  13492 rec   50.9 rec/s  gaps 0 (missing 0)
+[1050043756]    265 s  13492 rec   50.9 rec/s  gaps 0 (missing 0)
+[1050080691]    265 s  13483 rec   50.9 rec/s  gaps 0 (missing 0)
+[960166366]    opus 9903/13/0/0/0/0/0/0 us=1860/2348/3005 late=482 stack=11856 state=17800 cpu=77
+[960166366]    play 9916/3/0/0/0 corr=0/13 lead=161/372 listen=all rawmic=off/0
+[960170130]    opus 9922/0/0/0/0/0/0/0 us=1827/2328/0 late=494 stack=11856 state=17800 cpu=76
+[960170130]    play 9922/3/0/0/0 corr=0/0 lead=320/360 listen=all rawmic=off/0
+[1050043756]    opus 9922/1/0/0/0/0/0/0 us=1787/2270/2997 late=442 stack=11856 state=17800 cpu=71
+[1050080691]    opus 9913/13/0/0/0/0/0/0 us=1839/2325/3054 late=505 stack=11856 state=17800 cpu=77
+[1050080691]    play 9926/3/0/0/0 corr=0/13 lead=121/360 listen=all rawmic=off/0
+[960166366]    270 s  13734 rec   50.9 rec/s  gaps 0 (missing 0)
+[960170130]    270 s  13747 rec   50.9 rec/s  gaps 0 (missing 0)
+[1050043756]    270 s  13748 rec   50.9 rec/s  gaps 0 (missing 0)
+[1050080691]    270 s  13738 rec   50.9 rec/s  gaps 0 (missing 0)
+[960170130]    opus 10110/0/0/0/0/0/0/0 us=1827/2328/0 late=494 stack=11856 state=17800 cpu=76
+[960170130]    play 10110/3/0/0/0 corr=0/0 lead=320/360 listen=all rawmic=off/0
+[1050043756]    opus 10109/1/0/0/0/0/0/0 us=1787/2270/2997 late=442 stack=11856 state=17800 cpu=71
+[960166366]    opus 10091/13/0/0/0/0/0/0 us=1860/2348/3005 late=482 stack=11856 state=17800 cpu=77
+[960166366]    play 10104/3/0/0/0 corr=0/13 lead=161/372 listen=all rawmic=off/0
+[1050080691]    opus 10102/13/0/0/0/0/0/0 us=1839/2325/3054 late=505 stack=11856 state=17800 cpu=77
+[1050080691]    play 10115/3/0/0/0 corr=0/13 lead=121/360 listen=all rawmic=off/0
+[960166366]    275 s  13990 rec   50.9 rec/s  gaps 0 (missing 0)
+[960170130]    275 s  14002 rec   50.9 rec/s  gaps 0 (missing 0)
+[1050043756]    275 s  14002 rec   50.9 rec/s  gaps 0 (missing 0)
+[1050080691]    275 s  13992 rec   50.9 rec/s  gaps 0 (missing 0)
+[1050043756]    opus 10296/1/0/0/0/0/0/0 us=1787/2270/2997 late=442 stack=11856 state=17800 cpu=71
+[960166366]    opus 10278/13/0/0/0/0/0/0 us=1861/2348/3005 late=482 stack=11856 state=17800 cpu=77
+[960166366]    play 10291/3/0/0/0 corr=0/13 lead=161/372 listen=all rawmic=off/0
+[960170130]    opus 10298/0/0/0/0/0/0/0 us=1826/2328/0 late=494 stack=11856 state=17800 cpu=76
+[960170130]    play 10298/3/0/0/0 corr=0/0 lead=320/360 listen=all rawmic=off/0
+[1050080691]    opus 10288/13/0/0/0/0/0/0 us=1838/2325/3054 late=505 stack=11856 state=17800 cpu=77
+[1050080691]    play 10301/3/0/0/0 corr=0/13 lead=121/360 listen=all rawmic=off/0
+[960170130]    280 s  14257 rec   50.9 rec/s  gaps 0 (missing 0)
+[960166366]    280 s  14244 rec   50.9 rec/s  gaps 0 (missing 0)
+[1050043756]    280 s  14257 rec   50.9 rec/s  gaps 0 (missing 0)
+[1050080691]    280 s  14247 rec   50.9 rec/s  gaps 0 (missing 0)
+[960166366]    opus 10466/13/0/0/0/0/0/0 us=1860/2348/3005 late=482 stack=11856 state=17800 cpu=77
+[960166366]    play 10479/3/0/0/0 corr=0/13 lead=161/372 listen=all rawmic=off/0
+[1050043756]    opus 10484/1/0/0/0/0/0/0 us=1787/2270/2997 late=442 stack=11856 state=17800 cpu=71
+[1050080691]    opus 10475/13/0/0/0/0/0/0 us=1838/2325/3054 late=505 stack=11856 state=17800 cpu=77
+[1050080691]    play 10488/3/0/0/0 corr=0/13 lead=121/360 listen=all rawmic=off/0
+[960170130]    opus 10488/0/0/0/0/0/0/0 us=1825/2328/0 late=494 stack=11856 state=17800 cpu=76
+[960170130]    play 10488/3/0/0/0 corr=0/0 lead=320/360 listen=all rawmic=off/0
+[960170130]    285 s  14513 rec   50.9 rec/s  gaps 0 (missing 0)
+[960166366]    285 s  14499 rec   50.9 rec/s  gaps 0 (missing 0)
+[1050043756]    285 s  14512 rec   50.9 rec/s  gaps 0 (missing 0)
+[1050080691]    285 s  14503 rec   50.9 rec/s  gaps 0 (missing 0)
+[960170130]    opus 10672/0/0/0/0/0/0/0 us=1825/2328/0 late=494 stack=11856 state=17800 cpu=76
+[960170130]    play 10672/3/0/0/0 corr=0/0 lead=320/360 listen=all rawmic=off/0
+[1050043756]    opus 10671/1/0/0/0/0/0/0 us=1787/2270/2997 late=442 stack=11856 state=17800 cpu=71
+[960166366]    opus 10653/13/0/0/0/0/0/0 us=1859/2348/3005 late=482 stack=11856 state=17800 cpu=77
+[960166366]    play 10666/3/0/0/0 corr=0/13 lead=161/372 listen=all rawmic=off/0
+[1050080691]    opus 10663/13/0/0/0/0/0/0 us=1838/2325/3054 late=505 stack=11856 state=17800 cpu=77
+[1050080691]    play 10676/3/0/0/0 corr=0/13 lead=121/360 listen=all rawmic=off/0
+[960166366]    290 s  14754 rec   50.9 rec/s  gaps 0 (missing 0)
+[960170130]    290 s  14767 rec   50.9 rec/s  gaps 0 (missing 0)
+[1050043756]    290 s  14768 rec   50.9 rec/s  gaps 0 (missing 0)
+[1050080691]    290 s  14757 rec   50.9 rec/s  gaps 0 (missing 0)
+[960170130]    opus 10860/0/0/0/0/0/0/0 us=1824/2328/0 late=494 stack=11856 state=17800 cpu=76
+[1050043756]    opus 10859/1/0/0/0/0/0/0 us=1787/2270/2997 late=442 stack=11857 state=17800 cpu=71
+[960170130]    play 10860/3/0/0/0 corr=0/0 lead=320/360 listen=all rawmic=off/0
+[960166366]    opus 10841/13/0/0/0/0/0/0 us=1859/2348/3005 late=482 stack=11856 state=17800 cpu=77
+[960166366]    play 10854/3/0/0/0 corr=0/13 lead=161/372 listen=all rawmic=off/0
+[1050080691]    opus 10850/13/0/0/0/0/0/0 us=1837/2325/3054 late=505 stack=11856 state=17800 cpu=77
+[1050080691]    play 10863/3/0/0/0 corr=0/13 lead=121/360 listen=all rawmic=off/0
+[960170130]    295 s  15023 rec   50.9 rec/s  gaps 0 (missing 0)
+[960166366]    295 s  15010 rec   50.9 rec/s  gaps 0 (missing 0)
+[1050043756]    295 s  15022 rec   50.9 rec/s  gaps 0 (missing 0)
+[1050080691]    295 s  15012 rec   50.9 rec/s  gaps 0 (missing 0)
+[960166366]    opus 11028/13/0/0/0/0/0/0 us=1859/2348/3005 late=482 stack=11856 state=17800 cpu=77
+[960166366]    play 11041/3/0/0/0 corr=0/13 lead=161/372 listen=all rawmic=off/0
+[1050043756]    opus 11047/1/0/0/0/0/0/0 us=1787/2270/2997 late=442 stack=11856 state=17800 cpu=71
+[960170130]    opus 11049/0/0/0/0/0/0/0 us=1823/2328/0 late=494 stack=11856 state=17800 cpu=76
+[960170130]    play 11049/3/0/0/0 corr=0/0 lead=320/360 listen=all rawmic=off/0
+[1050080691]    opus 11038/13/0/0/0/0/0/0 us=1837/2325/3054 late=505 stack=11856 state=17800 cpu=77
+[1050080691]    play 11051/3/0/0/0 corr=0/13 lead=121/360 listen=all rawmic=off/0
+[960166366]    300 s  15264 rec   50.9 rec/s  gaps 0 (missing 0)
+[960170130]    300 s  15278 rec   50.9 rec/s  gaps 0 (missing 0)
+[1050043756]    300 s  15278 rec   50.9 rec/s  gaps 0 (missing 0)
+[1050080691]    300 s  15267 rec   50.9 rec/s  gaps 0 (missing 0)
+[1050043756]    opus 11234/1/0/0/0/0/0/0 us=1787/2270/2997 late=442 stack=11856 state=17800 cpu=71
+[960166366]    opus 11216/13/0/0/0/0/0/0 us=1859/2348/3005 late=482 stack=11856 state=17800 cpu=77
+[960166366]    play 11229/3/0/0/0 corr=0/13 lead=161/372 listen=all rawmic=off/0
+[1050080691]    opus 11223/14/0/0/0/0/0/0 us=1837/2325/3054 late=505 stack=11856 state=17800 cpu=77
+[1050080691]    play 11237/3/0/0/0 corr=0/14 lead=121/360 listen=all rawmic=off/0
+[960170130]    opus 11236/2/0/0/0/0/0/0 us=1823/2328/2830 late=494 stack=11856 state=17800 cpu=76
+[960170130]    play 11238/3/0/0/0 corr=0/2 lead=121/360 listen=all rawmic=off/0
+[1050043756] done (run ended): 15280 records in 303 s, 1 run(s), seq gaps 0 (missing 0), 0 trailing bytes -> soaks/OpusHat2_1030/S2_1050043756_20261030_184445.bin
+[960166366] done (run ended): 15267 records in 303 s, 1 run(s), seq gaps 0 (missing 0), 0 trailing bytes -> soaks/OpusHat2_1030/M0_960166366_20261030_184445.bin
+[1050080691] done (run ended): 15269 records in 303 s, 1 run(s), seq gaps 0 (missing 0), 0 trailing bytes -> soaks/OpusHat2_1030/S1_1050080691_20261030_184445.bin
+[960170130] done (run ended): 15283 records in 303 s, 1 run(s), seq gaps 0 (missing 0), 0 trailing bytes -> soaks/OpusHat2_1030/S3_960170130_20261030_184445.bin

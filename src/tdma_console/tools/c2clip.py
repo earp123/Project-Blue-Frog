@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
-"""Prepare the speech clips for a Codec 2 transport soak.
+"""Prepare the speech clips for a Codec 2 (or Opus) transport soak.
 
 Usage:
     c2clip.py fetch [-d soaks/clips]        # download the three OSR files
     c2clip.py encode in.wav -o clip.c2 [--mode 3200]
+    c2clip.py opus in.wav -o clip.op72      # 80 B payload builds
     c2clip.py pcm in.wav -o clip.pcm [--seconds 8]    # encode test
 
 encode takes 8 kHz, 16-bit mono PCM (Codec 2's native input), encodes it,
@@ -12,6 +13,11 @@ and writes clip.c2 plus clip_ref.wav, the clip's own decode: what a lossless
 link should play back, and the reference reconstruct_c2.py scores against.
 It prints the chunk count and the CRC32 that the unit reports after
 `rtt_link.py clip clip.c2`.
+
+opus is the same for a CONFIG_TDMA_PAYLOAD_LEN=80 build (docs/opus_payload.md):
+Opus SILK narrowband at 7.2 kbit/s CBR with decision 2's settings
+(opuscodec.py), four 18-byte frames to a 72-byte chunk, and clip_ref.wav the
+clip's own lossless decode.
 
 pcm cuts the first --seconds of a WAV to a whole number of 80 ms chunks and
 writes it as raw little-endian 16-bit samples, for the on-device encode test
@@ -63,7 +69,11 @@ def write_wav(path, pcm):
 
 
 def ref_path(clip_path):
-    return os.path.splitext(clip_path)[0] + "_ref.wav"
+    """clip.c2 -> clip_ref.wav; any other clip keeps its extension in the
+    name (clip.op72 -> clip_op72_ref.wav), so one talker's Codec 2 and Opus
+    clips never share a reference."""
+    stem, ext = os.path.splitext(clip_path)
+    return stem + ("" if ext == ".c2" else "_" + ext[1:]) + "_ref.wav"
 
 
 def cmd_fetch(args):
@@ -109,6 +119,36 @@ def cmd_encode(args):
     print("%s: reference decode" % ref_path(args.out))
 
 
+OPUS_FRAMES = 4		# 20 ms frames per 80 ms chunk
+
+
+def cmd_opus(args):
+    import opuscodec
+    pcm = read_wav(args.wav)
+    n = len(pcm) // (OPUS_FRAMES * opuscodec.FRAME_SAMPLES) * OPUS_FRAMES
+    if n == 0:
+        sys.exit("%s: shorter than one 80 ms chunk" % args.wav)
+    packets = opuscodec.encode(pcm, args.bitrate)[:n]
+    data = b"".join(packets)
+    dec = opuscodec.Decoder()
+    ref = np.concatenate([dec.decode(p) for p in packets])
+
+    with open(args.out, "wb") as f:
+        f.write(data)
+    write_wav(ref_path(args.out), ref)
+
+    chunk = len(data) // (n // OPUS_FRAMES)
+    crc = zlib.crc32(data) & 0xFFFFFFFF
+    print("%s: %d B, %d chunks of %d B (%.2f s), crc32 %08x, clip_id %04x"
+          "  [%s]" % (args.out, len(data), n // OPUS_FRAMES, chunk,
+                      n * opuscodec.FRAME_SAMPLES / opuscodec.FS, crc,
+                      crc & 0xFFFF, opuscodec.backend()))
+    if chunk != 72:
+        print("note: an 80 B payload carries 72 B chunks; this clip needs "
+              "CONFIG_TDMA_PAYLOAD_LEN=%d" % (chunk + 8))
+    print("%s: reference decode" % ref_path(args.out))
+
+
 PCM_CHUNK = 640		# samples per 80 ms chunk (c2_enc.h)
 
 
@@ -137,12 +177,18 @@ def main():
     p.add_argument("-o", "--out", required=True)
     p.add_argument("--mode", type=int, default=3200,
                    choices=sorted(c2codec.MODES))
+    p = sub.add_parser("opus", help="WAV -> Opus clip + _ref.wav (80 B "
+                                    "payloads)")
+    p.add_argument("wav")
+    p.add_argument("-o", "--out", required=True)
+    p.add_argument("--bitrate", type=int, default=7200)
     p = sub.add_parser("pcm", help="WAV -> raw PCM excerpt (encode test)")
     p.add_argument("wav")
     p.add_argument("-o", "--out", required=True)
     p.add_argument("--seconds", type=float, default=8.0)
     args = ap.parse_args()
-    {"fetch": cmd_fetch, "encode": cmd_encode, "pcm": cmd_pcm}[args.cmd](args)
+    {"fetch": cmd_fetch, "encode": cmd_encode, "opus": cmd_opus,
+     "pcm": cmd_pcm}[args.cmd](args)
 
 
 if __name__ == "__main__":

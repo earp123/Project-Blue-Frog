@@ -37,7 +37,7 @@ int tdma_radio_write_hdr(uint8_t slot_id, uint16_t frame_ctr);
 /* Result of draining one DIO1 event. */
 struct tdma_radio_event {
 	uint16_t irq;
-	bool have_rx;			/* raw[] holds a full 44-byte packet */
+	bool have_rx;			/* raw[] holds a full TDMA_ON_AIR_LEN packet */
 	uint8_t raw_len;		/* on-air length reported by the chip */
 	uint8_t raw[TDMA_ON_AIR_LEN];
 	int16_t rssi;

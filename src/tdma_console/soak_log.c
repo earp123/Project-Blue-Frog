@@ -192,7 +192,7 @@ int soak_log_start(enum tdma_role role, uint8_t slot_id, int8_t tx_power_dbm,
 		m.p16 = TONE_F0_HZ;
 	} else if (PAYLOAD_CLIP_LINKED && mode == SOAK_PAYLOAD_CLIP) {
 		m.payload_mode = SOAK_PAYLOAD_CLIP;
-		m.p8 = CLIP_CODEC_3200;
+		m.p8 = CLIP_CODEC;
 		m.p16 = (uint16_t)clip_src_chunks();
 	} else if (PAYLOAD_PCM_LINKED && mode == SOAK_PAYLOAD_PCM) {
 		m.payload_mode = SOAK_PAYLOAD_PCM;
@@ -654,7 +654,7 @@ static void do_fsop(void)
 	fsop.result = rc;
 }
 
-/* Every sink but the card: a 64 B memcpy into the RTT ring, when built in. */
+/* Every sink but the card: a record memcpy into the RTT ring, when built in. */
 static void write_rtt(const struct soak_rec *r)
 {
 #ifdef CONFIG_SOAK_RTT

@@ -6,7 +6,8 @@
  * RAM ring the on-board J-Link reads and writes over SWD. Task and design:
  * docs/rtt_link_c2_transport.md.
  *
- *   up 1   "soak"  8 KB    the raw 64 B soak_rec stream, identical to the card
+ *   up 1   "soak"  8 KB    the raw soak_rec stream (64 B records, 128 B at
+ *                          80 B payloads), identical to the card
  *   up 2   "ctl"   512 B   one text reply per command line
  *   down 1 "ctl"   1 KB    text commands from tools/rtt_link.py, plus clip
  *                          bytes after a "clip" line
@@ -96,7 +97,7 @@ struct rtt_link_ops {
 };
 
 /*
- * Push one 64 B record to up 1. Returns false if it did not fit (dropped).
+ * Push one record to up 1. Returns false if it did not fit (dropped).
  * soak_log writer thread only.
  */
 bool rtt_link_write_rec(const void *rec, uint32_t len);
