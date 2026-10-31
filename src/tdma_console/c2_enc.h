@@ -1,6 +1,9 @@
 /*
- * c2_enc - Codec 2 encoding on the device, for the encode test
- * (CONFIG_SOAK_C2_ENCODE, payload mode PCM). docs/c2_encode_test.md.
+ * c2_enc - voice encoding on the device, for the encode test (payload mode
+ * PCM) and the HAT mic (mode MIC): Codec 2 3200 with CONFIG_SOAK_C2_ENCODE
+ * (docs/c2_encode_test.md), or Opus SILK at 7.2 kbit/s with
+ * CONFIG_SOAK_OPUS_ENC on 80-byte payloads (docs/opus_payload.md, 18 B
+ * frames, 72 B chunks: read "Codec 2" below as either).
  *
  * A simulated microphone locked to the TDMA frame: the clip buffer holds raw
  * 8 kHz 16-bit PCM (uploaded over RTT, a whole number of 80 ms chunks). The
@@ -81,6 +84,10 @@ struct c2_enc_stats {
 	uint32_t start_late_max_us;	/* worst wake-up after a capture */
 	uint32_t stack_unused;	/* encoder stack never touched, bytes */
 	uint32_t unlogged;	/* staged records overwritten before logging */
+	uint32_t frames;	/* 20 ms frames encoded this run */
+	uint32_t frame_enc_avg_us;	/* mean single-frame encode */
+	uint32_t enc_errors;	/* Opus: frames that did not encode to size */
+	uint32_t state_bytes;	/* Opus: opus_encoder_get_size(1) */
 };
 
 void c2_enc_get_stats(struct c2_enc_stats *out);

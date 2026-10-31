@@ -128,8 +128,12 @@ if(CONFIG_SOAK_OPUS_DEC)
     external/opus/silk/fixed/*.c external/opus/src/*.c)
   add_library(opus STATIC ${opus_sources})
   target_link_libraries(opus PRIVATE zephyr_interface)
+  # OPUS_ARM_INLINE_ASM / _EDSP: upstream's inline-asm fixed-point
+  # multiplies (celt/arm, silk/arm), single SMULWB/SMLAWB/SMULL-class
+  # instructions on the M33's DSP extension instead of 64-bit C maths.
   target_compile_definitions(opus PRIVATE OPUS_BUILD FIXED_POINT
-    DISABLE_FLOAT_API VAR_ARRAYS "PACKAGE_VERSION=\"1.5.2\"")
+    DISABLE_FLOAT_API VAR_ARRAYS "PACKAGE_VERSION=\"1.5.2\""
+    OPUS_ARM_INLINE_ASM OPUS_ARM_INLINE_EDSP)
   target_compile_options(opus PRIVATE -w
     -include ${CMAKE_CURRENT_SOURCE_DIR}/external/codec2_opt.h)
   target_include_directories(opus PRIVATE external/opus/celt
@@ -137,6 +141,17 @@ if(CONFIG_SOAK_OPUS_DEC)
   target_include_directories(opus PUBLIC external/opus/include)
   target_link_libraries(app PRIVATE opus)
   target_sources(app PRIVATE src/tdma_console/opus_dec.c)
+  # The same encoder pipeline as Codec 2's, on libopus
+  # (CONFIG_SOAK_OPUS_ENC).
+  target_sources_ifdef(CONFIG_SOAK_OPUS_ENC app PRIVATE
+    src/tdma_console/c2_enc.c)
+endif()
+# A clip compiled into flash (CONFIG_SOAK_CLIP_BUILTIN), loaded at boot by
+# clip_src.c: a field unit with no mic and no PC.
+if(CONFIG_SOAK_CLIP_BUILTIN)
+  generate_inc_file_for_target(app
+    ${CMAKE_CURRENT_SOURCE_DIR}/${CONFIG_SOAK_CLIP_BUILTIN_FILE}
+    ${ZEPHYR_BINARY_DIR}/include/generated/clip_builtin.inc)
 endif()
 # The WM8960 HAT (CONFIG_SOAK_AUDIO_HAT): mic and earpieces, for either
 # codec's decoder.

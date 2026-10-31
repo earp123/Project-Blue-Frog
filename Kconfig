@@ -181,6 +181,54 @@ config SOAK_OPUS_DEC
 	  (tools/c2clip.py opus); there is no device encoder yet. Status
 	  reports decode time, PLC counts, stack and state size.
 
+config SOAK_OPUS_ENC
+	bool "Encode Opus on the device: the HAT mic (mode MIC) and PCM clips"
+	depends on SOAK_OPUS_DEC && !SOAK_C2_ENCODE
+	select FPU
+	select FPU_SHARING
+	help
+	  The on-device encoder (c2_enc.c) with libopus instead of Codec 2:
+	  SILK narrowband, 7.2 kbit/s CBR, SILK forced, no DTX or FEC
+	  (docs/opus_payload.md decision 2), four 18 B frames per 72 B
+	  chunk. Adds the "mic" mode with SOAK_AUDIO_HAT (live voice: the
+	  intercom) and the "pcm" encode test; received chunks in either go
+	  to the Opus decoder. Gate C1's encode half: status "enc" reports
+	  per-frame encode time, stack and state size. The FPU is on: a
+	  little float is left in the fixed-point encode path (-20 % time).
+	  The capture phase defaults to 20 ms: the worst frame encode
+	  (~11 ms at complexity 0) plus the 3.5 ms pickup must fit in it.
+
+config SOAK_OPUS_COMPLEXITY
+	int "Opus encoder complexity (0-10)"
+	default 0
+	range 0 10
+	depends on SOAK_OPUS_ENC
+	help
+	  Decision 2 started at 2, but on the M33 at 128 MHz (fixed point,
+	  FPU and DSP inline asm, 2026-10-30) a 20 ms frame takes ~27 ms at
+	  2 (SILK's delayed-decision quantizer), 8.5 ms at 1 and 7.5 ms
+	  (worst 10.6) at 0: only 0 and 1 run in real time. On the host,
+	  0/1/2 score STOI 0.862/0.865/0.878 on clean speech (Codec 2:
+	  0.791).
+
+config SOAK_CLIP_BUILTIN
+	bool "A clip compiled into flash, valid from boot"
+	depends on SOAK_RTT
+	help
+	  Load SOAK_CLIP_BUILTIN_FILE into the clip buffer at boot, so the
+	  unit can run clip mode (its boot mode then) with no PC to upload
+	  one: a field unit with no mic. An upload over RTT still replaces it
+	  until reset.
+
+config SOAK_CLIP_BUILTIN_FILE
+	string "Clip file, relative to the application directory"
+	depends on SOAK_CLIP_BUILTIN
+	default "soaks/clips/OSR_0011_F.op72"
+	help
+	  A clip as c2clip.py writes it: a whole number of chunks (32 B for
+	  40-byte payloads, 72 B for 80-byte ones), at most
+	  SOAK_CLIP_BUF_KB.
+
 config SOAK_AUDIO_HAT
 	bool "WM8960 Audio HAT: mic (payload mode MIC) and earpieces"
 	depends on SOAK_C2_ENCODE || SOAK_OPUS_DEC
@@ -189,11 +237,11 @@ config SOAK_AUDIO_HAT
 	help
 	  Drive a WM8960 Audio HAT (docs/live_audio_wm8960.md): codec setup
 	  over i2c1, i2s0 as the slave at 8 kHz, both mics into a capture
-	  ring, and playout of the decoded peers to the earpieces. With
-	  SOAK_C2_ENCODE, the "mic" payload mode: the per-frame encoder
-	  takes live 20 ms frames (a mono mix, "mix avg|left|right") instead
-	  of the PCM clip. With SOAK_OPUS_DEC, the received Opus clips play
-	  (no mic mode: there is no Opus encoder on the device yet). Needs
+	  ring, and playout of the decoded peers to the earpieces. With an
+	  encoder (SOAK_C2_ENCODE, or SOAK_OPUS_ENC) the "mic" payload mode,
+	  the boot mode: the per-frame encoder takes live 20 ms frames (a
+	  mono mix, "mix avg|left|right") instead of the PCM clip. With
+	  SOAK_OPUS_DEC alone, the received Opus clips play. Needs
 	  boards/audio_hat.overlay after the unit's own overlay.
 
 config SOAK_MIC_DSP

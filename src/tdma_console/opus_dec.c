@@ -359,7 +359,7 @@ void opus_dec_get_stats(struct opus_dec_stats *out)
 			: 0;
 }
 
-#ifndef CONFIG_SOAK_C2_ENCODE
+#if !defined(CONFIG_SOAK_C2_ENCODE) && !defined(CONFIG_SOAK_OPUS_ENC)
 /*
  * The application core at 128 MHz, as c2_enc.c sets it for the Codec 2
  * builds: it resets to 64 MHz. The divider sets the CPU clock only; the

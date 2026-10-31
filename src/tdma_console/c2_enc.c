@@ -1,5 +1,9 @@
 /*
- * c2_enc - Codec 2 encoding on the device. See c2_enc.h.
+ * c2_enc - voice encoding on the device: Codec 2 3200, or with
+ * CONFIG_SOAK_OPUS_ENC Opus SILK at 7.2 kbit/s (docs/opus_payload.md
+ * decision 2). See c2_enc.h. The pipeline (frame-locked capture, staging
+ * ahead of the pickup) is the same for both; only the frame encode, its
+ * size and the codec byte in the header differ.
  *
  * SPDX-License-Identifier: Apache-2.0
  */
@@ -13,7 +17,11 @@
 #include <stdlib.h>
 #include <string.h>
 
+#ifdef CONFIG_SOAK_OPUS_ENC
+#include <opus.h>
+#else
 #include <codec2.h>
+#endif
 
 #include "c2_enc.h"
 #include "clip_src.h"
@@ -26,18 +34,27 @@
 #endif
 
 /* codec2_encode keeps FFT and pitch buffers on the stack: 16 KB left only
- * 1.7 KB never touched (status enc=.../<unused>), so 20 KB.
+ * 1.7 KB never touched (status enc=.../<unused>), so 20 KB. libopus puts
+ * its scratch there too (VAR_ARRAYS): ~17.5 KB at complexity 0-2 (32 KB
+ * left 15.3 KB untouched, 2026-10-30), so 24 KB.
  */
+#ifdef CONFIG_SOAK_OPUS_ENC
+#define ENC_STACK	24576
+#else
 #define ENC_STACK	20480
+#endif
 #define ENC_PRIO	K_PRIO_PREEMPT(0)
 
 #define FRAMES_PER_CHUNK	4
 #define FRAME_SAMPLES		(C2_ENC_CHUNK_SAMPLES / FRAMES_PER_CHUNK)
-#define FRAME_BYTES		8
-#define FRAME_US		20000	/* one Codec 2 3200 frame of audio */
+/* 8 B (Codec 2 3200), or 18 B (Opus CBR at 7.2 kbit/s) */
+#define FRAME_BYTES		(CLIP_CHUNK / FRAMES_PER_CHUNK)
+#define FRAME_US		20000	/* one 20 ms frame of audio */
 
 BUILD_ASSERT(FRAMES_PER_CHUNK * FRAME_BYTES == CLIP_CHUNK,
-	     "four Codec 2 3200 frames fill the clip payload");
+	     "four frames fill the clip payload");
+BUILD_ASSERT(IS_ENABLED(CONFIG_SOAK_OPUS_ENC) == (CLIP_CODEC == CLIP_CODEC_OPUS),
+	     "Codec 2 3200 needs 40-byte payloads, Opus 80-byte ones");
 BUILD_ASSERT(FRAMES_PER_CHUNK * FRAME_US == TDMA_FRAME_DURATION_US,
 	     "a chunk is one TDMA frame of audio");
 
@@ -49,7 +66,16 @@ static K_SEM_DEFINE(enc_ready, 0, 1);	/* codec created (or not) */
 static int create_result;
 
 /* Run parameters and codec, owned by the encoder thread while running. */
+#ifdef CONFIG_SOAK_OPUS_ENC
+/* opus_encoder_init() into a static buffer; the size is checked at start
+ * (24548 B, 1.5.2 fixed point).
+ */
+#define OPUS_ENC_BYTES	26624
+static uint8_t enc_mem[OPUS_ENC_BYTES] __aligned(8);
+static OpusEncoder *codec;
+#else
 static struct CODEC2 *codec;
+#endif
 static uint32_t phase_us;
 static bool from_mic;		/* live HAT frames, not the PCM clip */
 static atomic_t running;
@@ -62,7 +88,9 @@ static struct c2_enc_tx rec;
 static bool rec_new;
 
 static struct c2_enc_stats stats;
+static uint64_t enc_sum_us;
 
+#ifndef CONFIG_SOAK_OPUS_ENC
 /*
  * Codec 2 built with __EMBEDDED__ allocates through these (debug_alloc.h).
  * The libc heap (CONFIG_COMMON_LIBC_MALLOC_ARENA_SIZE) serves them and the
@@ -83,6 +111,7 @@ void codec2_free(void *ptr)
 {
 	free(ptr);
 }
+#endif
 
 /* Codec 2's frames are 20 ms of int16 PCM; the clip is little-endian bytes. */
 static int16_t frame_pcm[FRAME_SAMPLES];
@@ -115,6 +144,7 @@ int c2_enc_start(uint32_t phase, bool mic)
 
 	rec_new = false;
 	memset(&stats, 0, sizeof(stats));
+	enc_sum_us = 0;
 	k_spin_unlock(&rec_lock, key);
 
 	phase_us = phase;
@@ -220,7 +250,18 @@ static void encode_frame(uint32_t n, int k, uint8_t *out)
 #endif
 	}
 #endif
+#ifdef CONFIG_SOAK_OPUS_ENC
+	/* CBR: exactly FRAME_BYTES, or an error (counted; the frame sent
+	 * silent-looking zeros, which the decoder rejects as corrupt).
+	 */
+	if (opus_encode(codec, frame_pcm, FRAME_SAMPLES, out, FRAME_BYTES) !=
+	    FRAME_BYTES) {
+		memset(out, 0, FRAME_BYTES);
+		stats.enc_errors++;
+	}
+#else
 	codec2_encode(codec, out, frame_pcm);
+#endif
 }
 
 /* The clip test header (clip_src.h). clip_id is the PCM's CRC: the host ties
@@ -229,7 +270,7 @@ static void encode_frame(uint32_t n, int k, uint8_t *out)
 static void put_header(uint32_t n, uint8_t out[TDMA_PAYLOAD_LEN])
 {
 	out[0] = CLIP_MAGIC;
-	out[1] = CLIP_CODEC_3200;
+	out[1] = CLIP_CODEC;
 	sys_put_le16((uint16_t)n, &out[2]);
 	/* Live audio has no clip to name: clip_id 0. */
 	sys_put_le16(from_mic ? 0 : (uint16_t)clip_src_crc(), &out[4]);
@@ -330,8 +371,14 @@ static void run(atomic_val_t id)
 			uint32_t t0 = tdma_now_us();
 
 			encode_frame(n, k, &out[CLIP_HDR_LEN + k * FRAME_BYTES]);
-			stats.frame_enc_max_us = MAX(stats.frame_enc_max_us,
-						     tdma_now_us() - t0);
+
+			uint32_t us = tdma_now_us() - t0;
+
+			stats.frame_enc_max_us = MAX(stats.frame_enc_max_us, us);
+			enc_sum_us += us;
+			stats.frames++;
+			stats.frame_enc_avg_us =
+				(uint32_t)(enc_sum_us / stats.frames);
 		}
 
 		/* The chunk is complete and encoded: straight to the engine. */
@@ -378,6 +425,43 @@ static void run(atomic_val_t id)
 	}
 }
 
+#ifdef CONFIG_SOAK_OPUS_ENC
+/* opus_private.h, not public: keep 20 ms frames under 15 B in SILK. */
+#define OPUS_SET_FORCE_MODE_REQUEST	11002
+#define MODE_SILK_ONLY			1000
+
+/*
+ * Decision 2: SILK narrowband, VOIP, voice, CBR at FRAME_BYTES per 20 ms
+ * frame, no DTX, no in-band FEC (a chunk's four frames are lost together),
+ * SILK forced (a no-op at 18 B, byte for byte, and what keeps a smaller
+ * frame from becoming CELT). A fresh state per run, as Codec 2 has.
+ */
+static OpusEncoder *create_opus(void)
+{
+	OpusEncoder *st = (OpusEncoder *)enc_mem;
+	int size = opus_encoder_get_size(1);
+
+	stats.state_bytes = (uint32_t)size;
+	if (size <= 0 || size > (int)sizeof(enc_mem) ||
+	    opus_encoder_init(st, 8000, 1, OPUS_APPLICATION_VOIP) != OPUS_OK) {
+		return NULL;
+	}
+	if (opus_encoder_ctl(st, OPUS_SET_BANDWIDTH(OPUS_BANDWIDTH_NARROWBAND)) ||
+	    opus_encoder_ctl(st, OPUS_SET_SIGNAL(OPUS_SIGNAL_VOICE)) ||
+	    opus_encoder_ctl(st, OPUS_SET_VBR(0)) ||
+	    opus_encoder_ctl(st, OPUS_SET_BITRATE(FRAME_BYTES * 8 *
+						   (1000000 / FRAME_US))) ||
+	    opus_encoder_ctl(st, OPUS_SET_DTX(0)) ||
+	    opus_encoder_ctl(st, OPUS_SET_INBAND_FEC(0)) ||
+	    opus_encoder_ctl(st, OPUS_SET_COMPLEXITY(
+			     CONFIG_SOAK_OPUS_COMPLEXITY)) ||
+	    opus_encoder_ctl(st, OPUS_SET_FORCE_MODE_REQUEST, MODE_SILK_ONLY)) {
+		return NULL;
+	}
+	return st;
+}
+#endif
+
 static void enc_thread_fn(void *p1, void *p2, void *p3)
 {
 	ARG_UNUSED(p1);
@@ -387,8 +471,13 @@ static void enc_thread_fn(void *p1, void *p2, void *p3)
 	for (;;) {
 		k_sem_take(&enc_go, K_FOREVER);
 
+#ifdef CONFIG_SOAK_OPUS_ENC
+		codec = create_opus();
+		create_result = (codec != NULL) ? 0 : -ENOMEM;
+#else
 		codec = codec2_create(CODEC2_MODE_3200);
 		create_result = (codec != NULL) ? 0 : -ENOMEM;
+#endif
 #ifdef CONFIG_SOAK_MIC_DSP
 		if (codec != NULL && mic_dsp_start() < 0) {
 			codec2_destroy(codec);
@@ -403,7 +492,9 @@ static void enc_thread_fn(void *p1, void *p2, void *p3)
 
 		run(atomic_get(&run_id));
 
+#ifndef CONFIG_SOAK_OPUS_ENC
 		codec2_destroy(codec);
+#endif
 		codec = NULL;
 		atomic_set(&alive, 0);
 	}

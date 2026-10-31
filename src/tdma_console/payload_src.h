@@ -32,8 +32,12 @@
 #ifdef CONFIG_SOAK_RTT
 #include "rtt_link.h"
 #endif
-#ifdef CONFIG_SOAK_C2_ENCODE
+/* An on-device encoder: Codec 2, or Opus (CONFIG_SOAK_OPUS_ENC). */
+#if defined(CONFIG_SOAK_C2_ENCODE) || defined(CONFIG_SOAK_OPUS_ENC)
+#define PAYLOAD_HAS_ENC 1
 #include "c2_enc.h"
+#endif
+#ifdef CONFIG_SOAK_C2_ENCODE
 #include "c2_dec.h"
 #endif
 #ifdef CONFIG_SOAK_AUDIO_HAT
@@ -50,14 +54,16 @@
 	(IS_ENABLED(CONFIG_SOAK_RTT) || IS_ENABLED(CONFIG_SOAK_PAYLOAD_CLIP))
 #define PAYLOAD_LADDER_LINKED \
 	(IS_ENABLED(CONFIG_SOAK_RTT) || IS_ENABLED(CONFIG_SOAK_PAYLOAD_LADDER))
-/* The on-device encoder: only with CONFIG_SOAK_C2_ENCODE, and never a Kconfig
- * default (it needs a PCM clip, uploaded over RTT, and "mode pcm").
+/* The on-device encoder: only with CONFIG_SOAK_C2_ENCODE or
+ * CONFIG_SOAK_OPUS_ENC, and never a Kconfig default (it needs a PCM clip,
+ * uploaded over RTT, and "mode pcm").
  */
-#define PAYLOAD_PCM_LINKED	IS_ENABLED(CONFIG_SOAK_C2_ENCODE)
+#define PAYLOAD_PCM_LINKED	IS_ENABLED(PAYLOAD_HAS_ENC)
 /* The same encoder fed by the WM8960 HAT's mics ("mode mic"). An Opus
- * decode build has the HAT for its earpieces but no encoder, so no mic mode.
+ * decode-only build has the HAT for its earpieces but no encoder: no mic.
  */
-#define PAYLOAD_MIC_LINKED 	(IS_ENABLED(CONFIG_SOAK_AUDIO_HAT) && IS_ENABLED(CONFIG_SOAK_C2_ENCODE))
+#define PAYLOAD_MIC_LINKED \
+	(IS_ENABLED(CONFIG_SOAK_AUDIO_HAT) && IS_ENABLED(PAYLOAD_HAS_ENC))
 
 /* The modes whose chunks the on-device encoder makes and stages itself,
  * and whose received chunks go to the decoder.
@@ -98,13 +104,13 @@ static inline enum soak_payload_mode payload_next_mode(void)
  */
 static inline bool payload_ready(enum soak_payload_mode mode)
 {
-#ifdef CONFIG_SOAK_C2_ENCODE
+#ifdef PAYLOAD_HAS_ENC
 	if (mode == SOAK_PAYLOAD_PCM) {
 		return c2_enc_pcm_ok();
 	}
 #endif
 	if (mode == SOAK_PAYLOAD_MIC) {
-#ifdef CONFIG_SOAK_AUDIO_HAT
+#if defined(CONFIG_SOAK_AUDIO_HAT) && defined(PAYLOAD_HAS_ENC)
 		return hat_audio_ok();
 #else
 		return false;
@@ -114,15 +120,43 @@ static inline bool payload_ready(enum soak_payload_mode mode)
 	       clip_src_valid();
 }
 
-/* PCM mode: a received peer payload, for the decoder (c2_dec_submit()). */
+/* PCM and MIC modes: a received peer payload, for the decoder: c2_dec, or
+ * opus_dec in an Opus build.
+ */
 static inline void payload_rx_pcm(uint8_t slot_id,
 				  const uint8_t payload[TDMA_PAYLOAD_LEN])
 {
-#ifdef CONFIG_SOAK_C2_ENCODE
+#if defined(CONFIG_SOAK_C2_ENCODE)
 	c2_dec_submit(slot_id, payload);
+#elif defined(CONFIG_SOAK_OPUS_ENC)
+	opus_dec_submit(slot_id, payload);
 #else
 	ARG_UNUSED(slot_id);
 	ARG_UNUSED(payload);
+#endif
+}
+
+/* PCM and MIC modes: run start of the decoder that payload_rx_pcm() feeds
+ * (c2_dec with its "decx" phantom streams, or opus_dec), and its stop.
+ */
+static inline int payload_pcm_dec_start(uint8_t own_slot)
+{
+#if defined(CONFIG_SOAK_C2_ENCODE)
+	return c2_dec_start(own_slot, rtt_link_decx());
+#elif defined(CONFIG_SOAK_OPUS_ENC)
+	return opus_dec_start(own_slot);
+#else
+	ARG_UNUSED(own_slot);
+	return 0;
+#endif
+}
+
+static inline void payload_pcm_dec_stop(void)
+{
+#if defined(CONFIG_SOAK_C2_ENCODE)
+	c2_dec_stop();
+#elif defined(CONFIG_SOAK_OPUS_ENC)
+	opus_dec_stop();
 #endif
 }
 
@@ -177,7 +211,7 @@ static inline uint32_t payload_mic_mix(void)
 /* PCM mode: 80 ms chunks in the clip buffer (META). */
 static inline uint32_t payload_pcm_chunks(void)
 {
-#ifdef CONFIG_SOAK_C2_ENCODE
+#ifdef PAYLOAD_HAS_ENC
 	uint32_t len;
 
 	(void)clip_src_data(&len);
@@ -198,7 +232,7 @@ static inline bool payload_take_pcm(uint8_t out[TDMA_PAYLOAD_LEN],
 				    uint32_t *stage_us, uint32_t *lead_us,
 				    uint32_t *ready_us, uint32_t *tx_done)
 {
-#ifdef CONFIG_SOAK_C2_ENCODE
+#ifdef PAYLOAD_HAS_ENC
 	struct c2_enc_tx rec;
 
 	if (!c2_enc_staged(&rec)) {

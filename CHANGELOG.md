@@ -91,6 +91,50 @@ Four other variants were retired on 2026-09-25: LoRa send, the telemetry
 console, the TDMA UART-shell test and the UART soak harness (see "Streamlined
 to two unit types"). Their sections below are kept as history.
 
+### Live voice over Opus: C1's encode half, mic mode on the HATs, field images (2026-10-30)
+
+Task: [`docs/opus_payload.md`](docs/opus_payload.md). Run in
+[`soaks/OpusMic_1030/`](soaks/OpusMic_1030) (four units, 3 min, −9 dBm;
+the device counters are in `capture.txt`). Same units as the entry below.
+
+- **`CONFIG_SOAK_OPUS_ENC`:** the on-device encoder (`c2_enc.c`, the
+  Codec 2 pipeline) gets a libopus backend, so mic mode now speaks Opus.
+  - Settings are decision 2's, with SILK forced; four 18 B frames per
+    chunk.
+  - Peers in mic and PCM mode decode through `opus_dec`.
+  - HAT units boot in mic mode with no PC attached.
+- **C1's encode half fails its 5 ms bar.** Timings are per 20 ms frame on
+  the M33 at 128 MHz:
+  - Complexity 2: 32.6 ms. With the FPU (a little float is left in the
+    fixed-point path), 26–28 ms. Not real time.
+  - Complexity 1: 8.5 ms. Complexity 0: 8.3–8.6 ms, worst 17.
+  - With upstream's ARM DSP inline asm (`OPUS_ARM_INLINE_ASM` / `_EDSP`;
+    the eight `arm/` headers are now vendored), complexity 0 is 7.5 ms,
+    worst 10.6.
+  - Complexity 2 is SILK's delayed-decision quantizer.
+  - On the host, complexity 0/1/2 score STOI 0.862/0.865/0.878 on clean
+    speech (Codec 2: 0.791).
+  - The build ships complexity 0 (`CONFIG_SOAK_OPUS_COMPLEXITY`), the FPU
+    on, and a 20 ms capture phase (12 ms with Codec 2), so the worst
+    frame plus the 3.5 ms pickup fit. That is 8 ms more delay.
+  - The doc's next lever for CPU is 2 × 40 ms frames, a separate
+    decision.
+- **The first try starved the unit.** At complexity 2 the encoder thread
+  (preemptible 0) never slept. The RTT writer, logger and UI starved,
+  status went silent, and no fault was printed. Diagnosed by dropping the
+  encoder below the writer for one build.
+- **Live run (four units, three talking):**
+  - About 2,245 chunks encoded per HAT unit: none late, none refused.
+  - Encode 5.8–7.7 ms per frame on average, worst 9.7–12.2 ms. Every
+    chunk staged ≥ 8 ms before its slot.
+  - Encoder state 24,548 B; stack ~17.5 KB of 24 KB.
+  - Every peer decoded, one gap filled in the run (SEC 1), playout steady.
+- **`CONFIG_SOAK_CLIP_BUILTIN`:** a clip compiled into flash and valid
+  from boot, for a unit with no mic. SEC 2 boots sending `OSR_0011_F`.
+  Opus decode-only HAT builds no longer default to mic mode.
+- **Field images** at +22 dBm, presets slot 0–3: HAT units in mic mode,
+  SEC 2 on its built-in clip.
+
 ### Opus over the air: C0 passed, 84-byte packets, card #23 fixed, Opus decoded on the HATs (2026-10-30)
 
 Task: [`docs/opus_payload.md`](docs/opus_payload.md). Runs in

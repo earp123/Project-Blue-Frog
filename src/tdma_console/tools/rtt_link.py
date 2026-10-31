@@ -315,11 +315,13 @@ def cmd_capture(link, args):
                         print(f"[{link.sn}] >> listening as slot {mon.own}: "
                               f"{mon.status()}", flush=True)
                     if soak_sent and args.soak is not None:
-                        # On-device decode builds: the decoder's and the
-                        # earpieces' counters, live (the soak channel is
-                        # separate, so this costs the stream nothing).
+                        # On-device codec builds: the encoder's, the
+                        # decoder's and the earpieces' counters, live (the
+                        # soak channel is separate, so this costs the stream
+                        # nothing).
                         for line in link.command("status").splitlines():
-                            if line.startswith(("ok opus", "ok play")):
+                            if line.startswith(("ok enc", "ok opus",
+                                                "ok play")):
                                 print(f"[{link.sn}]    {line[3:]}",
                                       flush=True)
 

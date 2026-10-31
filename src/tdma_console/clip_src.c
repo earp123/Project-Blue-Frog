@@ -27,6 +27,32 @@ static uint32_t load_len;
 static uint32_t load_got;
 static uint32_t load_crc;
 
+#ifdef CONFIG_SOAK_CLIP_BUILTIN
+#include <zephyr/init.h>
+
+/* CONFIG_SOAK_CLIP_BUILTIN_FILE, as bytes (CMakeLists.txt). */
+static const uint8_t clip_builtin[] = {
+#include "clip_builtin.inc"
+};
+
+BUILD_ASSERT(sizeof(clip_builtin) % CLIP_CHUNK == 0,
+	     "the built-in clip is not a whole number of chunks");
+BUILD_ASSERT(sizeof(clip_builtin) <= sizeof(clip_buf),
+	     "the built-in clip does not fit SOAK_CLIP_BUF_KB");
+
+/* Valid from boot, as if uploaded; an upload replaces it until reset. */
+static int clip_builtin_load(void)
+{
+	memcpy(clip_buf, clip_builtin, sizeof(clip_builtin));
+	clip_chunks = sizeof(clip_builtin) / CLIP_CHUNK;
+	clip_crc = crc32_ieee(clip_buf, sizeof(clip_builtin));
+	atomic_set(&clip_valid, 1);
+	return 0;
+}
+
+SYS_INIT(clip_builtin_load, APPLICATION, 99);
+#endif
+
 void clip_src_fill(uint8_t out[TDMA_PAYLOAD_LEN], uint32_t n)
 {
 	uint32_t off = (n % clip_chunks) * CLIP_CHUNK;

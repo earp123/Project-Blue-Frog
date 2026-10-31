@@ -9,8 +9,10 @@ published in xiph's SHA256SUMS.txt). The file lists are upstream's own:
 CELT_SOURCES, SILK_SOURCES, SILK_SOURCES_FIXED and OPUS_SOURCES from the
 .mk files, every header beside them, include/, and COPYING. Left out: the
 float-API analysis (OPUS_SOURCES_FLOAT; the build is DISABLE_FLOAT_API),
-the per-architecture directories, demos, tests and dnn/ (no deep PLC, DRED
-or OSCE).
+the per-architecture directories but the ARMv4/v5E inline-asm headers
+(OPUS_ARM_INLINE_ASM / _EDSP: the fixed-point multiplies as single DSP
+instructions, which the Cortex-M33 has), demos, tests and dnn/ (no deep
+PLC, DRED or OSCE).
 """
 
 import os
@@ -22,6 +24,10 @@ LISTS = {"celt_sources.mk": ["CELT_SOURCES"],
          "silk_sources.mk": ["SILK_SOURCES", "SILK_SOURCES_FIXED"],
          "opus_sources.mk": ["OPUS_SOURCES"]}
 HEADER_DIRS = ["include", "celt", "silk", "silk/fixed", "src"]
+ARM_INLINE = ["celt/arm/fixed_armv4.h", "celt/arm/fixed_armv5e.h",
+              "celt/arm/kiss_fft_armv4.h", "celt/arm/kiss_fft_armv5e.h",
+              "silk/arm/macros_armv4.h", "silk/arm/macros_armv5e.h",
+              "silk/arm/SigProc_FIX_armv4.h", "silk/arm/SigProc_FIX_armv5e.h"]
 
 
 def mk_list(path, name):
@@ -45,6 +51,7 @@ def main():
     for d in HEADER_DIRS:
         files += [os.path.join(d, f) for f in sorted(os.listdir(
             os.path.join(src, d))) if f.endswith(".h")]
+    files += ARM_INLINE
     for keep in [os.path.join(dst, "README.md")]:
         if os.path.exists(keep):
             readme = open(keep, "rb").read()

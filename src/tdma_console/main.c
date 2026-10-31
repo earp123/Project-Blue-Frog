@@ -976,15 +976,16 @@ static void soak_start(int64_t duration_ms, bool sd)
 		return;
 	}
 
-#ifdef CONFIG_SOAK_C2_ENCODE
-	/* PCM and MIC modes: the on-device encoder, fresh state per run. It
-	 * waits for the engine to reach RUNNING before its first chunk.
+#ifdef PAYLOAD_HAS_ENC
+	/* PCM and MIC modes: the on-device encoder (Codec 2 or Opus), fresh
+	 * state per run, and the decoder for the peers. The encoder waits for
+	 * the engine to reach RUNNING before its first chunk.
 	 */
 	if (payload_is_c2(mode)) {
 		rc = c2_enc_start(rtt_link_phase_us(),
 				  mode == SOAK_PAYLOAD_MIC);
 		if (rc == 0) {
-			rc = c2_dec_start(my_slot, rtt_link_decx());
+			rc = payload_pcm_dec_start(my_slot);
 			if (rc < 0) {
 				c2_enc_stop();
 			}
@@ -1062,9 +1063,9 @@ static void soak_finish(void)
 	k_mutex_unlock(&soak_lock);
 
 	tdma_stop();
-#ifdef CONFIG_SOAK_C2_ENCODE
+#ifdef PAYLOAD_HAS_ENC
 	c2_enc_stop();
-	c2_dec_stop();
+	payload_pcm_dec_stop();
 #endif
 	payload_clip_dec_stop();
 	/* A ladder leaves the top rung latched: back to the unit's setting. */

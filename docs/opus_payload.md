@@ -200,12 +200,21 @@ Details and figures: the CHANGELOG entry of 2026-10-30.
   - The runs were 5 and 9.5 minutes, not 30, and on clips, not the ramp.
 - **C1, decode half, passed.** About 0.5 ms per 20 ms frame against the
   1.5 ms bar; 6.6–9.5 % of the core for three peers; 17.8 KB per decoder.
-  The encode half is not done.
+- **C1, encode half, fails the 5 ms bar.**
+  - Per 20 ms frame: complexity 2 takes 26–33 ms, which is not real time
+    (SILK's delayed-decision quantizer). Complexity 0 takes 7.5 ms,
+    worst 10.6, with the FPU and the ARM DSP inline asm.
+  - Shipped at complexity 0 with a 20 ms capture phase: live mic voice
+    runs on three HAT units with no late chunks.
+  - Host STOI at complexity 0 is 0.862, against 0.878 at 2 and Codec 2's
+    0.791.
+  - The next CPU lever is 2 × 40 ms frames, a separate decision.
 - **C3, informally.** Three HAT units play their peers' Opus clips
   (`CONFIG_SOAK_OPUS_DEC`). PLC must conceal on time to keep the playout
   steady (opus_dec.h). Two units sound great. SEC 1 (1050080691) sounds
-  bad with clean counters, so its HAT is suspect. G3's formal run needs
-  the device encoder (mic mode).
+  bad with clean counters, so its HAT is suspect. Mic mode now runs on
+  Opus (`CONFIG_SOAK_OPUS_ENC`), so G3's formal run can go ahead on this
+  codec.
 
 ### Running it
 
@@ -213,8 +222,19 @@ Details and figures: the CHANGELOG entry of 2026-10-30.
 # Clips (host): four 18 B frames per 72 B chunk, plus <clip>_op72_ref.wav
 python src/tdma_console/tools/c2clip.py opus soaks/clips/OSR_us_000_0010_8k.wav -o soaks/clips/OSR_0010_F.op72
 
-# A HAT unit that decodes and plays (shield shown; the TFT the same with its files)
-west build -b nrf5340dk/nrf5340/cpuapp -p always -d build-opdec-m --   "-DEXTRA_DTC_OVERLAY_FILE=boards/nrf5340dk_nrf5340_cpuapp_shield.overlay;boards/audio_hat.overlay"   -DEXTRA_CONF_FILE=boards/nrf5340dk_nrf5340_cpuapp_shield.conf   -DCONFIG_TDMA_PAYLOAD_LEN=80 -DCONFIG_SOAK_OPUS_DEC=y -DCONFIG_SOAK_AUDIO_HAT=y   -DCONFIG_SOAK_UNIT_SLOT=0 -DCONFIG_SOAK_BOOT_TX_POWER_DBM=-9
+# A HAT unit: decodes and plays its peers; with SOAK_OPUS_ENC also encodes
+# its mic (mode mic, its boot mode). Shield shown; the TFT the same with
+# its own overlay and conf (and -DCONFIG_SOAK_TOUCH_CAL=n).
+west build -b nrf5340dk/nrf5340/cpuapp -p always -d build-opdec-m -- \
+  "-DEXTRA_DTC_OVERLAY_FILE=boards/nrf5340dk_nrf5340_cpuapp_shield.overlay;boards/audio_hat.overlay" \
+  -DEXTRA_CONF_FILE=boards/nrf5340dk_nrf5340_cpuapp_shield.conf \
+  -DCONFIG_TDMA_PAYLOAD_LEN=80 -DCONFIG_SOAK_OPUS_DEC=y -DCONFIG_SOAK_OPUS_ENC=y \
+  -DCONFIG_SOAK_AUDIO_HAT=y -DCONFIG_SOAK_UNIT_SLOT=0
+
+# A unit with no mic: a clip in flash, clip mode from boot, no PC needed
+#   ... -DCONFIG_SOAK_CLIP_BUILTIN=y '-DCONFIG_SOAK_CLIP_BUILTIN_FILE="soaks/clips/OSR_0011_F.op72"'
+#   (a Kconfig string: the quotes are part of the value; that file is the default)
+# Bench soaks add -DCONFIG_SOAK_BOOT_TX_POWER_DBM=-9; field runs keep +22.
 
 # Per unit, after every boot (the clip lives in RAM): upload, clip mode
 python src/tdma_console/tools/rtt_link.py --sn <serial> clip soaks/clips/OSR_0010_F.op72

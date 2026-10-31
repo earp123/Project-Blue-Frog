@@ -77,11 +77,14 @@ static uint32_t bin_crc;
 static const char *bin_err;	/* NULL = loading into clip_src */
 static int64_t bin_last_ms;
 
-/* A HAT unit boots as an intercom: a soak started from the unit's own
- * controls, no PC attached, talks and listens (mic mode).
+/* A HAT unit with an encoder boots as an intercom: a soak started from the
+ * unit's own controls, no PC attached, talks and listens (mic mode). A unit
+ * with a clip in flash boots sending it.
  */
-#ifdef CONFIG_SOAK_AUDIO_HAT
+#if defined(CONFIG_SOAK_AUDIO_HAT) && defined(PAYLOAD_HAS_ENC)
 static atomic_t next_mode = ATOMIC_INIT(SOAK_PAYLOAD_MIC);
+#elif defined(CONFIG_SOAK_CLIP_BUILTIN)
+static atomic_t next_mode = ATOMIC_INIT(SOAK_PAYLOAD_CLIP);
 #else
 static atomic_t next_mode = ATOMIC_INIT(PAYLOAD_DEFAULT_MODE);
 #endif
@@ -95,10 +98,11 @@ uint32_t rtt_link_lead_us(void)
 	return (uint32_t)atomic_get(&next_lead_us);
 }
 
-/* A generous default: a whole 20 ms slot for the encoder. HAT builds use
- * 12 ms, clean on the bench with live audio (G2): less delay.
+/* A generous default: a whole 20 ms slot for the encoder. Codec 2 HAT builds
+ * use 12 ms, clean on the bench with live audio (G2): less delay. The Opus
+ * encoder needs the 20 ms (Kconfig SOAK_OPUS_ENC).
  */
-#ifdef CONFIG_SOAK_AUDIO_HAT
+#if defined(CONFIG_SOAK_AUDIO_HAT) && !defined(CONFIG_SOAK_OPUS_ENC)
 static atomic_t next_phase_us = ATOMIC_INIT(12000);
 #else
 static atomic_t next_phase_us = ATOMIC_INIT(20000);
@@ -810,6 +814,22 @@ static void do_status(const struct rtt_link_ops *ops)
 	      clip_src_chunks(), clip_src_crc(), rtt_link_lead_us(),
 	      ls.rtt_dropped, t->pre_tx_pickups, t->pre_tx_staged,
 	      (int)t->pre_tx_margin_min_us, (int)t->pre_tx_margin_last_us);
+#ifdef CONFIG_SOAK_OPUS_ENC
+	struct c2_enc_stats es;
+
+	c2_enc_get_stats(&es);
+	/* enc = staged/late (past the pickup deadline)/busy; us = per 20 ms
+	 * frame encode avg/max; ready = worst last-frame-captured -> staged;
+	 * wake = worst wake after a capture; stack never used and encoder
+	 * state, bytes; err = frames not encoded to size; phase = capture
+	 * lead on the TX boundary, us.
+	 */
+	reply("ok enc %u/%u/%u us=%u/%u ready=%u wake=%u stack=%u state=%u "
+	      "err=%u unlogged=%u phase=%u", es.staged, es.late, es.busy,
+	      es.frame_enc_avg_us, es.frame_enc_max_us, es.ready_max_us,
+	      es.start_late_max_us, es.stack_unused, es.state_bytes,
+	      es.enc_errors, es.unlogged, rtt_link_phase_us());
+#endif
 #ifdef CONFIG_SOAK_OPUS_DEC
 	struct opus_dec_stats os;
 
